@@ -1,2 +1,2 @@
 # subhkl
-Solving crystal orientation for Laue diffraction images
+Solving crystal orientation from Laue diffraction images

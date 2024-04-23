@@ -1,0 +1,50 @@
+[project]
+name = "subhkl"
+description = "Solving crystal orientation from Laue images"
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "mantidworkbench >= 6.7.20230830",
+]
+license = { text = "GPL3.0" }
+
+[build-system]
+requires = [
+  "setuptools",
+   "wheel",
+   "toml",
+   "versioningit"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.versioningit.vcs]
+method = "git"
+default-tag = "0.0.1"
+
+[tool.versioningit.next-version]
+method = "minor"
+
+[tool.versioningit.format]
+distance = "{next_version}.dev{distance}"
+dirty = "{version}+d{build_date:%Y%m%d}"
+distance-dirty = "{next_version}.dev{distance}+d{build_date:%Y%m%d%H%M}"
+
+[tool.versioningit.write]
+file = "src/NeuXtalViz/_version.py"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yml","*.yaml","*.ini"]
+
+[tool.pylint]
+max-line-length = 80
+disable = ["too-many-locals",
+           "too-many-statements",
+           "too-many-instance-attributes",
+           "too-many-arguments",
+           "duplicate-code"
+]
+extension-pkg-whitelist = ["PyQt5"]
