@@ -59,7 +59,7 @@ def test_sucrose():
 
     s = np.linalg.norm(np.einsum('ij,kj->ik', R @ UB, hkl), axis=0)
 
-    assert np.allclose(d_star, s, atol=1e-1)
+    assert np.allclose(d_star, s, atol=1e-2)
 
 def test_lysozye():
 
@@ -111,6 +111,6 @@ def test_lysozye():
 
     d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
 
-    s = np.linalg.norm(np.einsum('ij,kj->ik', R @ UB, hkl), axis=0)
+    s = np.linalg.norm(np.einsum('ij,kj->ik', UB, hkl), axis=0)
 
     assert np.allclose(d_star, s, atol=1e-1)
