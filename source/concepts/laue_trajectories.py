@@ -78,7 +78,7 @@ ax[1].minorticks_on()
 ax[1].set_xlabel(r'$x$ [cm]')
 ax[1].set_ylabel(r'$z$ [cm]')
 ax[1].arrow(0, -l2*150, 0, l2*150, length_includes_head=True, 
-            head_width=3, width=1, color='C0', zorder=10)
+            head_width=3, width=1, color='C2', zorder=10)
 
 for _x, _z in zip(x, z):
-    ax[1].plot([_x*5,_x*100], [_z*5,_z*100], linestyle='-', linewidth=1, color='k')
+    ax[1].plot([_x*5,_x*100], [_z*5,_z*100], linestyle='-', linewidth=1, color='C0')

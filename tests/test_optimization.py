@@ -50,6 +50,17 @@ def test_sucrose():
     num, hkl, lamda = opt.minimize(1)
     assert num/len(lamda) > 0.95
 
+    B = opt.reciprocal_lattice_B()
+    U = opt.orientation_U(*opt.x)
+
+    UB = opt.UB_matrix(U, B)
+
+    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+
+    s = np.linalg.norm(np.einsum('ij,kj->ik', R @ UB, hkl), axis=0)
+
+    assert np.allclose(d_star, s, atol=1e-1)
+
 def test_lysozye():
 
     filename = os.path.join(directory, '5vnq_mandi.h5')
@@ -92,3 +103,14 @@ def test_lysozye():
 
     num, hkl, lamda = opt.minimize(1)
     assert num/len(lamda) > 0.95
+
+    B = opt.reciprocal_lattice_B()
+    U = opt.orientation_U(*opt.x)
+
+    UB = opt.UB_matrix(U, B)
+
+    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+
+    s = np.linalg.norm(np.einsum('ij,kj->ik', R @ UB, hkl), axis=0)
+
+    assert np.allclose(d_star, s, atol=1e-1)

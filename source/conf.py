@@ -61,7 +61,6 @@ templates_path = ['_templates']
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-
 # -- Options for HTML output -------------------------------------------------
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -69,9 +68,15 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
+html_title = 'subhkl'
+
+html_sidebars = {
+  "**": []
+}
+
 # -- Extension configuration -------------------------------------------------
 
-plot_pre_code = '''
+plot_pre_code = """
 import numpy as np
 np.random.seed(13)
 
@@ -84,7 +89,7 @@ plt.ioff()
 
 plt.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.cm.Set2.colors)
 
-'''
+"""
 
 plot_include_source = True
 plot_html_show_formats = False

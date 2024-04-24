@@ -8,8 +8,10 @@ subhkl
    :maxdepth: 2
    :caption: Contents:
 
-   source/index
+   optimization/index
    concepts/index
+
+
 
 +++++++++++
 Conventions

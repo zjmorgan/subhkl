@@ -222,7 +222,7 @@ class FindUB:
                 lamda.append(1/res.x[-1])
             else:
                 hkl.append([0,0,0])
-                lamda.append(0)
+                lamda.append(np.inf)
 
         hkl = np.array(hkl)
         lamda = np.array(lamda)

@@ -10,4 +10,6 @@ dependencies:
   - pycifrw
   - h5py
   - pytest
+  - pydata-sphinx-theme
+  - numpydoc
   - mantidworkbench
