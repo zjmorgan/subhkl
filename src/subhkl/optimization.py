@@ -10,8 +10,28 @@ import scipy.spatial
 import scipy.optimize
 
 class FindUB:
+    """
+    Optimizer of crystal orientation from peaks and known lattice parameters.
+
+    Attributes
+    ----------
+    a, b, c : float
+        Lattice constants in ansgroms.
+    alpha, beta, gamma : float
+        Lattice angles in degrees.
+    
+    """
 
     def __init__(self, filename=None):
+        """
+        Find :math:`UB` from peaks.
+
+        Parameters
+        ----------
+        filename : str, optional
+            Filename of found peaks. The default is None.
+
+        """
 
         if filename is not None:
             self.load_peaks(filename)
