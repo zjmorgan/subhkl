@@ -305,7 +305,7 @@ class FindUB:
         B = self.reciprocal_lattice_B()
         uls = self.uncertainty_line_segements()
 
-        U = self.orientation_U(*self.x)
+        U = self.orientation_U(*self.rotation_angles(self.x))
 
         UB = self.UB_matrix(U, B)
 
