@@ -304,11 +304,11 @@ class FindUB:
 
     def minimize(self, n_proc=-1):
         """
-        Fit the orientation and other paramers.
+        Fit the orientation and other parameters.
 
         Parameters
         ----------
-        n_proc : TYPE, optional
+        n_proc : int, optional
             Number of processes to use. The default is -1.
 
         Returns
