@@ -174,7 +174,31 @@ class FindUB:
         return scipy.spatial.transform.Rotation.from_rotvec(w).as_matrix()
 
     def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength):
+        """
 
+        Parameters
+        ----------
+        UB : 2d-array
+            3x3 sample oriented lattice matrix.
+        kf_ki_dir : list
+            Difference between scattering and incident beam directions.
+        d_min : list
+            Lower limit of :math:`d`-spacing.
+        d_max : list
+            Upper limit of :math:`d`-spacing.
+        wavelength : list
+            Bandwidth.
+
+        Returns
+        -------
+        num : int
+            Number of peaks index.
+        hkl : list
+            Miller indices. Un-indexed are labeled [0,0,0].
+        lamda : list
+            Resolved wavelength. Unindexed are labeled inf.
+
+        """
         wl_min, wl_max = wavelength
 
         inv_wl_max = 1/wl_min
@@ -249,37 +273,21 @@ class FindUB:
 
         return U @ B
 
-    def rot_angle(self, x, u):
-
-        return (x-np.sin(x))/np.pi-u
-
-    def rotation_angles(self, x):
+    def objective(self, x):
         """
-        Convert normalized angle parameters to axis/rotation angles.
+        Cost function.
 
         Parameters
         ----------
-        x : 3-tuple
-            Angle parameters ranging between 0 and 1.
+        x : list
+            Refineable parameters.
 
         Returns
         -------
-        phi : float
-            Azimuthal angle in radians.
-        theta : float
-            Zenith angle in radians.
-        omega : float
-            Rotation angle in radians.
+        neg_ind : int
+            Negative number of peaks indexed.
 
         """
-
-        phi = 2*np.pi*x[0]
-        theta = np.arccos(1-2*x[1])
-        omega = scipy.optimize.fsolve(self.rot_angle, np.pi/2, args=(x[2]))[0]
-
-        return phi, theta, omega
-
-    def objective(self, x):
 
         B = self.reciprocal_lattice_B()
 
@@ -287,9 +295,7 @@ class FindUB:
 
         wavelength = self.wavelength
 
-        phi, theta, omega = self.rotation_angles(x)
-
-        U = self.orientation_U(phi, theta, omega)
+        U = self.orientation_U(*x)
         UB = self.UB_matrix(U, B)
 
         num, hkl, lamda = self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)
@@ -297,15 +303,35 @@ class FindUB:
         return -num
 
     def minimize(self, n_proc=-1):
+        """
+        Fit the orientation and other paramers.
+
+        Parameters
+        ----------
+        n_proc : TYPE, optional
+            Number of processes to use. The default is -1.
+
+        Returns
+        -------
+        num : int
+            Number of peaks index.
+        hkl : list
+            Miller indices. Un-indexed are labeled [0,0,0].
+        lamda : list
+            Resolved wavelength. Unindexed are labeled inf.
+
+        """
+
+        bounds = [(-np.pi, np.pi), (0, np.pi), (-np.pi, np.pi)]        
 
         self.x = scipy.optimize.shgo(self.objective,
-                                     bounds=[(0,1),(0,1),(0,1)],
+                                     bounds=bounds,
                                      workers=n_proc).x
 
         B = self.reciprocal_lattice_B()
         uls = self.uncertainty_line_segements()
 
-        U = self.orientation_U(*self.rotation_angles(self.x))
+        U = self.orientation_U(*self.x)
 
         UB = self.UB_matrix(U, B)
 
