@@ -2,8 +2,8 @@ FROM continuumio/miniconda as build
 
 ENV PATH="/root/.local/bin:$PATH"
 
-ADD environment.yml environment.yml
-RUN conda env create --file=environment.yml
+ADD mantid-environment.yml mantid-environment.yml
+RUN conda env create --file=mantid-environment.yml
 
 RUN apt update 
 RUN apt install -y curl make 
@@ -22,8 +22,8 @@ RUN pdm build
 
 FROM continuumio/miniconda as tool
 
-ADD environment.yml environment.yml
-RUN conda env create --file=environment.yml
+ADD mantid-environment.yml mantid-environment.yml
+RUN conda env create --file=mantid-environment.yml
 COPY --from=build dist/subhkl-0.1.0.dev9+d202405011731-py3-none-any.whl subhkl.whl
 RUN pip install subhkl.whl
 
