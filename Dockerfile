@@ -1,6 +1,9 @@
-FROM code.ornl.gov:4567/rse/images/mantid-framework:6.8.20231027.1822-py3.10 as build
+FROM continuumio/miniconda as build
 
 ENV PATH="/root/.local/bin:$PATH"
+
+ADD environment.yml environment.yml
+RUN conda env create --file=environment.yml
 
 RUN apt update 
 RUN apt install -y curl make 
@@ -17,8 +20,10 @@ ADD . /build
 
 RUN pdm build
 
-FROM code.ornl.gov:4567/rse/images/mantid-framework:6.8.20231027.1822-py3.10 as tool
+FROM continuumio/miniconda as tool
 
+ADD environment.yml environment.yml
+RUN conda env create --file=environment.yml
 COPY --from=build dist/subhkl-0.1.0.dev9+d202405011731-py3-none-any.whl subhkl.whl
 RUN pip install subhkl.whl
 
