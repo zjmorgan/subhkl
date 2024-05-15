@@ -3,9 +3,7 @@ name = "subhkl"
 description = "Solving crystal orientation from Laue images"
 dynamic = ["version"]
 requires-python = ">=3.10"
-dependencies = [
-    "mantidworkbench >= 6.7.20230830",
-]
+dependencies = []
 license = { text = "GPL3.0" }
 
 [build-system]
