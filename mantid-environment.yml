@@ -1,6 +1,0 @@
-name: subhkl
-channels:
-  - conda-forge
-  - mantid/label/nightly
-dependencies:
-  - mantidworkbench
