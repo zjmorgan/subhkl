@@ -17,6 +17,10 @@ ADD . /build
 
 RUN pdm build
 
+RUN pip install dist/subhkl-0.1.0-py3-none-any.whl
+RUN pip install pytest
+RUN python -m pytest /build/tests/test_optimization.py
+
 FROM code.ornl.gov:4567/rse/images/mantid-framework:6.8.20231027.1822-py3.10 as tool
 
 COPY --from=build /build/dist/subhkl-0.1.0-py3-none-any.whl subhkl-0.1.0-py3-none-any.whl
