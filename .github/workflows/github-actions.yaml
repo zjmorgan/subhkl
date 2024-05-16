@@ -2,10 +2,11 @@ name: Docker build
 
 on:
   push:
-    branches: ['main', 'docker']
+    branches: ['main']
 
 env:
-  IMAGE_NAME: ${{ github.repository }}
+  VERSION: 0.0.1
+  IMAGE_NAME: zjmorgan/subhkl:${{ version }}
 
 jobs:
   build-and-push-image:
