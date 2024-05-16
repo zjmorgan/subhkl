@@ -19,7 +19,7 @@ RUN pdm build
 
 FROM code.ornl.gov:4567/rse/images/mantid-framework:6.8.20231027.1822-py3.10 as tool
 
-COPY --from=build dist/subhkl-0.1.0.dev9+d202405011731-py3-none-any.whl subhkl.whl
-RUN pip install subhkl.whl
+COPY --from=build /build/dist/subhkl-0.1.0-py3-none-any.whl subhkl-0.1.0-py3-none-any.whl
+RUN pip install subhkl-0.1.0-py3-none-any.whl
 
 CMD [ "bash" ]
