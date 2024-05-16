@@ -24,7 +24,7 @@ method = "minor"
 
 [tool.versioningit.format]
 distance = "{next_version}"
-dirty = "{version}+d{build_date:%Y%m%d}"
+dirty = "{next_version}"
 distance-dirty = "{next_version}"
 
 [tool.versioningit.write]
