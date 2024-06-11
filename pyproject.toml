@@ -57,3 +57,6 @@ disable = ["too-many-locals",
            "duplicate-code"
 ]
 extension-pkg-whitelist = ["PyQt5"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
