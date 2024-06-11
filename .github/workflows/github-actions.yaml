@@ -20,20 +20,6 @@ jobs:
       - name: Download repo
         uses: actions/checkout@v4
 
-      - name: Code ornl gov login
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
-        with:
-          registry: code.ornl.gov:4567
-          password: ${{ secrets.rse_mantid_docker_token }}
-          username: ${{ secrets.rse_mantid_docker_username }}
-
-      - name: Login
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
-        with:
-          registry: ghcr.io
-          password: ${{ secrets.GITHUB_TOKEN }}
-          username: ${{ github.actor }}
-
       - name: Create image name
         id: name
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
