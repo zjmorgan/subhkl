@@ -1,5 +1,6 @@
 import os
-os.environ['OMP_NUM_THREADS'] = '1'
+
+os.environ["OMP_NUM_THREADS"] = "1"
 
 import h5py
 
@@ -9,6 +10,7 @@ import scipy.linalg
 import scipy.spatial
 import scipy.optimize
 import scipy.interpolate
+
 
 class FindUB:
     """
@@ -36,7 +38,7 @@ class FindUB:
 
         if filename is not None:
             self.load_peaks(filename)
-            
+
         t = np.linspace(0, np.pi, 1024)
         cdf = (t-np.sin(t))/np.pi
 
@@ -87,12 +89,12 @@ class FindUB:
         tt = np.deg2rad(self.two_theta)
         az = np.deg2rad(self.az_phi)
 
-        kf_ki_dir = np.array([np.sin(tt)*np.cos(az),
-                              np.sin(tt)*np.sin(az),
-                              np.cos(tt)-1])
+        kf_ki_dir = np.array(
+            [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
+        )
 
-        d_min = 0.5*wl_min/np.sin(0.5*tt)
-        d_max = 0.5*wl_max/np.sin(0.5*tt)
+        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
+        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
 
         return kf_ki_dir, d_min, d_max
 
@@ -114,13 +116,11 @@ class FindUB:
         g11 = self.a**2
         g22 = self.b**2
         g33 = self.c**2
-        g12 = self.a*self.b*np.cos(gamma)
-        g13 = self.c*self.a*np.cos(beta)
-        g23 = self.b*self.c*np.cos(alpha)
+        g12 = self.a * self.b * np.cos(gamma)
+        g13 = self.c * self.a * np.cos(beta)
+        g23 = self.b * self.c * np.cos(alpha)
 
-        G = np.array([[g11, g12, g13],
-                      [g12, g22, g23],
-                      [g13, g23, g33]])
+        G = np.array([[g11, g12, g13], [g12, g22, g23], [g13, g23, g33]])
 
         return G
 
@@ -334,7 +334,7 @@ class FindUB:
 
         """
 
-        bounds = [slice(0, 1, 1/90), 
+        bounds = [slice(0, 1, 1/90),
                   slice(0, 1, 1/90),
                   slice(0, 0.5, 1/90)]
 

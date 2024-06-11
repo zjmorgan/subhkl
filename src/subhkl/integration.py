@@ -4,8 +4,8 @@ from PIL import Image
 
 import skimage.feature
 
-class FindPeaks:
 
+class FindPeaks:
     def __init__(self, filename):
         """
         Find peaks from an image.
@@ -39,7 +39,7 @@ class FindPeaks:
 
         """
 
-        coords = skimage.feature.peak_local_max(self.im, 
+        coords = skimage.feature.peak_local_max(self.im,
                                                 min_distance=min_pix,
                                                 threshold_rel=min_rel_intens)
 
@@ -135,3 +135,4 @@ class FindPeaks:
         az_phi = np.rad2deg(np.arctan2(Y, X))
 
         return two_theta, az_phi
+

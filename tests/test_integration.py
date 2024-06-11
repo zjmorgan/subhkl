@@ -1,4 +1,5 @@
 import os
+
 directory = os.path.dirname(os.path.abspath(__file__))
 
 import h5py
@@ -9,9 +10,9 @@ import matplotlib.pyplot as plt
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
 
-def test_mesolite():
 
-    im_name = 'meso_2_15min_2-0_4-5_050.tif'
+def test_mesolite():
+    im_name = "meso_2_15min_2-0_4-5_050.tif"
     filename = os.path.join(directory, im_name)
 
     pks = FindPeaks(filename)
@@ -141,6 +142,7 @@ def test_mesolite():
 
     name, ext = os.path.splitext(im_name)
 
-    fig.savefig(name+'.png')
+    fig.savefig(name + ".png")
+
 
 test_mesolite()
