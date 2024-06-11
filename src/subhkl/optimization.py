@@ -8,6 +8,7 @@ import numpy as np
 import scipy.linalg
 import scipy.spatial
 import scipy.optimize
+import scipy.interpolate
 
 class FindUB:
     """
@@ -19,7 +20,7 @@ class FindUB:
         Lattice constants in ansgroms.
     alpha, beta, gamma : float
         Lattice angles in degrees.
-    
+
     """
 
     def __init__(self, filename=None):
@@ -35,6 +36,11 @@ class FindUB:
 
         if filename is not None:
             self.load_peaks(filename)
+            
+        t = np.linspace(0, np.pi, 1024)
+        cdf = (t-np.sin(t))/np.pi
+
+        self._angle = scipy.interpolate.interp1d(cdf, t, kind='linear')
 
     def load_peaks(self, filename):
         """
@@ -59,6 +65,7 @@ class FindUB:
             self.R = f['goniometer/R'][()]
             self.two_theta = f['peaks/scattering'][()]
             self.az_phi = f['peaks/azimuthal'][()]
+            self.centering = f['sample/centering'][()].decode('utf-8')
 
     def uncertainty_line_segements(self):
         """
@@ -136,7 +143,7 @@ class FindUB:
 
         Returns
         -------
-        B ; 2d-array
+        B : 2d-array
             3x3 matrix of reciprocal lattice in Cartesian coordinates.
 
         """
@@ -145,18 +152,14 @@ class FindUB:
 
         return scipy.linalg.cholesky(Gstar, lower=False)
 
-    def orientation_U(self, phi, theta, omega):
+    def orientation_U(self, u0, u1, u2):
         """
         The sample orientation matrix :math:`U`.
 
         Parameters
         ----------
-        phi : float
-            Azimuthal angle in radians.
-        theta : float
-            Zenith angle in radians.
-        omega : float
-            Rotation angle in radians.
+        u0, u1, u2 : float
+            Rotation paramters.
 
         Returns
         -------
@@ -165,15 +168,17 @@ class FindUB:
 
         """
 
-        u0 = np.cos(phi)*np.sin(theta)
-        u1 = np.sin(phi)*np.sin(theta)
-        u2 = np.cos(theta)
+        theta = np.arccos(2*u0-1)
+        phi = 2*np.pi*u1
+        w = np.array([np.sin(theta)*np.cos(phi),
+                      np.sin(theta)*np.sin(phi),
+                      np.cos(theta)])
 
-        w = omega*np.array([u0, u1, u2])
+        x = self._angle(u2)
 
-        return scipy.spatial.transform.Rotation.from_rotvec(w).as_matrix()
+        return scipy.spatial.transform.Rotation.from_rotvec(x*w).as_matrix()
 
-    def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength):
+    def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
         """
 
         Parameters
@@ -199,59 +204,66 @@ class FindUB:
             Resolved wavelength. Unindexed are labeled inf.
 
         """
+
         wl_min, wl_max = wavelength
 
-        inv_wl_max = 1/wl_min
-        inv_wl_min = 1/wl_max
+        UB_inv = np.linalg.inv(UB)
 
-        astar, bstar, cstar = np.sqrt(np.diag(UB.T @ UB))
+        hkl_lamda = np.einsum('ij,jk', UB_inv, kf_ki_dir)
 
-        s_min = np.min([astar, bstar, cstar])*0.5
+        lamda = np.linspace(wl_min, wl_max, 100)
 
-        integrality = np.array([1,1,1,0])
+        hkl = hkl_lamda[:,:,np.newaxis]/lamda
 
-        num = 0
-        hkl = []
-        lamda = []
+        s = np.einsum('ij,j...->i...', UB, hkl)
+        s = np.linalg.norm(s, axis=0)
 
-        for d, kfi in zip(d_min, kf_ki_dir.T):
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl-int_hkl
 
-            s_max = 1/d
+        dist = np.einsum('ij,j...->i...', UB, diff_hkl)
+        dist = np.linalg.norm(dist, axis=0)
 
-            max_h, max_k, max_l = s_max/np.array([astar, bstar, cstar])
-            min_h, min_k, min_l = -max_h, -max_k, -max_l
+        dist[(s.T > 1/d_min).T] = np.inf
+        dist[(s.T < 1/d_max).T] = np.inf
 
-            bounds = scipy.optimize.Bounds([min_h, min_k, min_l, inv_wl_min],
-                                           [max_h, max_k, max_l, inv_wl_max])
+        h, k, l = int_hkl
 
-            A = np.column_stack((UB, -kfi))
-            A = np.row_stack((A, [0,0,0,1]))
+        valid = np.full_like(l, True, dtype=bool)
 
-            lb = [-s_min]*3+[inv_wl_min]
-            ub = [+s_min]*3+[inv_wl_max]
+        if self.centering == 'A':
+            valid = (k + l) % 2 == 0
+        elif self.centering == 'B':
+            valid = (h + l) % 2 == 0
+        elif self.centering == 'C':
+            valid = (h + k) % 2 == 0
+        elif self.centering == 'I':
+            valid = (h + k + l) % 2 == 0
+        elif self.centering == 'F':
+            valid = ((h + k) % 2 == 0) \
+                  & ((l + h) % 2 == 0) \
+                  & ((k + l) % 2 == 0)
+        elif self.centering == 'R_obv':
+            valid = (-h + k + l) % 3 == 0
+        elif self.centering == 'R_obv':
+            valid = (h - k + l) % 3 == 0
 
-            constraints = scipy.optimize.LinearConstraint(A, lb, ub)
+        dist[~valid] = np.inf
 
-            c = np.einsum('i,ij->j', -kfi, UB)
-            c = np.concatenate((c,[0]))
+        ind = np.argmin(dist, axis=1)
 
-            res = scipy.optimize.milp(c=c,
-                                      bounds=bounds,
-                                      constraints=constraints,
-                                      integrality=integrality)
+        hkl = hkl[:,np.arange(hkl_lamda.shape[1]),ind]
+        lamda = lamda[ind]
 
-            if res.x is not None:
-                num += 1
-                hkl.append(res.x[:-1])
-                lamda.append(1/res.x[-1])
-            else:
-                hkl.append([0,0,0])
-                lamda.append(np.inf)
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl-int_hkl
 
-        hkl = np.array(hkl)
-        lamda = np.array(lamda)
+        mask = (np.abs(diff_hkl) < tol).all(axis=0)
+        int_hkl[:,~mask] = 0
 
-        return num, hkl, lamda
+        num = np.sum(mask)
+
+        return num, int_hkl.T, lamda
 
     def UB_matrix(self, U, B):
         """
@@ -318,15 +330,17 @@ class FindUB:
         hkl : list
             Miller indices. Un-indexed are labeled [0,0,0].
         lamda : list
-            Resolved wavelength. Unindexed are labeled inf.
+            Resolved wavelength. Un-indexed are labeled inf.
 
         """
 
-        bounds = [(-np.pi, np.pi), (0, np.pi), (-np.pi, np.pi)]        
+        bounds = [slice(0, 1, 1/90), 
+                  slice(0, 1, 1/90),
+                  slice(0, 0.5, 1/90)]
 
-        self.x = scipy.optimize.shgo(self.objective,
-                                     bounds=bounds,
-                                     workers=n_proc).x
+        self.x = scipy.optimize.brute(self.objective,
+                                      ranges=bounds,
+                                      workers=n_proc)
 
         B = self.reciprocal_lattice_B()
         uls = self.uncertainty_line_segements()

@@ -117,6 +117,7 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2,4], min_d=1):
         f['sample/gamma'] = uc.gamma()
         f['sample/B'] = B
         f['sample/U'] = U
+        f['sample/centering'] = centering
         f['instrument/wavelength'] = [wl_min, wl_max]
         f['goniometer/R'] = R
         f['peaks/scattering'] = two_theta
