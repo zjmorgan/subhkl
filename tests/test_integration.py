@@ -11,10 +11,7 @@ from subhkl.optimization import FindUB
 
 def test_mesolite():
 
-    directory = '/HFIR/CG4D/shared/images/ndip_data_test/meso_may/'
-
     im_name = 'meso_2_15min_2-0_4-5_050.tif'
-
     filename = os.path.join(directory, im_name)
 
     pks = FindPeaks(filename)
