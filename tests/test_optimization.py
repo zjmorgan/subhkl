@@ -47,7 +47,7 @@ def test_sucrose():
     assert np.allclose(d_star, np.einsum("ij,jk->ik", R @ UB, hkl), atol=1e-3)
 
     num, hkl, lamda = opt.minimize(64)
-    assert num/len(lamda) > 0.95
+    assert num / len(lamda) > 0.95
 
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
@@ -59,6 +59,7 @@ def test_sucrose():
     s = np.linalg.norm(np.einsum("ij,kj->ik", UB, hkl), axis=0)
 
     assert np.allclose(d_star, s, atol=1e-1)
+
 
 def test_lysozyme():
     filename = os.path.join(directory, "5vnq_mandi.h5")
@@ -99,7 +100,7 @@ def test_lysozyme():
     assert np.allclose(d_star, np.einsum("ij,jk->ik", R @ UB, hkl), atol=1e-3)
 
     num, hkl, lamda = opt.minimize(64)
-    assert num/len(lamda) > 0.95
+    assert num / len(lamda) > 0.95
 
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
@@ -111,6 +112,7 @@ def test_lysozyme():
     s = np.linalg.norm(np.einsum("ij,kj->ik", UB, hkl), axis=0)
 
     assert np.allclose(d_star, s, atol=1e-1)
+
 
 test_sucrose()
 test_lysozyme()

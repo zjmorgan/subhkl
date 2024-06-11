@@ -113,23 +113,24 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     peaks_file = cif_file.replace(".cif", "_{}.h5".format(instrument)).lower()
 
     with h5py.File(os.path.join(directory, peaks_file), "w") as f:
-        f['sample/a'] = uc.a()
-        f['sample/b'] = uc.b()
-        f['sample/c'] = uc.c()
-        f['sample/alpha'] = uc.alpha()
-        f['sample/beta'] = uc.beta()
-        f['sample/gamma'] = uc.gamma()
-        f['sample/B'] = B
-        f['sample/U'] = U
-        f['sample/centering'] = centering
-        f['instrument/wavelength'] = [wl_min, wl_max]
-        f['goniometer/R'] = R
-        f['peaks/scattering'] = two_theta
-        f['peaks/azimuthal'] = az_phi
-        f['peaks/h'] = h
-        f['peaks/k'] = k
-        f['peaks/l'] = l
-        f['peaks/lambda'] = lamda
+        f["sample/a"] = uc.a()
+        f["sample/b"] = uc.b()
+        f["sample/c"] = uc.c()
+        f["sample/alpha"] = uc.alpha()
+        f["sample/beta"] = uc.beta()
+        f["sample/gamma"] = uc.gamma()
+        f["sample/B"] = B
+        f["sample/U"] = U
+        f["sample/centering"] = centering
+        f["instrument/wavelength"] = [wl_min, wl_max]
+        f["goniometer/R"] = R
+        f["peaks/scattering"] = two_theta
+        f["peaks/azimuthal"] = az_phi
+        f["peaks/h"] = h
+        f["peaks/k"] = k
+        f["peaks/l"] = l
+        f["peaks/lambda"] = lamda
+
 
 generate_peaks("MANDI", "5vnq.cif", wavelength_band=[2, 4], min_d=6)
 generate_peaks("MANDI", "sucrose.cif", wavelength_band=[2, 4], min_d=1)
