@@ -1,26 +1,26 @@
 import os
-directory = os.path.dirname(os.path.abspath(__file__))
 
 import h5py
 import numpy as np
 
 from subhkl.optimization import FindUB
 
-def test_sucrose():
+directory = os.path.dirname(os.path.abspath(__file__))
 
-    filename = os.path.join(directory, 'sucrose_mandi.h5')
+
+def test_sucrose():
+    filename = os.path.join(directory, "sucrose_mandi.h5")
 
     opt = FindUB(filename)
 
-    with h5py.File(os.path.abspath(filename), 'r') as f:
-
-        U = f['sample/U'][()]
-        B = f['sample/B'][()]
-        R = f['goniometer/R'][()]
-        h = f['peaks/h'][()]
-        k = f['peaks/k'][()]
-        l = f['peaks/l'][()]
-        lamda = f['peaks/lambda'][()]
+    with h5py.File(os.path.abspath(filename), "r") as f:
+        U = f["sample/U"][()]
+        B = f["sample/B"][()]
+        R = f["goniometer/R"][()]
+        h = f["peaks/h"][()]
+        k = f["peaks/k"][()]
+        l = f["peaks/l"][()]  # noqa: E741
+        lamda = f["peaks/lambda"][()]
 
     assert np.isclose(np.linalg.det(U), 1.0)
 
@@ -36,45 +36,44 @@ def test_sucrose():
 
     kf_ki_dir, d_min, d_max = opt.uncertainty_line_segements()
 
-    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+    d_star = np.linalg.norm(kf_ki_dir / lamda, axis=0)
 
-    assert np.all(np.logical_and(d_star >= 1/d_max, d_star <= 1/d_min))
+    assert np.all(np.logical_and(d_star >= 1 / d_max, d_star <= 1 / d_min))
 
-    hkl = [h,k,l]
+    hkl = [h, k, l]
 
-    d_star = kf_ki_dir/lamda
+    d_star = kf_ki_dir / lamda
 
-    assert np.allclose(d_star, np.einsum('ij,jk->ik', R @ UB, hkl), atol=1e-3)
+    assert np.allclose(d_star, np.einsum("ij,jk->ik", R @ UB, hkl), atol=1e-3)
 
     num, hkl, lamda = opt.minimize(64)
-    assert num/len(lamda) > 0.95
+    assert num / len(lamda) > 0.95
 
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
 
     UB = opt.UB_matrix(U, B)
 
-    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+    d_star = np.linalg.norm(kf_ki_dir / lamda, axis=0)
 
-    s = np.linalg.norm(np.einsum('ij,kj->ik', UB, hkl), axis=0)
+    s = np.linalg.norm(np.einsum("ij,kj->ik", UB, hkl), axis=0)
 
     assert np.allclose(d_star, s, atol=1e-1)
+
 
 def test_lysozyme():
-
-    filename = os.path.join(directory, '5vnq_mandi.h5')
+    filename = os.path.join(directory, "5vnq_mandi.h5")
 
     opt = FindUB(filename)
 
-    with h5py.File(os.path.abspath(filename), 'r') as f:
-
-        U = f['sample/U'][()]
-        B = f['sample/B'][()]
-        R = f['goniometer/R'][()]
-        h = f['peaks/h'][()]
-        k = f['peaks/k'][()]
-        l = f['peaks/l'][()]
-        lamda = f['peaks/lambda'][()]
+    with h5py.File(os.path.abspath(filename), "r") as f:
+        U = f["sample/U"][()]
+        B = f["sample/B"][()]
+        R = f["goniometer/R"][()]
+        h = f["peaks/h"][()]
+        k = f["peaks/k"][()]
+        l = f["peaks/l"][()]  # noqa: E741
+        lamda = f["peaks/lambda"][()]
 
     assert np.isclose(np.linalg.det(U), 1.0)
 
@@ -90,29 +89,30 @@ def test_lysozyme():
 
     kf_ki_dir, d_min, d_max = opt.uncertainty_line_segements()
 
-    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+    d_star = np.linalg.norm(kf_ki_dir / lamda, axis=0)
 
-    assert np.all(np.logical_and(d_star >= 1/d_max, d_star <= 1/d_min))
+    assert np.all(np.logical_and(d_star >= 1 / d_max, d_star <= 1 / d_min))
 
-    hkl = [h,k,l]
+    hkl = [h, k, l]
 
-    d_star = kf_ki_dir/lamda
+    d_star = kf_ki_dir / lamda
 
-    assert np.allclose(d_star, np.einsum('ij,jk->ik', R @ UB, hkl), atol=1e-3)
+    assert np.allclose(d_star, np.einsum("ij,jk->ik", R @ UB, hkl), atol=1e-3)
 
     num, hkl, lamda = opt.minimize(64)
-    assert num/len(lamda) > 0.95
+    assert num / len(lamda) > 0.95
 
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
 
     UB = opt.UB_matrix(U, B)
 
-    d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
+    d_star = np.linalg.norm(kf_ki_dir / lamda, axis=0)
 
-    s = np.linalg.norm(np.einsum('ij,kj->ik', UB, hkl), axis=0)
+    s = np.linalg.norm(np.einsum("ij,kj->ik", UB, hkl), axis=0)
 
     assert np.allclose(d_star, s, atol=1e-1)
+
 
 test_sucrose()
 test_lysozyme()
