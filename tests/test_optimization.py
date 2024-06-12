@@ -1,11 +1,11 @@
 import os
 
-directory = os.path.dirname(os.path.abspath(__file__))
-
 import h5py
 import numpy as np
 
 from subhkl.optimization import FindUB
+
+directory = os.path.dirname(os.path.abspath(__file__))
 
 
 def test_sucrose():
@@ -19,7 +19,7 @@ def test_sucrose():
         R = f["goniometer/R"][()]
         h = f["peaks/h"][()]
         k = f["peaks/k"][()]
-        l = f["peaks/l"][()]
+        l = f["peaks/l"][()]  # noqa: E741
         lamda = f["peaks/lambda"][()]
 
     assert np.isclose(np.linalg.det(U), 1.0)
@@ -72,7 +72,7 @@ def test_lysozyme():
         R = f["goniometer/R"][()]
         h = f["peaks/h"][()]
         k = f["peaks/k"][()]
-        l = f["peaks/l"][()]
+        l = f["peaks/l"][()]  # noqa: E741
         lamda = f["peaks/lambda"][()]
 
     assert np.isclose(np.linalg.det(U), 1.0)

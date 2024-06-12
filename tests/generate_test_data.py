@@ -1,7 +1,5 @@
 import os
 
-directory = os.path.dirname(os.path.abspath(__file__))
-
 import numpy as np
 import scipy.spatial
 
@@ -18,6 +16,8 @@ from mantid.simpleapi import (
 )
 
 from mantid import config
+
+directory = os.path.dirname(os.path.abspath(__file__))
 
 config["Q.convention"] = "Crystallography"
 
@@ -99,7 +99,7 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     az_phi = []
     h = []
     k = []
-    l = []
+    l = []  # noqa: E741
     lamda = []
 
     for peak in mtd["peaks"]:

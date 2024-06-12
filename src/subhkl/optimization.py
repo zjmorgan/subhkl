@@ -1,7 +1,5 @@
 import os
 
-os.environ["OMP_NUM_THREADS"] = "1"
-
 import h5py
 
 import numpy as np
@@ -10,6 +8,8 @@ import scipy.linalg
 import scipy.spatial
 import scipy.optimize
 import scipy.interpolate
+
+os.environ["OMP_NUM_THREADS"] = "1"
 
 
 class FindUB:
@@ -226,7 +226,7 @@ class FindUB:
         dist[(s.T > 1 / d_min).T] = np.inf
         dist[(s.T < 1 / d_max).T] = np.inf
 
-        h, k, l = int_hkl
+        h, k, l = int_hkl  # noqa: E741
 
         valid = np.full_like(l, True, dtype=bool)
 

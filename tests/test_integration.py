@@ -1,14 +1,12 @@
 import os
-
-directory = os.path.dirname(os.path.abspath(__file__))
-
 import h5py
-import numpy as np
-
 import matplotlib.pyplot as plt
+import numpy as np
 
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
+
+directory = os.path.dirname(os.path.abspath(__file__))
 
 
 def test_mesolite():

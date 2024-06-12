@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 import scipy.linalg
 
-plt.rcParams["axes.prop_cycle"] = plt.cycler(color=plt.cm.Set2.colors)
+plt.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.cm.Set2.colors)
 
 l2 = 0.4
 
@@ -33,7 +33,7 @@ h, k = np.meshgrid(h, k)
 
 h, k = h.flatten(), k.flatten()
 
-Qx, Qz = 2 * np.pi * np.einsum("ij,jk->ik", UB, [h, k])
+Qx, Qz = 2 * np.pi * np.einsum('ij,jk->ik', UB, [h, k])
 
 Q = np.sqrt(Qx**2 + Qz**2)
 
@@ -61,35 +61,35 @@ ax[0].plot(
     2 * np.pi / lamda_min * np.sin(tt),
     2 * np.pi / lamda_min * (np.cos(tt) - 1),
     linewidth=1,
-    linestyle="-",
-    color="k",
+    linestyle='-',
+    color='k',
     zorder=10,
 )
 ax[0].plot(
     2 * np.pi / lamda_max * np.sin(tt),
     2 * np.pi / lamda_max * (np.cos(tt) - 1),
     linewidth=1,
-    linestyle="-",
-    color="k",
+    linestyle='-',
+    color='k',
     zorder=10,
 )
-ax[0].scatter(Qx, Qz, color="C1", zorder=10)
+ax[0].scatter(Qx, Qz, color='C1', zorder=10)
 ax[0].set_aspect(1)
 ax[0].minorticks_on()
-ax[0].set_xlabel(r"$Q_x$ [$\AA^{-1}$]")
-ax[0].set_ylabel(r"$Q_z$ [$\AA^{-1}$]")
+ax[0].set_xlabel(r'$Q_x$ [$\AA^{-1}$]')
+ax[0].set_ylabel(r'$Q_z$ [$\AA^{-1}$]')
 
 for _x, _z in zip(x, z):
-    ax[0].plot(2 * np.pi / wl * _x / l2, 2 * np.pi / wl * (_z / l2 - 1), color="C0")
+    ax[0].plot(2 * np.pi / wl * _x / l2, 2 * np.pi / wl * (_z / l2 - 1), color='C0')
 
 t = np.deg2rad(np.linspace(-175, 175, 500) + 90)
 
-ax[1].plot(100 * l2 * np.cos(t), 100 * l2 * np.sin(t), color="k")
-ax[1].scatter(x * 100, z * 100, color="C1", zorder=10)
+ax[1].plot(100 * l2 * np.cos(t), 100 * l2 * np.sin(t), color='k')
+ax[1].scatter(x * 100, z * 100, color='C1', zorder=10)
 ax[1].set_aspect(1)
 ax[1].minorticks_on()
-ax[1].set_xlabel(r"$x$ [cm]")
-ax[1].set_ylabel(r"$z$ [cm]")
+ax[1].set_xlabel(r'$x$ [cm]')
+ax[1].set_ylabel(r'$z$ [cm]')
 ax[1].arrow(
     0,
     -l2 * 150,
@@ -98,11 +98,9 @@ ax[1].arrow(
     length_includes_head=True,
     head_width=3,
     width=1,
-    color="C2",
+    color='C2',
     zorder=10,
 )
 
 for _x, _z in zip(x, z):
-    ax[1].plot(
-        [_x * 5, _x * 100], [_z * 5, _z * 100], linestyle="-", linewidth=1, color="C0"
-    )
+    ax[1].plot([_x * 5, _x * 100], [_z * 5, _z * 100], linestyle='-', linewidth=1, color='C0')
