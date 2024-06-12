@@ -3,7 +3,11 @@ name = "subhkl"
 description = "Solving crystal orientation from Laue images"
 dynamic = ["version"]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "h5py>=3.11.0,<3.12", 
+  "matplotlib>=3.8.4,<3.9.0",
+  "scikit-image>=0.23.2,<0.24.0",
+]
 license = { text = "GPL3.0" }
 
 [build-system]
@@ -14,6 +18,13 @@ requires = [
    "versioningit"
 ]
 build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+lint = ["ruff>=0.2.0"]
+test = [
+  "pytest>=8.0.2,<8.1.0",
+  "pytest-cov>=4.1.0,<4.2.0",
+]
 
 [tool.versioningit.vcs]
 method = "git"
@@ -46,3 +57,6 @@ disable = ["too-many-locals",
            "duplicate-code"
 ]
 extension-pkg-whitelist = ["PyQt5"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]

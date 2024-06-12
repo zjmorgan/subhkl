@@ -4,8 +4,8 @@ from PIL import Image
 
 import skimage.feature
 
-class FindPeaks:
 
+class FindPeaks:
     def __init__(self, filename):
         """
         Find peaks from an image.
@@ -39,11 +39,11 @@ class FindPeaks:
 
         """
 
-        coords = skimage.feature.peak_local_max(self.im, 
-                                                min_distance=min_pix,
-                                                threshold_rel=min_rel_intens)
+        coords = skimage.feature.peak_local_max(
+            self.im, min_distance=min_pix, threshold_rel=min_rel_intens
+        )
 
-        return coords[:,1], coords[:,0]
+        return coords[:, 1], coords[:, 0]
 
     def scale_coordinates(self, xp, yp, scale_x, scale_y):
         """
@@ -65,7 +65,7 @@ class FindPeaks:
 
         ny, nx = self.im.shape
 
-        return (xp-nx/2)*scale_x, (yp-ny/2)*scale_y
+        return (xp - nx / 2) * scale_x, (yp - ny / 2) * scale_y
 
     def flat_panel(self, x, y, d, h, gamma=0):
         """
@@ -89,9 +89,9 @@ class FindPeaks:
 
         """
 
-        X = x*np.cos(gamma)+d*np.sin(gamma)
-        Y = y+h
-        Z = d*np.cos(gamma)-x*np.sin(gamma)
+        X = x * np.cos(gamma) + d * np.sin(gamma)
+        Y = y + h
+        Z = d * np.cos(gamma) - x * np.sin(gamma)
 
         return X, Y, Z
 
@@ -117,21 +117,20 @@ class FindPeaks:
 
         """
 
-        X = d*np.sin(x/d)
-        Y = y+h
-        Z = d*np.cos(x/d)
+        X = d * np.sin(x / d)
+        Y = y + h
+        Z = d * np.cos(x / d)
 
         return X, Y, Z
 
-    def detector_trajectories(self, x, y, d, h, gamma, panel='curved'):
-
-        if panel == 'curved':
+    def detector_trajectories(self, x, y, d, h, gamma, panel="curved"):
+        if panel == "curved":
             X, Y, Z = self.curved_panel(x, y, d, h, gamma)
         else:
             X, Y, Z = self.flat_panel(x, y, d, h, gamma)
 
-        R = np.sqrt(X**2+Y**2+Z**2)
-        two_theta = np.rad2deg(np.arccos(Z/R))
+        R = np.sqrt(X**2 + Y**2 + Z**2)
+        two_theta = np.rad2deg(np.arccos(Z / R))
         az_phi = np.rad2deg(np.arctan2(Y, X))
 
         return two_theta, az_phi
