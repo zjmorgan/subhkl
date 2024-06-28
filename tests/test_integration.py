@@ -1,5 +1,4 @@
 import os
-directory = os.path.dirname(os.path.abspath(__file__))
 
 import h5py
 import numpy as np
@@ -13,7 +12,7 @@ def test_mesolite():
 
     directory = '/HFIR/CG4D/shared/images/ndip_data_test/meso_may/'
 
-    im_name = 'meso_2_15min_2-0_4-5_050.tif'
+    im_name = 'meso_2_15min_2-0_4-5_078.tif'
 
     filename = os.path.join(directory, im_name)
 
@@ -63,14 +62,14 @@ def test_mesolite():
 
     with h5py.File(os.path.join(directory, peaks_file), 'w') as f:
 
-        f['sample/a'] = 18.405
-        f['sample/b'] = 56.655
-        f['sample/c'] = 6.544
+        f['sample/a'] = 18.39
+        f['sample/b'] = 56.55
+        f['sample/c'] = 6.54
         f['sample/alpha'] = 90
         f['sample/beta'] = 90
         f['sample/gamma'] = 90
         f['sample/centering'] = 'F'
-        f['sample/B'] = np.diag([1/18.405, 1/56.665, 1/6.544])
+        f['sample/B'] = np.diag([1/18.39, 1/56.55, 1/6.54])
         f['instrument/wavelength'] = [wl_min, wl_max]
         f['goniometer/R'] = np.eye(3)
         f['peaks/scattering'] = two_theta
@@ -144,6 +143,8 @@ def test_mesolite():
 
     name, ext = os.path.splitext(im_name)
 
-    fig.savefig(name+'.png')
+    directory = os.path.dirname(os.path.abspath(__file__))
+
+    fig.savefig(os.path.join(directory, name+'.png'))
 
 test_mesolite()
