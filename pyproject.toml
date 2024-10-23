@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "h5py>=3.11.0,<3.12", 
   "matplotlib>=3.8.4,<3.9.0",
+  "pyswarms",
   "scikit-image>=0.23.2,<0.24.0",
 ]
 license = { text = "GPL3.0" }
@@ -28,6 +29,7 @@ test = [
 
 [tool.versioningit.vcs]
 method = "git"
+match = ["v*"]
 default-tag = "0.0.1"
 
 [tool.versioningit.next-version]

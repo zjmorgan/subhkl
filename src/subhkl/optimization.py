@@ -6,11 +6,11 @@ import numpy as np
 
 import scipy.linalg
 import scipy.spatial
-import scipy.optimize
 import scipy.interpolate
 
-os.environ["OMP_NUM_THREADS"] = "1"
+import pyswarms
 
+os.environ["OMP_NUM_THREADS"] = "1"
 
 class FindUB:
     """
@@ -173,9 +173,9 @@ class FindUB:
             [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
         )
 
-        x = self._angle(u2)
+        ax = self._angle(u2)
 
-        return scipy.spatial.transform.Rotation.from_rotvec(x * w).as_matrix()
+        return scipy.spatial.transform.Rotation.from_rotvec(ax*w).as_matrix()
 
     def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
         """
@@ -288,7 +288,7 @@ class FindUB:
 
         Parameters
         ----------
-        x : list
+        x : array
             Refineable parameters.
 
         Returns
@@ -304,12 +304,12 @@ class FindUB:
 
         wavelength = self.wavelength
 
-        U = self.orientation_U(*x)
-        UB = self.UB_matrix(U, B)
+        params = np.array(x)
 
-        num, hkl, lamda = self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)
+        Us = [self.orientation_U(*param) for param in params]
+        UBs = [self.UB_matrix(U, B) for U in Us]
 
-        return -num
+        return [-self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0]/len(d_min)*100 for UB in UBs]
 
     def minimize(self, n_proc=-1):
         """
@@ -331,9 +331,27 @@ class FindUB:
 
         """
 
-        bounds = [slice(0, 1, 1 / 90), slice(0, 1, 1 / 90), slice(0, 0.5, 1 / 90)]
+        bounds = ([0,0,0], [1,1,1])
+        options = {'c1': 0.5, 'c2': 0.5, 'w': 0.5}
 
-        self.x = scipy.optimize.brute(self.objective, ranges=bounds, workers=n_proc)
+        optimizer = pyswarms.single.GlobalBestPSO(n_particles=3000,
+                                                  dimensions=3,
+                                                  options=options,
+                                                  bounds=bounds)
+
+        n_ind, self.x = optimizer.optimize(self.objective,
+                                           n_processes=n_proc,
+                                           iters=100)
+
+        print(-n_ind)
+
+        # bounds = [slice(0, 1, 1/180), 
+        #           slice(0, 1, 1/180),
+        #           slice(0, 0.5, 1/180)]
+
+        # self.x = scipy.optimize.brute(self.objective,
+        #                               ranges=bounds,
+        #                               workers=n_proc)
 
         B = self.reciprocal_lattice_B()
         uls = self.uncertainty_line_segements()
