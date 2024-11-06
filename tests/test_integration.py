@@ -27,7 +27,6 @@ def test_mesolite():
     h = 0.45
     
     x, y = pks.scale_coordinates(xp, yp, p / nx, h / ny)
-    
     fig, ax = plt.subplots(
         4, 1, figsize=(12.8, 19.2), sharex=False, layout="constrained"
     )
@@ -44,7 +43,6 @@ def test_mesolite():
     ax[1].scatter(x, y, edgecolor="r", facecolor="none")
     ax[1].minorticks_on()
     ax[1].set_aspect(1)
-    
     two_theta, az_phi = pks.detector_trajectories(x, y, r, 0, 0)
     
     peaks_file = os.path.join(directory, "mesolite_imagine.h5")
