@@ -13,9 +13,6 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE_NAME: zjmorgan/subhkl:0.0.1
-
 jobs:
   lint:
     name: Linting + formating
@@ -50,7 +47,7 @@ jobs:
         id: name
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: ghcr.io/${{ env.IMAGE_NAME }}
+          images: ghcr.io/zjmorgan/subhkl:0.0.1
 
       - name: Build and push Docker image
         id: push
