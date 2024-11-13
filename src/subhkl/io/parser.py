@@ -1,6 +1,5 @@
 import h5py
 import numpy as np
-import os
 import typer
 import uuid
 
@@ -27,7 +26,7 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
     num, hkl, lamda = opt.minimize(num_procs)
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
-    l = [i[2] for i in hkl]
+    l_list = [i[2] for i in hkl]
 
     # Get UB to save to output
     B = opt.reciprocal_lattice_B()
@@ -39,7 +38,7 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
         f["sample/U"] = U
         f["peaks/h"] = h
         f["peaks/k"] = k
-        f["peaks/l"] = l
+        f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
 
 
@@ -57,7 +56,7 @@ def finder(
     # Setup optional arguments
     kwargs = {}
     if min_pixel_distance > 0:
-        kwargs["min_pix"] = min_pixel_dstance
+        kwargs["min_pix"] = min_pixel_distance
     if min_relative_intensities > 0:
         kwargs["min_rel_intensities"]
 

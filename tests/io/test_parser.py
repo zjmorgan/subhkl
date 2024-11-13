@@ -11,4 +11,3 @@ def test_find_args():
     output = result.stdout.rstrip()
     expected_output = ""
     assert expected_output in output
-    args = parse_optimization_args([])

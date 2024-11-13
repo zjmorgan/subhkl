@@ -2,10 +2,6 @@ from enum import Enum
 import numpy as np
 import numpy.typing as npt
 
-from PIL import Image
-
-import skimage.feature
-
 
 class DetectorShape(str, Enum):
     flat_panel = "flat"
@@ -98,11 +94,6 @@ class Detector:
             Azimuthal scattering angles
 
         """
-        x = self.x
-        y = self.y
-        d = self.distance
-        h = self.height
-        gamma = self.gamma
 
         if self.panel == DetectorShape.curved_panel:
             X, Y, Z = self.curved_panel()

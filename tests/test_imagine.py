@@ -1,9 +1,9 @@
-import os
+# import os
 
-import numpy as np
-import matplotlib.pyplot as plt
+# import numpy as np
+# import matplotlib.pyplot as plt
 
-from subhkl.integration import FindPeaks
+# from subhkl.integration import FindPeaks
 
 
 def test_mesolite():
