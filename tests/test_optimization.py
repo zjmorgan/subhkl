@@ -34,11 +34,9 @@ def test_sucrose():
 
     assert np.allclose(UB, np.dot(U, B))
 
-    kf_ki_dir, d_min, d_max = opt.uncertainty_line_segements()
+    kf_ki_dir = opt.uncertainty_line_segements()
 
     d_star = np.linalg.norm(kf_ki_dir/lamda, axis=0)
-
-    assert np.all(np.logical_and(d_star >= 1/d_max, d_star <= 1/d_min))
 
     hkl = [h,k,l]
 

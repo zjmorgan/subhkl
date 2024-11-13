@@ -1,0 +1,89 @@
+data_global
+_chemical_name_mineral 'Mesolite'
+loop_
+_publ_author_name
+'Stuckenschmidt E'
+'Kirfel A'
+_journal_name_full 'European Journal of Mineralogy'
+_journal_volume 12 
+_journal_year 2000
+_journal_page_first 571
+_journal_page_last 579
+_publ_section_title
+;
+ Zeolites of NAT topology: Structure refinement of mesolite from single crystal
+ X-ray data and comparison with the structures of natrolite and scolecite
+;
+_database_code_amcsd 0006834
+_chemical_formula_sum 'Na2 Ca2 Al6 Si9 O38 H16'
+_cell_length_a 18.4049
+_cell_length_b 56.655
+_cell_length_c 6.5443
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_cell_volume 6823.935
+_exptl_crystal_density_diffrn      2.268
+_symmetry_space_group_name_H-M 'F d d 2'
+loop_
+_space_group_symop_operation_xyz
+  'x,y,z'
+  'x,1/2+y,1/2+z'
+  '1/2+x,y,1/2+z'
+  '1/2+x,1/2+y,z'
+  '1/4+x,1/4-y,1/4+z'
+  '1/4+x,3/4-y,3/4+z'
+  '3/4+x,1/4-y,3/4+z'
+  '3/4+x,3/4-y,1/4+z'
+  '1/4-x,1/4+y,1/4+z'
+  '1/4-x,3/4+y,3/4+z'
+  '3/4-x,1/4+y,3/4+z'
+  '3/4-x,3/4+y,1/4+z'
+  '-x,1/2-y,1/2+z'
+  '-x,-y,+z'
+  '1/2-x,1/2-y,+z'
+  '1/2-x,-y,1/2+z'
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+Na   0.96747   0.76095   0.63160   0.01920
+Ca   0.22803   0.82739   0.88150   0.01160
+Al1   0.78692   0.78024   0.61310   0.00640
+Al10   0.95151   0.86235   0.89300   0.00660
+Al100   0.03627   0.80211   0.89300   0.00660
+Si1   0.75000   0.75000   0.00000   0.00700
+Si10   0.00431   0.83181   0.27750   0.00680
+Si2   0.15500   0.76431   0.87220   0.00620
+Si20   0.08791   0.84687   0.65220   0.00660
+Si200   0.90185   0.81979   0.65060   0.00640
+O1   0.02290   0.80807   0.15230   0.01200
+O10   0.98495   0.85318   0.12830   0.01470
+O100   0.76808   0.77289   0.86490   0.01290
+O2   0.82359   0.80834   0.59650   0.00880
+O20   0.16645   0.85931   0.67110   0.01000
+O200   0.07259   0.77381   0.86360   0.00900
+O3   0.09621   0.82336   0.79470   0.01150
+O30   0.88932   0.84186   0.80160   0.01220
+O300   0.84344   0.75870   0.51530   0.01230
+O4   0.20948   0.78462   0.95930   0.01100
+O40   0.02187   0.86354   0.71790   0.01260
+O400   0.95582   0.80064   0.75300   0.01280
+O5   0.93731   0.82794   0.43390   0.01340
+O50   0.07621   0.83890   0.41320   0.01200
+O500   0.18021   0.75698   0.64160   0.01310
+O6   0.78150   0.81608   0.07600   0.03540
+O60   0.20078   0.84820   0.18350   0.03100
+O600   0.05341   0.76845   0.37710   0.02110
+O7   0.81792   0.85685   0.36480   0.02610
+H61   0.77300   0.80440   0.00900   0.04000
+H62   0.82300   0.81990   0.03800   0.18000
+H601   0.16000   0.84350   0.23400   0.14000
+H602   0.21700   0.85680   0.26900   0.06000
+H6001   0.04600   0.78210   0.31600   0.05000
+H6002   0.09500   0.76970   0.43000   0.05000
+H71   0.86200   0.85400   0.31500   0.14000
+H72   0.80500   0.87130   0.33000   0.16000
+

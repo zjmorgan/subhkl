@@ -3,13 +3,13 @@ os.environ['OMP_NUM_THREADS'] = '1'
 
 import h5py
 
+from functools import partial
+
 import numpy as np
 
 import scipy.linalg
 import scipy.spatial
 import scipy.interpolate
-
-import pyswarms
 
 class FindUB:
     """
@@ -37,7 +37,7 @@ class FindUB:
 
         if filename is not None:
             self.load_peaks(filename)
-            
+
         t = np.linspace(0, np.pi, 1024)
         cdf = (t-np.sin(t))/np.pi
 
@@ -76,10 +76,6 @@ class FindUB:
         -------
         kf_ki_dir : list
             Difference between scattering and incident beam directions.
-        d_min : list
-            Lower limit of :math:`d`-spacing.
-        d_max : list
-            Upper limit of :math:`d`-spacing.
 
         """
 
@@ -92,10 +88,7 @@ class FindUB:
                               np.sin(tt)*np.sin(az),
                               np.cos(tt)-1])
 
-        d_min = 0.5*wl_min/np.sin(0.5*tt)
-        d_max = 0.5*wl_max/np.sin(0.5*tt)
-
-        return kf_ki_dir, d_min, d_max
+        return kf_ki_dir
 
     def metric_G_tensor(self):
         """
@@ -169,18 +162,22 @@ class FindUB:
 
         """
 
-        theta = np.arccos(2*u0-1)
+        theta = np.arccos(1-2*u0)
         phi = 2*np.pi*u1
+
         w = np.array([np.sin(theta)*np.cos(phi),
                       np.sin(theta)*np.sin(phi),
                       np.cos(theta)])
 
-        ax = self._angle(u2)
+        omega = self._angle(u2)
 
-        return scipy.spatial.transform.Rotation.from_rotvec(ax*w).as_matrix()
+        U = scipy.spatial.transform.Rotation.from_rotvec(omega*w).as_matrix()
 
-    def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
+        return U
+
+    def indexer(self, UB, kf_ki_dir, wavelength, tol=0.15):
         """
+        Laue indexer for a given :math:`UB` matrix.
 
         Parameters
         ----------
@@ -188,15 +185,15 @@ class FindUB:
             3x3 sample oriented lattice matrix.
         kf_ki_dir : list
             Difference between scattering and incident beam directions.
-        d_min : list
-            Lower limit of :math:`d`-spacing.
-        d_max : list
-            Upper limit of :math:`d`-spacing.
-        wavelength : list
+        wavelength : list, float
             Bandwidth.
+        tol : float, optional
+            Indexing tolerance. Default is `0.15`.
 
         Returns
         -------
+        err : float
+            Indexing cost.
         num : int
             Number of peaks index.
         hkl : list
@@ -225,46 +222,21 @@ class FindUB:
         dist = np.einsum('ij,j...->i...', UB, diff_hkl)
         dist = np.linalg.norm(dist, axis=0)
 
-        dist[(s.T > 1/d_min).T] = np.inf
-        dist[(s.T < 1/d_max).T] = np.inf
-
-        h, k, l = int_hkl
-
-        valid = np.full_like(l, True, dtype=bool)
-
-        if self.centering == 'A':
-            valid = (k + l) % 2 == 0
-        elif self.centering == 'B':
-            valid = (h + l) % 2 == 0
-        elif self.centering == 'C':
-            valid = (h + k) % 2 == 0
-        elif self.centering == 'I':
-            valid = (h + k + l) % 2 == 0
-        elif self.centering == 'F':
-            valid = ((h + k) % 2 == 0) \
-                  & ((l + h) % 2 == 0) \
-                  & ((k + l) % 2 == 0)
-        elif self.centering == 'R_obv':
-            valid = (-h + k + l) % 3 == 0
-        elif self.centering == 'R_obv':
-            valid = (h - k + l) % 3 == 0
-
-        dist[~valid] = np.inf
-
         ind = np.argmin(dist, axis=1)
+        err = dist[np.arange(dist.shape[0]),ind]
 
         hkl = hkl[:,np.arange(hkl_lamda.shape[1]),ind]
         lamda = lamda[ind]
 
+        hkl = hkl_lamda/lamda
         int_hkl = np.round(hkl)
         diff_hkl = hkl-int_hkl
 
         mask = (np.abs(diff_hkl) < tol).all(axis=0)
-        int_hkl[:,~mask] = 0
 
         num = np.sum(mask)
 
-        return num, int_hkl.T, lamda
+        return np.sum(err), num, int_hkl.T, lamda
 
     def UB_matrix(self, U, B):
         """
@@ -286,9 +258,39 @@ class FindUB:
 
         return U @ B
 
+    def cost(self, param, B, kf_ki_dir, wavelength):
+        """
+        Cost function for indexing given a proposed orientation.
+
+        Parameters
+        ----------
+        param : tuple, float
+            Orientation parameters.
+        B : array, float
+            Reciprocal lattice B-matrix.
+        kf_ki_dir : array, float
+            DESCRIPTION.
+        wavelength : list, float
+            Wavelength band (min, max).
+
+        Returns
+        -------
+        error : float
+            Total indexing cost.
+
+        """
+
+        U = self.orientation_U(*param)
+
+        UB = self.UB_matrix(U, B)
+
+        error, num, hkl, lamda = self.indexer(UB, kf_ki_dir, wavelength)
+
+        return error
+
     def objective(self, x):
         """
-        Cost function.
+        Objective function.
 
         Parameters
         ----------
@@ -304,16 +306,20 @@ class FindUB:
 
         B = self.reciprocal_lattice_B()
 
-        kf_ki_dir, d_min, d_max = self.uncertainty_line_segements()
+        kf_ki_dir = self.uncertainty_line_segements()
 
         wavelength = self.wavelength
 
-        params = np.array(x)
+        params = np.reshape(x, (-1, 3))
 
-        Us = [self.orientation_U(*param) for param in params]
-        UBs = [self.UB_matrix(U, B) for U in Us]
+        compute_with_bounds = partial(self.cost,
+                                      B=B, 
+                                      kf_ki_dir=kf_ki_dir,
+                                      wavelength=wavelength)
 
-        return [-self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0]/len(d_min)*100 for UB in UBs]
+        results = [compute_with_bounds(param) for param in params]
+
+        return np.array(results)
 
     def minimize(self, n_proc=-1):
         """
@@ -335,34 +341,17 @@ class FindUB:
 
         """
 
-        bounds = ([0,0,0], [1,1,1])
+        self.x = scipy.optimize.differential_evolution(self.objective,
+                                                        [(0,1), (0,1), (0,1)], 
+                                                        popsize=1000,
+                                                        updating='deferred',
+                                                        workers=-1).x
 
-        options = {'c1': 0.5, 'c2': 0.5, 'w': 0.5}
-
-        optimizer = pyswarms.single.GlobalBestPSO(n_particles=30000,
-                                                  dimensions=3,
-                                                  options=options,
-                                                  bounds=bounds)
-
-        n_ind, self.x = optimizer.optimize(self.objective,
-                                           n_processes=n_proc,
-                                           iters=100)
-
-        print(-n_ind)
-
-        # bounds = [slice(0, 1, 1/180), 
-        #           slice(0, 1, 1/180),
-        #           slice(0, 0.5, 1/180)]
-
-        # self.x = scipy.optimize.brute(self.objective,
-        #                               ranges=bounds,
-        #                               workers=n_proc)
+        kf_ki_dir = self.uncertainty_line_segements()
 
         B = self.reciprocal_lattice_B()
-        uls = self.uncertainty_line_segements()
-
         U = self.orientation_U(*self.x)
 
         UB = self.UB_matrix(U, B)
 
-        return self.indexer(UB, *uls, self.wavelength)
+        return self.indexer(UB, kf_ki_dir, self.wavelength)

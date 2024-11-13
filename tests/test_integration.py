@@ -3,7 +3,11 @@ import os
 import h5py
 import numpy as np
 
+import matplotlib
+#matplotlib.use('pgf')
+
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
@@ -27,32 +31,50 @@ def test_mesolite():
 
     x, y = pks.scale_coordinates(xp, yp, p/nx, h/ny)
 
-    fig, ax = plt.subplots(4,
-                           1,
-                           figsize=(12.8,19.2),
-                           sharex=False,
-                           layout='constrained')
+    name, ext = os.path.splitext(im_name)
+
+    directory = os.path.dirname(os.path.abspath(__file__))
+
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
 
     extent = [-p/2, p/2, -h/2, h/2]
 
-    ax[0].imshow(pks.im,
+    ax.imshow(pks.im,
+              norm='log',
+              cmap='binary',
+              origin='lower',
+              extent=extent)
+
+    ax.minorticks_on()
+    ax.set_aspect(1)
+
+    ax.set_xlabel('$x$ [m]')
+    ax.set_ylabel('$y$ [m]')
+
+    fig.savefig(os.path.join(directory, name+'_im.pdf'),
+                bbox_inches='tight')
+
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
+
+    ax.imshow(pks.im,
                  norm='log',
                  cmap='binary',
                  origin='lower',
                  extent=extent)
 
-    ax[0].minorticks_on()
-    ax[0].set_aspect(1)
+    ax.scatter(x, y, edgecolor='r', facecolor='none')
+    ax.minorticks_on()
+    ax.set_aspect(1)
 
-    ax[1].imshow(pks.im,
-                 norm='log',
-                 cmap='binary',
-                 origin='lower',
-                 extent=extent)
+    ax.set_xlabel('$x$ [m]')
+    ax.set_ylabel('$y$ [m]')
 
-    ax[1].scatter(x, y, edgecolor='r', facecolor='none')
-    ax[1].minorticks_on()
-    ax[1].set_aspect(1)
+    fig.savefig(os.path.join(directory, name+'_find.pdf'), 
+                bbox_inches='tight')
+    fig.savefig(os.path.join(directory, name+'_find.pgf'), 
+                bbox_inches='tight')
+
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
 
     two_theta, az_phi = pks.detector_trajectories(x, y, r, 0, 0)
 
@@ -77,24 +99,34 @@ def test_mesolite():
 
     opt = FindUB(peaks_file)
 
-    num, hkl, lamda = opt.minimize(48)
+    error, num, hkl, lamda = opt.minimize()
     assert num/len(lamda) > 0.5
 
-    ax[2].imshow(pks.im,
-                 norm='log',
-                 cmap='binary',
-                 origin='lower',
-                 extent=extent)
+    ax.imshow(pks.im,
+              norm='log',
+              cmap='binary',
+              origin='lower',
+              extent=extent)
 
-    ax[2].plot(x, y, 'r.')
-    ax[2].minorticks_on()
-    ax[2].set_aspect(1)
+    ax.plot(x, y, 'r.')
+    ax.minorticks_on()
+    ax.set_aspect(1)
 
     for i in range(len(hkl)):
         if np.linalg.norm(hkl[i]) > 0:
             coord = (x[i], y[i])
             label = '{:.0f}{:.0f}{:.0f}'.format(*hkl[i])
-            ax[2].annotate(label, coord)
+            ax.annotate(label, coord)
+
+    ax.set_xlabel('$x$ [m]')
+    ax.set_ylabel('$y$ [m]')
+
+    fig.savefig(os.path.join(directory, name+'_index.pdf'),
+                bbox_inches='tight')
+    fig.savefig(os.path.join(directory, name+'_index.pgf'),
+                bbox_inches='tight')
+
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
 
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
@@ -127,24 +159,66 @@ def test_mesolite():
 
     theta = np.arctan2(xv, zv)
 
-    yp = yv.copy()
-    xp = r*theta
+    y_ = yv.copy()
+    x_ = r*theta
 
-    ax[3].imshow(pks.im,
-                 norm='log',
-                 cmap='binary',
-                 origin='lower',
-                 extent=extent)
+    ax.imshow(pks.im,
+              norm='log',
+              cmap='binary',
+              origin='lower',
+              extent=extent)
 
-    ax[3].scatter(x, y, edgecolor='r', facecolor='none')
-    ax[3].plot(xp, yp, 'w.')
-    ax[3].minorticks_on()
-    ax[3].set_aspect(1)
+    ax.scatter(x, y, edgecolor='r', facecolor='none')
+    ax.plot(x_, y_, 'w.')
+    ax.minorticks_on()
+    ax.set_aspect(1)
 
-    name, ext = os.path.splitext(im_name)
+    ax.set_xlabel('$x$ [m]')
+    ax.set_ylabel('$y$ [m]')
 
-    directory = os.path.dirname(os.path.abspath(__file__))
+    fig.savefig(os.path.join(directory, name+'_predict.pdf'),
+                bbox_inches='tight')
+    fig.savefig(os.path.join(directory, name+'_predict.pgf'),
+                bbox_inches='tight')
 
-    fig.savefig(os.path.join(directory, name+'.png'))
+    peak_dict = pks.fit(xp, yp, pks.im)
+
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
+
+    ax.imshow(pks.im,
+              norm='log',
+              cmap='binary',
+              origin='lower',
+              extent=extent)
+
+    ax.minorticks_on()
+    ax.set_aspect(1)
+
+    for key in peak_dict.keys():
+
+        mu_x, mu_y, sigma_x, sigma_y, rho = peak_dict[key]
+        
+        mu_x, mu_y = pks.scale_coordinates(mu_x, mu_y, p/nx, h/ny)
+        sigma_x, sigma_y = pks.scale_size(sigma_x, sigma_y, p/nx, h/ny)
+
+        theta = np.rad2deg(0.5*np.arctan2(2*rho*sigma_x*sigma_y,
+                                          sigma_x**2-sigma_y**2))
+
+        elli = Ellipse(xy=(mu_x, mu_y),
+                       width=6*sigma_x,
+                       height=6*sigma_y,
+                       angle=theta,
+                       linestyle='-',
+                       edgecolor='w',
+                       facecolor='none',
+                       rasterized=False,
+                       zorder=100)
+
+        ax.add_patch(elli)
+
+    fig.savefig(os.path.join(directory, name+'_integrate.pdf'),
+                bbox_inches='tight')
+    fig.savefig(os.path.join(directory, name+'_integrate.pgf'),
+                bbox_inches='tight')
 
 test_mesolite()
