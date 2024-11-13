@@ -12,22 +12,27 @@ ENV PYTHONUNBUFFERED=1 \
 ENV PATH="/root/.local/bin:$PATH"
 
 RUN apt update \
-    && apt install -y curl make \
+    && apt install -y curl git make \
     && rm -rf /var/lib/apt/lists/* \
     && curl -sSL https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py | python -
 
 WORKDIR /build
 
-COPY pyproject.toml pdm.lock README.md /build
-RUN pdm install -G:all --no-self
+COPY pyproject.toml pdm.lock README.md /build/
+RUN pdm install -G:all --no-lock --no-self
 
 ADD . /build
 RUN pdm sync --dev -G:all
 
 RUN pdm build
+RUN pdm run pytest tests
 
 FROM python:3.10-slim as tool
 
 COPY --from=build /build/dist/subhkl-*-py3-none-any.whl .
-RUN pip install subhkl-*-py3-none-ayn.whl
-
+RUN python -m pip install "$(find . -maxdepth 1 -name *.whl)"
+ADD 2IhsN5QO.tiff 2IhsN5QO.tiff
+ADD TOPAX_46917.nxs.h5 TOPAX_46917.nxs.h5
+ADD g.csv g.csv
+ADD tests/sucrose_mandi.h5 sucrose_mandi.h5
+ADD peaks.csv peaks.csv

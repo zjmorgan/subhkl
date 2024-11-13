@@ -8,6 +8,7 @@ dependencies:
   - scipy
   - matplotlib
   - pycifrw
+  - pyswarms
   - h5py
   - pytest
   - pydata-sphinx-theme

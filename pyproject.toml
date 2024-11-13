@@ -4,9 +4,11 @@ description = "Solving crystal orientation from Laue images"
 dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
-  "h5py>=3.11.0,<3.12", 
-  "matplotlib>=3.8.4,<3.9.0",
-  "scikit-image>=0.23.2,<0.24.0",
+    "h5py>=3.11.0,<3.12",
+    "matplotlib>=3.8.4,<3.9.0",
+    "pyswarms",
+    "scikit-image>=0.23.2,<0.24.0",
+    "typer>=0.12.3"
 ]
 license = { text = "GPL3.0" }
 
@@ -28,6 +30,7 @@ test = [
 
 [tool.versioningit.vcs]
 method = "git"
+match = ["v*"]
 default-tag = "0.0.1"
 
 [tool.versioningit.next-version]
