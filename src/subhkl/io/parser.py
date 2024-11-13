@@ -28,7 +28,9 @@ def index(
     # Index the peaks
     opt = FindUB(hdf5_peaks_filename)
     num, hkl, lamda = opt.minimize(num_procs)
-    h, k, l = hkl
+    h = [i[0] for i in hkl]
+    k = [i[1] for i in hkl]
+    l = [i[2] for i in hkl]
     
     # Get UB to save to output
     B = opt.reciprocal_lattice_B()

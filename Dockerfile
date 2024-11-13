@@ -34,3 +34,5 @@ RUN python -m pip install "$(find . -maxdepth 1 -name *.whl)"
 ADD 2IhsN5QO.tiff 2IhsN5QO.tiff
 ADD TOPAX_46917.nxs.h5 TOPAX_46917.nxs.h5
 ADD g.csv g.csv
+ADD tests/sucrose_mandi.h5 sucrose_mandi.h5
+ADD peaks.csv peaks.csv

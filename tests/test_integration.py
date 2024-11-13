@@ -11,7 +11,7 @@ directory = os.path.dirname(os.path.abspath(__file__))
 
 
 def test_mesolite():
-    
+
     directory = '/build/tests/'
     
     im_name = 'meso_2_15min_2-0_4-5_050.tif'
@@ -75,72 +75,72 @@ def test_mesolite():
     while tries < 5:    
     
         num, hkl, lamda = opt.minimize(48)
-        
+    
         ax[2].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
-        
+    
         ax[2].plot(x, y, "r.")
         ax[2].minorticks_on()
         ax[2].set_aspect(1)
-        
+    
         for i in range(len(hkl)):
             if np.linalg.norm(hkl[i]) > 0:
                 coord = (x[i], y[i])
                 label = "{:.0f}{:.0f}{:.0f}".format(*hkl[i])
                 ax[2].annotate(label, coord)
-        
+    
         B = opt.reciprocal_lattice_B()
         U = opt.orientation_U(*opt.x)
         UB = opt.UB_matrix(U, B)
-        
+    
         Qx, Qy, Qz = np.einsum("ij,kj->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx**2 + Qy**2 + Qz**2)
-        
+    
         lamda = -4 * np.pi * Qz / Q**2
         mask = np.logical_and(lamda > wl_min, lamda < wl_max)
-        
+    
         Qx, Qy, Qz, Q, lamda = Qx[mask], Qy[mask], Qz[mask], Q[mask], lamda[mask]
-        
+    
         tt = -2 * np.arcsin(Qz / Q)
         az = np.arctan2(Qy, Qx)
-        
+    
         xv = np.sin(tt) * np.cos(az)
         yv = np.sin(tt) * np.sin(az)
         zv = np.cos(tt)
-        
+    
         xy_test_1 = np.allclose(xv**2 + yv**2 + zv**2, 1)
-        
+    
         t = r / np.sqrt(xv**2 + zv**2)
-        
+    
         xv *= t
         yv *= t
         zv *= t
-        
+    
         xy_test_2 = np.allclose(xv**2 + zv**2, r**2)
-        
+    
         # Proceed and stop retrying only if all the test conditions are true
         if num / len(lamda) > 0.5 and xy_test_1 and xy_test_2:
             success = True
-        
+    
             theta = np.arctan2(xv, zv)
-            
+    
             yp = yv.copy()
             xp = r * theta
-            
+    
             ax[3].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
-            
+    
             ax[3].scatter(x, y, edgecolor="r", facecolor="none")
             ax[3].plot(xp, yp, "w.")
             ax[3].minorticks_on()
             ax[3].set_aspect(1)
-            
+    
             name, ext = os.path.splitext(im_name)
-            
+    
             directory = os.path.dirname(os.path.abspath(__file__))
-            
+    
             fig.savefig(os.path.join(directory, name+'.png'))
-            
+    
             break
-
+    
     assert success
 
 test_mesolite()

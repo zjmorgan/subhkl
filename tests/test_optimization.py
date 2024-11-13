@@ -22,6 +22,24 @@ def test_sucrose():
         k = f["peaks/k"][()]
         l = f["peaks/l"][()]  # noqa: E741
         lamda = f["peaks/lambda"][()]
+        
+        print("peaks scattering")
+        print(f["peaks/scattering"][()])
+        print("peaks azimuthal")
+        print(f["peaks/azimuthal"][()])
+        print("goniometer")
+        print(f["goniometer/R"][()])
+        print("a b c")
+        print(f["sample/a"][()])
+        print(f["sample/b"][()])
+        print(f["sample/c"][()])
+        print("alpha beta gamma")
+        print(f["sample/alpha"][()])
+        print(f["sample/beta"][()])
+        print(f["sample/gamma"][()])
+        print("sample centering")
+        print(f["sample/centering"][()])
+        i = 1 / 0
     
     assert np.isclose(np.linalg.det(U), 1.0)
     
