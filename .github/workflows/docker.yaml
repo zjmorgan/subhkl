@@ -6,7 +6,7 @@ on:
 
 env:
   VERSION: 0.0.1
-  IMAGE_NAME: zjmorgan/subhkl:${{ version }}
+  IMAGE_NAME: zjmorgan/subhkl:$VERSION
 
 jobs:
   build-and-push-image:

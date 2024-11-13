@@ -32,49 +32,23 @@ jobs:
           pdm run ruff format --check
           pdm run ruff check
 
-  build-and-push-image:
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      packages: write
-
+  test-unit:
+    name: Unit tests
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Download repo
-        uses: actions/checkout@v4
-
-      - name: Create image name
-        id: name
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+      - uses: actions/checkout@v4
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4
         with:
-          images: ghcr.io/zjmorgan/subhkl:0.0.1
-
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
-        with:
-          context: .
-          labels: ${{ steps.name.outputs.labels }}
-          push: true
-          tags: ${{ steps.name.outputs.tags }}
-
-#  test-unit:
-#    name: Unit tests
-#    strategy:
-#      matrix:
-#        python-version: ["3.10"]
-#        os:
-#          - ubuntu-latest
-#    runs-on: ${{ matrix.os }}
-#    steps:
-#      - uses: actions/checkout@v4
-#      - name: Setup PDM
-#        uses: pdm-project/setup-pdm@v4
-#        with:
-#          python-version: ${{ matrix.python-version }}
-#          cache: true
-#      - name: Install dependencies
-#        run: |
-#          pdm venv create --with-pip --force $PYTHON
-#          pdm sync --dev -G:all
-#      - run: pdm run pytest 
+          python-version: ${{ matrix.python-version }}
+          cache: true
+      - name: Install dependencies
+        run: |
+          pdm venv create --with-pip --force $PYTHON
+          pdm sync --dev -G:all
+      - run: pdm run pytest 
