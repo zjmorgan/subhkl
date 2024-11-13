@@ -4,7 +4,7 @@ from subhkl.io.parser import app
 
 def test_find_args():
     runner = CliRunner()
-    test_args = ['find', 'my.tiff']
+    test_args = ["find", "my.tiff"]
     result = runner.invoke(app, test_args)
     assert result.exit_code == 0
 
@@ -12,4 +12,3 @@ def test_find_args():
     expected_output = ""
     assert expected_output in output
     args = parse_optimization_args([])
-

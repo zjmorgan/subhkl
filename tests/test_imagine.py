@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 
 from subhkl.integration import FindPeaks
 
+
 def test_mesolite():
     pass
     # directory = '/HFIR/CG4D/shared/images/ndip_data_test/meso_may/'
@@ -52,5 +53,6 @@ def test_mesolite():
     #     fname = os.path.join(directory, name+'_im.png')
     #
     #     fig.savefig(fname, bbox_inches='tight')
+
 
 test_mesolite()

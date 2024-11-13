@@ -2,6 +2,7 @@ import pytest
 
 from subhkl.utils import scale_coordinates
 
+
 def test_scale_coordinates():
     xp = 878
     yp = 455
@@ -20,8 +21,8 @@ def test_scale_coordinates():
 def test_scale_coordinates_no_scaling():
     xp = -1.2
     yp = 2.1
-    scale_x = 1.
-    scale_y = 1.
+    scale_x = 1.0
+    scale_y = 1.0
     nx = 0
     ny = 0
 

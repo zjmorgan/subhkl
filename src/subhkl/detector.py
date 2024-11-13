@@ -13,15 +13,15 @@ class DetectorShape(str, Enum):
 
 
 class Detector:
-
-    def __init__(self,
-            xp: npt.ArrayLike,
-            yp: npt.ArrayLike,
-            detector_distance: float,
-            detector_height: float,
-            image_orientation: float = 0,
-            panel: DetectorShape = DetectorShape.curved_panel,
-        ):
+    def __init__(
+        self,
+        xp: npt.ArrayLike,
+        yp: npt.ArrayLike,
+        detector_distance: float,
+        detector_height: float,
+        image_orientation: float = 0,
+        panel: DetectorShape = DetectorShape.curved_panel,
+    ):
         """
         Parameters
         ----------

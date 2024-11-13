@@ -12,6 +12,7 @@ import pyswarms
 
 os.environ["OMP_NUM_THREADS"] = "1"
 
+
 class FindUB:
     """
     Optimizer of crystal orientation from peaks and known lattice parameters.
@@ -175,7 +176,7 @@ class FindUB:
 
         ax = self._angle(u2)
 
-        return scipy.spatial.transform.Rotation.from_rotvec(ax*w).as_matrix()
+        return scipy.spatial.transform.Rotation.from_rotvec(ax * w).as_matrix()
 
     def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
         """
@@ -309,7 +310,10 @@ class FindUB:
         Us = [self.orientation_U(*param) for param in params]
         UBs = [self.UB_matrix(U, B) for U in Us]
 
-        return [-self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0]/len(d_min)*100 for UB in UBs]
+        return [
+            -self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0] / len(d_min) * 100
+            for UB in UBs
+        ]
 
     def minimize(self, n_proc=-1):
         """
@@ -331,21 +335,20 @@ class FindUB:
 
         """
 
-        bounds = ([0,0,0], [1,1,1])
-        options = {'c1': 0.5, 'c2': 0.5, 'w': 0.5}
+        bounds = ([0, 0, 0], [1, 1, 1])
+        options = {"c1": 0.5, "c2": 0.5, "w": 0.5}
 
-        optimizer = pyswarms.single.GlobalBestPSO(n_particles=3000,
-                                                  dimensions=3,
-                                                  options=options,
-                                                  bounds=bounds)
+        optimizer = pyswarms.single.GlobalBestPSO(
+            n_particles=3000, dimensions=3, options=options, bounds=bounds
+        )
 
-        n_ind, self.x = optimizer.optimize(self.objective,
-                                           n_processes=n_proc,
-                                           iters=100)
+        n_ind, self.x = optimizer.optimize(
+            self.objective, n_processes=n_proc, iters=100
+        )
 
         print(-n_ind)
 
-        # bounds = [slice(0, 1, 1/180), 
+        # bounds = [slice(0, 1, 1/180),
         #           slice(0, 1, 1/180),
         #           slice(0, 0.5, 1/180)]
 
