@@ -12,7 +12,7 @@ directory = os.path.dirname(os.path.abspath(__file__))
 
 
 def test_mesolite():
-    directory = "/build/tests/"
+    directory = "tests/"
 
     im_name = "meso_2_15min_2-0_4-5_050.tif"
     filename = os.path.join(directory, im_name)
