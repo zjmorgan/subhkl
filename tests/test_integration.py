@@ -4,6 +4,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
+from subhkl.detector import Detector
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
 
@@ -42,7 +43,8 @@ def test_mesolite():
     ax[1].scatter(x, y, edgecolor="r", facecolor="none")
     ax[1].minorticks_on()
     ax[1].set_aspect(1)
-    two_theta, az_phi = pks.detector_trajectories(x, y, r, 0, 0)
+    detector = Detector(x, y, r, 0)
+    two_theta, az_phi = detector.detector_trajectories()
 
     peaks_file = os.path.join(directory, "mesolite_imagine.h5")
 
