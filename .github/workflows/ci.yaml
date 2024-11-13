@@ -14,8 +14,7 @@ permissions:
   contents: read
 
 env:
-  CONTAINER_VERSION: 0.0.1
-  IMAGE_NAME: zjmorgan/subhkl:$CONTAINER_VERSION
+  IMAGE_NAME: zjmorgan/subhkl:0.0.1
 
 jobs:
   lint:
