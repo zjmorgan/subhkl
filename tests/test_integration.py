@@ -46,11 +46,12 @@ def test_mesolite():
     detector = Detector(x, y, r, 0)
     two_theta, az_phi = detector.detector_trajectories()
 
-    peaks_file = os.path.join(directory, "mesolite_imagine.h5")
+    # This might not be the mesolite file
+    peaks_file = os.path.join(directory, "5vnq_mandi.h5")
 
     wl_min, wl_max = 2, 4.5
 
-    with h5py.File(os.path.join(directory, peaks_file), "w") as f:
+    with h5py.File(peaks_file, "w") as f:
         f["sample/a"] = 18.39
         f["sample/b"] = 56.55
         f["sample/c"] = 6.54
