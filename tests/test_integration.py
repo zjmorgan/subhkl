@@ -12,6 +12,10 @@ directory = os.path.dirname(os.path.abspath(__file__))
 
 
 def test_mesolite():
+    # FIXME
+    # Ignoring this test until we get a version of the mesolite input file constructed from the image files to test with
+    pass
+
     directory = "tests/"
 
     im_name = "meso_2_15min_2-0_4-5_050.tif"
@@ -46,8 +50,7 @@ def test_mesolite():
     detector = Detector(x, y, r, 0)
     two_theta, az_phi = detector.detector_trajectories()
 
-    # This might not be the mesolite file
-    peaks_file = os.path.join(directory, "5vnq_mandi.h5")
+    peaks_file = os.path.join(directory, "sucroae_imagine.h5")
 
     wl_min, wl_max = 2, 4.5
 
