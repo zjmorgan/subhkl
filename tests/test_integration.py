@@ -90,8 +90,8 @@ def test_mesolite():
         f['sample/alpha'] = 90
         f['sample/beta'] = 90
         f['sample/gamma'] = 90
+        f['sample/cell'] = 'Orthorhombic'
         f['sample/centering'] = 'F'
-        f['sample/B'] = np.diag([1/18.39, 1/56.55, 1/6.54])
         f['instrument/wavelength'] = [wl_min, wl_max]
         f['goniometer/R'] = np.eye(3)
         f['peaks/scattering'] = two_theta
@@ -181,6 +181,63 @@ def test_mesolite():
     fig.savefig(os.path.join(directory, name+'_predict.pgf'),
                 bbox_inches='tight')
 
+    fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
+
+    constants, uncertanties = opt.refine()
+
+    B = opt.reciprocal_lattice_B()
+    U = opt.orientation_U(*opt.x)
+    UB = opt.UB_matrix(U, B)
+
+    Qx, Qy, Qz = np.einsum('ij,kj->ik', 2*np.pi*UB, hkl)
+    Q = np.sqrt(Qx**2+Qy**2+Qz**2)
+
+    lamda = -4*np.pi*Qz/Q**2
+    mask = np.logical_and(lamda > wl_min, lamda < wl_max)
+
+    Qx, Qy, Qz, Q, lamda = Qx[mask], Qy[mask], Qz[mask], Q[mask], lamda[mask]
+
+    tt = -2*np.arcsin(Qz/Q)
+    az = np.arctan2(Qy, Qx)
+
+    xv = np.sin(tt)*np.cos(az)
+    yv = np.sin(tt)*np.sin(az)
+    zv = np.cos(tt)
+
+    assert np.allclose(xv**2+yv**2+zv**2, 1)
+
+    t = r/np.sqrt(xv**2+zv**2)
+
+    xv *= t
+    yv *= t
+    zv *= t
+
+    assert np.allclose(xv**2+zv**2, r**2)
+
+    theta = np.arctan2(xv, zv)
+
+    y_ = yv.copy()
+    x_ = r*theta
+
+    ax.imshow(pks.im,
+              norm='log',
+              cmap='binary',
+              origin='lower',
+              extent=extent)
+
+    ax.scatter(x, y, edgecolor='r', facecolor='none')
+    ax.plot(x_, y_, 'w.')
+    ax.minorticks_on()
+    ax.set_aspect(1)
+
+    ax.set_xlabel('$x$ [m]')
+    ax.set_ylabel('$y$ [m]')
+
+    fig.savefig(os.path.join(directory, name+'_refine.pdf'),
+                bbox_inches='tight')
+    fig.savefig(os.path.join(directory, name+'_refine.pgf'),
+                bbox_inches='tight')
+
     peak_dict = pks.fit(xp, yp, pks.im)
 
     fig, ax = plt.subplots(1, 1, figsize=(12.8,6.4), layout='tight')
@@ -196,18 +253,19 @@ def test_mesolite():
 
     for key in peak_dict.keys():
 
-        mu_x, mu_y, sigma_x, sigma_y, rho = peak_dict[key]
+        mu_x, mu_y, sigma_1, sigma_2, theta = peak_dict[key]
         
         mu_x, mu_y = pks.scale_coordinates(mu_x, mu_y, p/nx, h/ny)
-        sigma_x, sigma_y = pks.scale_size(sigma_x, sigma_y, p/nx, h/ny)
-
-        theta = np.rad2deg(0.5*np.arctan2(2*rho*sigma_x*sigma_y,
-                                          sigma_x**2-sigma_y**2))
+        sigma_1, sigma_2, theta = pks.scale_ellipsoid(sigma_1,
+                                                      sigma_2,
+                                                      theta,
+                                                      p/nx,
+                                                      h/ny)
 
         elli = Ellipse(xy=(mu_x, mu_y),
-                       width=6*sigma_x,
-                       height=6*sigma_y,
-                       angle=theta,
+                       width=6*sigma_1,
+                       height=6*sigma_2,
+                       angle=np.rad2deg(theta),
                        linestyle='-',
                        edgecolor='w',
                        facecolor='none',

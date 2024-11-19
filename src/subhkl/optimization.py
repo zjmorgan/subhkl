@@ -67,6 +67,7 @@ class FindUB:
             self.two_theta = f['peaks/scattering'][()]
             self.az_phi = f['peaks/azimuthal'][()]
             self.centering = f['sample/centering'][()].decode('utf-8')
+            self.cell = f['sample/cell'][()].decode('utf-8')
 
     def uncertainty_line_segements(self):
         """
@@ -78,8 +79,6 @@ class FindUB:
             Difference between scattering and incident beam directions.
 
         """
-
-        wl_min, wl_max = self.wavelength
 
         tt = np.deg2rad(self.two_theta)
         az = np.deg2rad(self.az_phi)
@@ -236,7 +235,7 @@ class FindUB:
 
         num = np.sum(mask)
 
-        return np.sum(err), num, int_hkl.T, lamda
+        return np.sum(err**2), num, int_hkl.T, lamda
 
     def UB_matrix(self, U, B):
         """
@@ -269,7 +268,7 @@ class FindUB:
         B : array, float
             Reciprocal lattice B-matrix.
         kf_ki_dir : array, float
-            DESCRIPTION.
+            Scattering trajectories.
         wavelength : list, float
             Wavelength band (min, max).
 
@@ -355,3 +354,203 @@ class FindUB:
         UB = self.UB_matrix(U, B)
 
         return self.indexer(UB, kf_ki_dir, self.wavelength)
+
+    def cubic(self, x):
+
+        a, *params = x
+
+        return (a, a, a, 90, 90, 90, *params)
+
+    def rhombohedral(self, x):
+
+        a, alpha, *params = x
+
+        return (a, a, a, alpha, alpha, alpha, *params)
+
+    def tetragonal(self, x):
+
+        a, c, *params = x
+
+        return (a, a, c, 90, 90, 90, *params)
+
+    def hexagonal(self, x):
+
+        a, c, *params = x
+
+        return (a, a, c, 90, 90, 120, *params)
+
+    def orthorhombic(self, x):
+
+        a, b, c, *params = x
+
+        return (a, b, c, 90, 90, 90, *params)
+
+    def monoclinic(self, x):
+
+        a, b, c, beta, *params = x
+
+        return (a, b, c, 90, beta, 90, *params)
+
+    def triclinic(self, x):
+
+        a, b, c, alpha, beta, gamma, *params = x
+
+        return (a, b, c, alpha, beta, gamma, *params)
+
+    def residual(self, x, sin_theta, kf_ki_dir, hkl, wavelength, fun):
+        """
+        Optimization residual function.
+
+        Parameters
+        ----------
+        x : list
+            Parameters.
+        hkl : list
+            Miller indices.
+        Q : list
+            Q-sample vectors.
+        fun : function
+            Lattice constraint function.
+
+        Returns
+        -------
+        residual : list
+            Least squares residuals.
+
+        """
+
+        a, b, c, alpha, beta, gamma, *x = fun(x)
+
+        constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
+        B, Gstar = self.cartesian_matrix_metric_tensor(*constants)
+        U = self.orientation_U(*x)
+
+        UB = np.dot(U, B)
+
+        d = 1/np.sqrt(np.einsum('ij,lj,li->l', Gstar, hkl, hkl))
+
+        lamda = 2*d*sin_theta
+        lamda[lamda < wavelength[0]] = wavelength[0]
+        lamda[lamda > wavelength[1]] = wavelength[1]
+
+        vec = lamda*np.einsum('ij,lj->il', UB, hkl)-kf_ki_dir
+
+        return vec.flatten()
+
+    def get_lattice_constants(self):
+
+        return self.a, self.b, self.c, self.alpha, self.beta, self.gamma
+
+    def set_lattice_constants(self, a, b, c, alpha, beta, gamma):
+
+        self.a = a
+        self.b = b
+        self.c = c
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+
+    def get_orientation_parameters(self):
+
+        return self.x 
+
+    def set_orientation_parameters(self, x):
+
+        self.x = x
+
+    def cartesian_matrix_metric_tensor(self, a, b, c, alpha, beta, gamma):
+
+        G = np.array([[a**2, a*b*np.cos(gamma), a*c*np.cos(beta)],
+                      [b*a*np.cos(gamma), b**2, b*c*np.cos(alpha)],
+                      [c*a*np.cos(beta), c*b*np.cos(alpha), c**2]])
+
+        Gstar = np.linalg.inv(G)
+
+        B = scipy.linalg.cholesky(Gstar, lower=False)
+
+        return B, Gstar
+
+    def refine(self, error=0.05):
+        """
+        Refine the orientation and lattice parameters under constraints.
+
+        """
+
+        a, b, c, alpha, beta, gamma = self.get_lattice_constants()
+
+        fun_dict = {'Cubic': self.cubic,
+                    'Rhombohedral': self.rhombohedral,
+                    'Tetragonal': self.tetragonal,
+                    'Hexagonal': self.hexagonal,
+                    'Orthorhombic': self.orthorhombic,
+                    'Monoclinic': self.monoclinic,
+                    'Triclinic': self.triclinic}
+
+        x0_dict = {'Cubic': (a, ),
+                   'Rhombohedral': (a, alpha),
+                   'Tetragonal': (a, c),
+                   'Hexagonal': (a, c),
+                   'Orthorhombic': (a, b, c),
+                   'Monoclinic': (a, b, c, beta),
+                   'Triclinic': (a, b, c, alpha, beta, gamma)}
+
+        fun = fun_dict[self.cell]
+        x0 = x0_dict[self.cell]
+
+        B = self.reciprocal_lattice_B()
+        U = self.orientation_U(*self.x)
+
+        UB = self.UB_matrix(U, B)
+
+        wavelength = self.wavelength
+        kf_ki_dir = self.uncertainty_line_segements()
+        sin_theta = np.sin(0.5*np.deg2rad(self.two_theta))
+
+        *_, hkl, lamda = self.indexer(UB, kf_ki_dir, wavelength)
+
+        x_min = [(1-error)*constant for constant in x0]+[0,0,0]
+        x_max = [(1+error)*constant for constant in x0]+[1,1,1]
+
+        bounds = np.array([x_min, x_max]).tolist()
+
+        x0 += tuple(self.x)
+        args = (sin_theta, kf_ki_dir, hkl, wavelength, fun)
+
+        sol = scipy.optimize.least_squares(self.residual,
+                                           x0=x0,
+                                           args=args,
+                                           bounds=bounds)
+
+        a, b, c, alpha, beta, gamma, *self.x = fun(sol.x)
+
+        constants = a, b, c, alpha, beta, gamma
+
+        self.set_lattice_constants(*constants)
+
+        J = sol.jac
+        cov = np.linalg.inv(J.T.dot(J))
+
+        chi2dof = np.sum(sol.fun**2)/(sol.fun.size-sol.x.size)
+        cov *= chi2dof
+
+        sig = np.sqrt(np.diagonal(cov))
+
+        sig_a, sig_b, sig_c, sig_alpha, sig_beta, sig_gamma, *_ = fun(sig)
+
+        if np.isclose(a, sig_a):
+            sig_a = 0
+        if np.isclose(b, sig_b):
+            sig_b = 0
+        if np.isclose(c, sig_c):
+            sig_c = 0
+
+        if np.isclose(alpha, sig_alpha):
+            sig_alpha = 0
+        if np.isclose(beta, sig_beta):
+            sig_beta = 0
+        if np.isclose(gamma, sig_gamma):
+            sig_gamma = 0
+
+        uncertanties = sig_a, sig_b, sig_c, sig_alpha, sig_beta, sig_gamma
+
+        return constants, uncertanties

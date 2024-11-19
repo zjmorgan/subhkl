@@ -4,7 +4,7 @@ from PIL import Image
 
 import skimage.feature
 import scipy.optimize
-    
+
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic
 
@@ -71,14 +71,16 @@ class FindPeaks:
 
         return (xp-nx/2)*scale_x, (yp-ny/2)*scale_y
 
-    def scale_size(self, xp, yp, scale_x, scale_y):
+    def scale_ellipsoid(self, a, b, theta, scale_x, scale_y):
         """
-        Scale from pixel coordinates to real width/height
+        Scale from pixel coordinates to real units.
 
         Parameters
         ----------
-        xp, yp : array, int
-            Image coordinates.
+        a, b : array
+            Image coordinates (eigenvalues).
+        theta: array
+            Orientation angle.
         scale_x, scale_y : float
             Pixel scaling factors.
 
@@ -89,8 +91,23 @@ class FindPeaks:
 
         """
 
-        return xp*scale_x, yp*scale_y
+        R = np.array([[np.cos(theta), -np.sin(theta)],
+                      [np.sin(theta), np.cos(theta)]])
 
+        S_inv = np.diag([1/scale_x, 1/scale_y])
+
+        A =  R.T @ np.diag([1/a**2, 1/b**2]) @ R
+
+        A_new = S_inv.T @ A @ S_inv
+
+        eigvals, eigvecs = np.linalg.eigh(A_new)
+
+        new_a = 1/np.sqrt(eigvals[0])
+        new_b = 1/np.sqrt(eigvals[1])
+
+        new_theta = np.arctan2(eigvecs[1,0], eigvecs[0,0])
+
+        return new_a, new_b, new_theta
 
     def flat_panel(self, x, y, d, h, gamma=0):
         """
@@ -209,7 +226,7 @@ class FindPeaks:
 
         peak_dict = {}
 
-        Y, X = np.meshgrid(np.arange(im.shape[0]), 
+        Y, X = np.meshgrid(np.arange(im.shape[0]),
                            np.arange(im.shape[1]),
                            indexing='ij')
 
@@ -230,12 +247,12 @@ class FindPeaks:
                   x_val, y_val,
                   roi_pixels*0.25, roi_pixels*0.25, 0)
 
-            xmin = (z.min(), 0, 
+            xmin = (z.min(), 0,
                     x_val-roi_pixels*0.5, y_val-roi_pixels*0.5,
                     1, 1, -np.pi/2)
 
-            xmax = (2*z.max(), z.mean(), 
-                    x_val+roi_pixels*0.5, y_val+roi_pixels*0.5, 
+            xmax = (2*z.max(), z.mean(),
+                    x_val+roi_pixels*0.5, y_val+roi_pixels*0.5,
                     roi_pixels, roi_pixels, np.pi/2)
 
             bounds = np.array([xmin, xmax])
@@ -254,18 +271,7 @@ class FindPeaks:
 
                 A, B, mu_x, mu_y, sigma_1, sigma_2, theta = sol.x
 
-                params = self.transform_ellipsoid(sigma_1, sigma_2, theta)
-
-                peak_dict[(x_val, y_val)] = mu_x, mu_y, *params
-
-                # cov = np.linalg.inv(inv_cov)
-
-                # chi2dof = np.sum(sol.fun**2)/(sol.fun.size-sol.x.size)
-                # cov *= chi2dof
-
-                # stderr = np.sqrt(np.diag(cov))
-
-                # A, B, mu_x, mu_y, sigma_1, sigma_2, theta = stderr
+                peak_dict[(x_val, y_val)] = mu_x, mu_y, sigma_1, sigma_2, theta
 
         return peak_dict
 
@@ -279,12 +285,12 @@ class FindPeaks:
     #         Sx.append(sigma_x)
     #         Sy.append(sigma_y)
     #         R.append(rho)
-        
+
     #     kernel = RBF(length_scale=1.0)
     #     gpx = GaussianProcessRegressor(kernel=kernel).fit(X, Sx)
     #     gpy = GaussianProcessRegressor(kernel=kernel).fit(X, Sy)
     #     gpr = GaussianProcessRegressor(kernel=kernel).fit(X, R)
-        
+
     #     # Predict at a new point
     #     new_point = [[x_new, y_new]]
     #     sx_pred, sy_std = gpx.predict(new_point, return_std=True)
