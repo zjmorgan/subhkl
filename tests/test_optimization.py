@@ -75,7 +75,7 @@ def test_sucrose():
 
 
 def test_lysozyme():
-    #FIXME Commit the real lycozyme file so we can do this test in CI
+    # FIXME Commit the real lycozyme file so we can do this test in CI
     pass
     filename = os.path.join(directory, "5vnq_mandi.h5")
 
