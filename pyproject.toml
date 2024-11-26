@@ -4,7 +4,11 @@ description = "Solving crystal orientation from Laue images"
 dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
-    "mantidworkbench >= 6.7.20230830",
+    "h5py>=3.11.0,<3.12",
+    "matplotlib>=3.8.4,<3.9.0",
+    "pyswarms",
+    "scikit-image>=0.23.2,<0.24.0",
+    "typer>=0.12.3"
 ]
 license = { text = "GPL3.0" }
 
@@ -17,17 +21,25 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[project.optional-dependencies]
+lint = ["ruff>=0.2.0"]
+test = [
+  "pytest>=8.0.2,<8.1.0",
+  "pytest-cov>=4.1.0,<4.2.0",
+]
+
 [tool.versioningit.vcs]
 method = "git"
+match = ["v*"]
 default-tag = "0.0.1"
 
 [tool.versioningit.next-version]
 method = "minor"
 
 [tool.versioningit.format]
-distance = "{next_version}.dev{distance}"
-dirty = "{version}+d{build_date:%Y%m%d}"
-distance-dirty = "{next_version}.dev{distance}+d{build_date:%Y%m%d%H%M}"
+distance = "{next_version}"
+dirty = "{next_version}"
+distance-dirty = "{next_version}"
 
 [tool.versioningit.write]
 file = "src/subhkl/_version.py"
@@ -48,3 +60,6 @@ disable = ["too-many-locals",
            "duplicate-code"
 ]
 extension-pkg-whitelist = ["PyQt5"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]

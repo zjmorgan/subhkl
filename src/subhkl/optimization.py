@@ -1,5 +1,4 @@
 import os
-os.environ['OMP_NUM_THREADS'] = '1'
 
 import h5py
 
@@ -10,6 +9,9 @@ import scipy.spatial
 import scipy.interpolate
 
 import pyswarms
+
+os.environ["OMP_NUM_THREADS"] = "1"
+
 
 class FindUB:
     """
@@ -37,11 +39,11 @@ class FindUB:
 
         if filename is not None:
             self.load_peaks(filename)
-            
-        t = np.linspace(0, np.pi, 1024)
-        cdf = (t-np.sin(t))/np.pi
 
-        self._angle = scipy.interpolate.interp1d(cdf, t, kind='linear')
+        t = np.linspace(0, np.pi, 1024)
+        cdf = (t - np.sin(t)) / np.pi
+
+        self._angle = scipy.interpolate.interp1d(cdf, t, kind="linear")
 
     def load_peaks(self, filename):
         """
@@ -54,19 +56,18 @@ class FindUB:
 
         """
 
-        with h5py.File(os.path.abspath(filename), 'r') as f:
-
-            self.a = f['sample/a'][()]
-            self.b = f['sample/b'][()]
-            self.c = f['sample/c'][()]
-            self.alpha = f['sample/alpha'][()]
-            self.beta = f['sample/beta'][()]
-            self.gamma = f['sample/gamma'][()]
-            self.wavelength = f['instrument/wavelength'][()]
-            self.R = f['goniometer/R'][()]
-            self.two_theta = f['peaks/scattering'][()]
-            self.az_phi = f['peaks/azimuthal'][()]
-            self.centering = f['sample/centering'][()].decode('utf-8')
+        with h5py.File(os.path.abspath(filename), "r") as f:
+            self.a = f["sample/a"][()]
+            self.b = f["sample/b"][()]
+            self.c = f["sample/c"][()]
+            self.alpha = f["sample/alpha"][()]
+            self.beta = f["sample/beta"][()]
+            self.gamma = f["sample/gamma"][()]
+            self.wavelength = f["instrument/wavelength"][()]
+            self.R = f["goniometer/R"][()]
+            self.two_theta = f["peaks/scattering"][()]
+            self.az_phi = f["peaks/azimuthal"][()]
+            self.centering = f["sample/centering"][()].decode("utf-8")
 
     def uncertainty_line_segements(self):
         """
@@ -88,12 +89,12 @@ class FindUB:
         tt = np.deg2rad(self.two_theta)
         az = np.deg2rad(self.az_phi)
 
-        kf_ki_dir = np.array([np.sin(tt)*np.cos(az),
-                              np.sin(tt)*np.sin(az),
-                              np.cos(tt)-1])
+        kf_ki_dir = np.array(
+            [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
+        )
 
-        d_min = 0.5*wl_min/np.sin(0.5*tt)
-        d_max = 0.5*wl_max/np.sin(0.5*tt)
+        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
+        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
 
         return kf_ki_dir, d_min, d_max
 
@@ -115,13 +116,11 @@ class FindUB:
         g11 = self.a**2
         g22 = self.b**2
         g33 = self.c**2
-        g12 = self.a*self.b*np.cos(gamma)
-        g13 = self.c*self.a*np.cos(beta)
-        g23 = self.b*self.c*np.cos(alpha)
+        g12 = self.a * self.b * np.cos(gamma)
+        g13 = self.c * self.a * np.cos(beta)
+        g23 = self.b * self.c * np.cos(alpha)
 
-        G = np.array([[g11, g12, g13],
-                      [g12, g22, g23],
-                      [g13, g23, g33]])
+        G = np.array([[g11, g12, g13], [g12, g22, g23], [g13, g23, g33]])
 
         return G
 
@@ -169,15 +168,15 @@ class FindUB:
 
         """
 
-        theta = np.arccos(2*u0-1)
-        phi = 2*np.pi*u1
-        w = np.array([np.sin(theta)*np.cos(phi),
-                      np.sin(theta)*np.sin(phi),
-                      np.cos(theta)])
+        theta = np.arccos(2 * u0 - 1)
+        phi = 2 * np.pi * u1
+        w = np.array(
+            [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+        )
 
         ax = self._angle(u2)
 
-        return scipy.spatial.transform.Rotation.from_rotvec(ax*w).as_matrix()
+        return scipy.spatial.transform.Rotation.from_rotvec(ax * w).as_matrix()
 
     def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
         """
@@ -210,57 +209,55 @@ class FindUB:
 
         UB_inv = np.linalg.inv(UB)
 
-        hkl_lamda = np.einsum('ij,jk', UB_inv, kf_ki_dir)
+        hkl_lamda = np.einsum("ij,jk", UB_inv, kf_ki_dir)
 
         lamda = np.linspace(wl_min, wl_max, 100)
 
-        hkl = hkl_lamda[:,:,np.newaxis]/lamda
+        hkl = hkl_lamda[:, :, np.newaxis] / lamda
 
-        s = np.einsum('ij,j...->i...', UB, hkl)
+        s = np.einsum("ij,j...->i...", UB, hkl)
         s = np.linalg.norm(s, axis=0)
 
         int_hkl = np.round(hkl)
-        diff_hkl = hkl-int_hkl
+        diff_hkl = hkl - int_hkl
 
-        dist = np.einsum('ij,j...->i...', UB, diff_hkl)
+        dist = np.einsum("ij,j...->i...", UB, diff_hkl)
         dist = np.linalg.norm(dist, axis=0)
 
-        dist[(s.T > 1/d_min).T] = np.inf
-        dist[(s.T < 1/d_max).T] = np.inf
+        dist[(s.T > 1 / d_min).T] = np.inf
+        dist[(s.T < 1 / d_max).T] = np.inf
 
-        h, k, l = int_hkl
+        h, k, l = int_hkl  # noqa: E741
 
         valid = np.full_like(l, True, dtype=bool)
 
-        if self.centering == 'A':
+        if self.centering == "A":
             valid = (k + l) % 2 == 0
-        elif self.centering == 'B':
+        elif self.centering == "B":
             valid = (h + l) % 2 == 0
-        elif self.centering == 'C':
+        elif self.centering == "C":
             valid = (h + k) % 2 == 0
-        elif self.centering == 'I':
+        elif self.centering == "I":
             valid = (h + k + l) % 2 == 0
-        elif self.centering == 'F':
-            valid = ((h + k) % 2 == 0) \
-                  & ((l + h) % 2 == 0) \
-                  & ((k + l) % 2 == 0)
-        elif self.centering == 'R_obv':
+        elif self.centering == "F":
+            valid = ((h + k) % 2 == 0) & ((l + h) % 2 == 0) & ((k + l) % 2 == 0)
+        elif self.centering == "R_obv":
             valid = (-h + k + l) % 3 == 0
-        elif self.centering == 'R_obv':
+        elif self.centering == "R_obv":
             valid = (h - k + l) % 3 == 0
 
         dist[~valid] = np.inf
 
         ind = np.argmin(dist, axis=1)
 
-        hkl = hkl[:,np.arange(hkl_lamda.shape[1]),ind]
+        hkl = hkl[:, np.arange(hkl_lamda.shape[1]), ind]
         lamda = lamda[ind]
 
         int_hkl = np.round(hkl)
-        diff_hkl = hkl-int_hkl
+        diff_hkl = hkl - int_hkl
 
         mask = (np.abs(diff_hkl) < tol).all(axis=0)
-        int_hkl[:,~mask] = 0
+        int_hkl[:, ~mask] = 0
 
         num = np.sum(mask)
 
@@ -313,7 +310,10 @@ class FindUB:
         Us = [self.orientation_U(*param) for param in params]
         UBs = [self.UB_matrix(U, B) for U in Us]
 
-        return [-self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0]/len(d_min)*100 for UB in UBs]
+        return [
+            -self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0] / len(d_min) * 100
+            for UB in UBs
+        ]
 
     def minimize(self, n_proc=-1):
         """
@@ -335,22 +335,20 @@ class FindUB:
 
         """
 
-        bounds = ([0,0,0], [1,1,1])
+        bounds = ([0, 0, 0], [1, 1, 1])
+        options = {"c1": 0.5, "c2": 0.5, "w": 0.5}
 
-        options = {'c1': 0.5, 'c2': 0.5, 'w': 0.5}
+        optimizer = pyswarms.single.GlobalBestPSO(
+            n_particles=3000, dimensions=3, options=options, bounds=bounds
+        )
 
-        optimizer = pyswarms.single.GlobalBestPSO(n_particles=30000,
-                                                  dimensions=3,
-                                                  options=options,
-                                                  bounds=bounds)
-
-        n_ind, self.x = optimizer.optimize(self.objective,
-                                           n_processes=n_proc,
-                                           iters=100)
+        n_ind, self.x = optimizer.optimize(
+            self.objective, n_processes=n_proc, iters=100
+        )
 
         print(-n_ind)
 
-        # bounds = [slice(0, 1, 1/180), 
+        # bounds = [slice(0, 1, 1/180),
         #           slice(0, 1, 1/180),
         #           slice(0, 0.5, 1/180)]
 
