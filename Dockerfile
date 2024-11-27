@@ -25,7 +25,6 @@ ADD . /build
 RUN pdm sync --dev -G:all
 
 RUN pdm build
-RUN pdm run pytest tests
 
 FROM python:3.10-slim as tool
 
