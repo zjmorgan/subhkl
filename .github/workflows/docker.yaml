@@ -5,8 +5,7 @@ on:
     branches: ['main']
 
 env:
-  VERSION: 0.0.1
-  IMAGE_NAME: zjmorgan/subhkl:$VERSION
+  IMAGE_NAME: zjmorgan/subhkl:0.0.1
 
 jobs:
   build-and-push-image:
