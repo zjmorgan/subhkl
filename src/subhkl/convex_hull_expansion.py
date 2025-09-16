@@ -405,7 +405,7 @@ class PeakIntegrator:
         return global_max_idx
 
     @staticmethod
-    def _hull_mask(hull):
+    def _hull_mask(hull, shape):
         """
         Generate an OffsetMask object with a mask that is True inside
         the given convex hull and False outside
@@ -414,6 +414,8 @@ class PeakIntegrator:
         ----------
         hull:
             ConvexHull object representing the 3D convex hull.
+        shape:
+            tuple (H, W) giving the shape of the image
 
         Return
         ------
@@ -421,8 +423,10 @@ class PeakIntegrator:
             OffsetMask describing a mask of the convex hull
         """
         hull_vertices = hull.points[hull.vertices]
-        min_vert = np.min(hull_vertices, axis=0)
+        min_vert = np.maximum(np.min(hull_vertices, axis=0), 0)
         max_vert = np.max(hull_vertices, axis=0)
+        max_vert[0] = min(max_vert[0], shape[0] - 1)
+        max_vert[1] = min(max_vert[1], shape[1] - 1)
         w_m = int(max_vert[0] - min_vert[0] + 1)
         h_m = int(max_vert[1] - min_vert[1] + 1)
 
@@ -481,7 +485,7 @@ class PeakIntegrator:
             (N, 2) array of coordinate vectors for points belonging to
             the core of the peak
         im_shape:
-            [H, W] integers giving the shape of the masks
+            [H, W] integers giving the shape of the image
 
         Return
         ------
@@ -506,9 +510,9 @@ class PeakIntegrator:
         outer_hull = self._expand_convex_hull(core_hull, outer_scale)
 
         # Generate masks
-        peak_mask = self._hull_mask(peak_hull)
-        inner_mask = self._hull_mask(inner_hull)
-        outer_mask = self._hull_mask(outer_hull)
+        peak_mask = self._hull_mask(peak_hull, im_shape)
+        inner_mask = self._hull_mask(inner_hull, im_shape)
+        outer_mask = self._hull_mask(outer_hull, im_shape)
 
         # Remove inner mask pixels to get background pixels (for now
         # ignoring the possibility of containment in a *different* peak's

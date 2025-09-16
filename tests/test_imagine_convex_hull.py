@@ -45,7 +45,7 @@ r = 0.2
 p = 2 * np.pi * r * 180 / 180
 h = 0.45
 
-i, j = peaks.harvest_peaks(min_pix=15, min_rel_intens=0.05, normalize=True)
+i, j = peaks.harvest_peaks(min_pix=15, min_rel_intens=0.02, normalize=True)
 x, y = peaks.scale_coordinates(i, j, p / nx, h / ny)
 
 extent = (-p / 2, p / 2, -h / 2, h / 2)
