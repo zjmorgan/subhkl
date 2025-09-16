@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 
 import skimage.feature
+import scipy.ndimage
 
 
 class FindPeaks:
@@ -23,7 +24,7 @@ class FindPeaks:
         self.im = np.array(Image.open(filename))
         self.peak_integrator = peak_integrator
 
-    def harvest_peaks(self, min_pix=50, min_rel_intens=0.5):
+    def harvest_peaks(self, min_pix=50, min_rel_intens=0.5, normalize=False):
         """
         Locate peak positions in pixel coordinates.
 
@@ -33,6 +34,10 @@ class FindPeaks:
             Minimum pixel distance between peaks. The default is 50.
         min_rel_intens: float, optional
             Minimum intensity relative to maximum value. The default is 0.5
+        normalize : bool, optional
+            Whether to normalize the image before local maximum detection. The
+            default is False. Using normalization increases the number of weak
+            peak detections.
 
         Returns
         -------
@@ -43,8 +48,15 @@ class FindPeaks:
 
         """
 
+        if normalize:
+            blur = scipy.ndimage.gaussian_filter(self.im, 4)
+            div = scipy.ndimage.gaussian_filter(self.im, 60)
+            processed = blur / div
+        else:
+            processed = self.im
+
         coords = skimage.feature.peak_local_max(
-            self.im, min_distance=min_pix, threshold_rel=min_rel_intens
+            processed, min_distance=min_pix, threshold_rel=min_rel_intens
         )
 
         return coords[:, 1], coords[:, 0]
