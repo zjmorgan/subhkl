@@ -4,7 +4,7 @@ import typer
 import uuid
 
 from subhkl.detector import Detector, DetectorShape
-from subhkl.integration import FindPeaks
+from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.utils import scale_coordinates
 
@@ -51,7 +51,7 @@ def finder(
 ) -> None:
     # Create peak finder from tiff file
     print(f"Creating peaks from {tiff_filename}")
-    peaks = FindPeaks(tiff_filename)
+    peaks = Peaks(tiff_filename)
 
     # Setup optional arguments
     kwargs = {}

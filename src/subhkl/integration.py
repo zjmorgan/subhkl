@@ -5,7 +5,7 @@ from PIL import Image
 import skimage.feature
 
 
-class FindPeaks:
+class Peaks:
     def __init__(self, filename):
         """
         Find peaks from an image.

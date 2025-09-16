@@ -3,7 +3,7 @@
 # import numpy as np
 # import matplotlib.pyplot as plt
 
-# from subhkl.integration import FindPeaks
+# from subhkl.integration import Peaks
 
 
 def test_mesolite():
@@ -20,7 +20,7 @@ def test_mesolite():
     #
     # for file in files:
     #
-    #     pks = FindPeaks(file)
+    #     pks = Peaks(file)
     #
     #     file = os.path.basename(file)
     #

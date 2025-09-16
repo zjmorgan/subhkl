@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from subhkl.detector import Detector
-from subhkl.integration import FindPeaks
+from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
 directory = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +21,7 @@ def test_mesolite():
     im_name = "meso_2_15min_2-0_4-5_050.tif"
     filename = os.path.join(directory, im_name)
 
-    pks = FindPeaks(filename)
+    pks = Peaks(filename)
     xp, yp = pks.harvest_peaks(min_pix=30, min_rel_intens=0.05)
 
     ny, nx = pks.im.shape
