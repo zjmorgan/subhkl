@@ -88,7 +88,7 @@ class FindPeaks:
         peak_centers = np.array([xp, yp]).T
         peak_data, peak_hulls = self.peak_integrator.integrate_peaks(
             0,  # Don't care about bank ID
-            self.im,
+            self.im.T,
             peak_centers,
             return_hulls=True
         )

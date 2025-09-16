@@ -117,7 +117,7 @@ class OffsetMask:
             slice(result_min[0] - other.offset[0], result_max[0] - other.offset[0]),
             slice(result_min[1] - other.offset[1], result_max[1] - other.offset[1])
         )
-        result_mask = self.mask[*my_i] & other.mask[*other_i]
+        result_mask = self.mask[my_i[0], my_i[1]] & other.mask[other_i[0], other_i[1]]
 
         return OffsetMask(result_mask, result_min)
 
@@ -139,14 +139,14 @@ class OffsetMask:
             slice(my_offset_rel[0], my_offset_rel[0] + self.mask.shape[0]),
             slice(my_offset_rel[1], my_offset_rel[1] + self.mask.shape[1])
         )
-        result_mask[*my_i] = self.mask
+        result_mask[my_i[0], my_i[1]] = self.mask
 
         other_offset_rel = other.offset - result_min
         other_i = (
             slice(other_offset_rel[0], other_offset_rel[0] + other.mask.shape[0]),
             slice(other_offset_rel[1], other_offset_rel[1] + other.mask.shape[1])
         )
-        result_mask[*other_i] &= other.mask
+        result_mask[other_i[0], other_i[1]] &= other.mask
 
         return OffsetMask(result_mask, result_min)
 
@@ -183,7 +183,7 @@ class OffsetMask:
         result_mask = self.mask.copy()
 
         # and not other in the intersection
-        result_mask[*my_i] &= ~other.mask[*other_i]
+        result_mask[my_i[0], my_i[1]] &= ~other.mask[other_i[0], other_i[1]]
 
         return OffsetMask(result_mask, self.offset)
 
@@ -614,7 +614,8 @@ class PeakIntegrator:
         any_inner_mask = np.zeros_like(intensity, dtype=bool)
         for inner_mask in inner_masks:
             if inner_mask is not None:
-                any_inner_mask[*inner_mask.indices()] |= inner_mask.mask
+                indices = inner_mask.indices()
+                any_inner_mask[indices[0], indices[1]] |= inner_mask.mask
 
         # points not in *any* inner region (make this an OffsetMask so we can
         # use &= below)
@@ -662,8 +663,8 @@ class PeakIntegrator:
         bg_vol = len(bg_indices[0])  # number of pixels in background
         peak2bg = peak_vol / bg_vol
 
-        total_peak_intensity = intensity[*peak_indices].sum()
-        total_bg_intensity = intensity[*bg_indices].sum()
+        total_peak_intensity = intensity[peak_indices[0], peak_indices[1]].sum()
+        total_bg_intensity = intensity[bg_indices[0], bg_indices[1]].sum()
 
         peak_bg_intensity = peak2bg * total_bg_intensity
         peak_bg_variance = peak2bg ** 2 * total_bg_intensity
