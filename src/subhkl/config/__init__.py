@@ -1,5 +1,6 @@
-from .config import beamlines
+from .config import beamlines, reduction_settings
 
 __all__ = [
-    "beamlines"
+    "beamlines",
+    "reduction_settings",
 ]

@@ -1,3 +1,5 @@
+import os
+import typing
 import h5py
 import numpy as np
 import typer
@@ -42,75 +44,48 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
         f["peaks/lambda"] = lamda
 
 
+
 @app.command()
 def finder(
-    tiff_filename: str,
-    output_xy_csv_filename: str,
+    filename: str,
+    instrument: str,
+    output_filename: str = "output.h5",
     min_pixel_distance: float = -1,
     min_relative_intensities: float = -1,
-) -> None:
-    # Create peak finder from tiff file
-    print(f"Creating peaks from {tiff_filename}")
-    peaks = Peaks(tiff_filename)
+    wavelength_min: typing.Optional[float] = None,
+    wavelength_max: typing.Optional[float] = None,
+):
+    # Create peak finder from file + instrument
+    print(f"Creating peaks from {filename} for instrument {instrument}")
 
-    # Setup optional arguments
-    kwargs = {}
+    # Setup optional arguments for wavelength range
+    wavelength_kwargs = {}
+    if wavelength_min:
+        wavelength_kwargs["wavelength_min"] = wavelength_min
+    if wavelength_max:
+        wavelength_kwargs["wavelength_max"] = wavelength_max
+
+    peaks = Peaks(filename, instrument, **wavelength_kwargs)
+
+    # Setup optional arguments for peak finding
+    peak_kwargs = {}
     if min_pixel_distance > 0:
-        kwargs["min_pix"] = min_pixel_distance
+        peak_kwargs["min_pix"] = min_pixel_distance
     if min_relative_intensities > 0:
-        kwargs["min_rel_intensities"]
+        peak_kwargs["min_rel_intensities"] = min_relative_intensities
 
-    # Calculate the x,y of each peak in pixel space
-    xp, yp = peaks.harvest_peaks(**kwargs)
+    # Calculate the peaks in detector space
+    R, two_theta, az_phi, wavelengths = peaks.get_detector_peaks(**peak_kwargs)
 
-    # Output CSV-style filename
-    print(f"Printing {output_xy_csv_filename}")
-    np.savetxt(
-        output_xy_csv_filename,
-        np.column_stack((xp, yp)),
-        delimiter=",",
+    # Write out the output HDF5 peaks file
+    peaks.write_hdf5(
+        output_filename=output_filename,
+        rotations=R,
+        two_theta=two_theta,
+        phi=az_phi,
+        wavelengths=wavelengths,
     )
-
-
-@app.command()
-def preparer(
-    xy_csv_filename: str,
-    output_peaks_csv_filename: str,
-    detector_shape: DetectorShape,
-    detector_height: float,
-    detector_distance: float,
-    image_orientation: float = 0.0,
-    scale_x: float = 1.0,
-    scale_y: float = 1.0,
-    nx: int = 0,
-    ny: int = 0,
-) -> None:
-    # Read in X,Y in pixel coordinates
-    xp, yp = np.loadtxt(xy_csv_filename, delimiter=",", unpack=True)
-
-    # Scale pixel coordinates to real positions
-    # Default: no scaling
-    x, y = scale_coordinates(xp, yp, scale_x, scale_y, nx, ny)
-
-    # Create detector object based on shape, height, and distance
-    detector = Detector(
-        x,
-        y,
-        detector_distance,
-        detector_height,
-        image_orientation,
-        detector_shape,
-    )
-
-    # Compute scattering angles (in-plane and out-of-plane) for each peak
-    two_theta, az_phi = detector.detector_trajectories()
-
-    print(f"Printing {output_peaks_csv_filename}")
-    np.savetxt(
-        output_peaks_csv_filename,
-        np.column_stack((two_theta, az_phi)),
-        delimiter=",",
-    )
+    
 
 
 @app.command()

@@ -5,11 +5,9 @@ import numpy as np
 
 from subhkl.optimization import FindUB
 
-directory = os.path.dirname(os.path.abspath(__file__))
 
-
-def test_sucrose():
-    filename = os.path.join(directory, "sucrose_mandi.h5")
+def test_sucrose(test_data_dir):
+    filename = os.path.join(test_data_dir, "sucrose_mandi.h5")
 
     opt = FindUB(filename)
 
@@ -74,10 +72,10 @@ def test_sucrose():
     assert success
 
 
-def test_lysozyme():
+def test_lysozyme(test_data_dir):
     # FIXME Commit the real lycozyme file so we can do this test in CI
     pass
-    filename = os.path.join(directory, "5vnq_mandi.h5")
+    filename = os.path.join(test_data_dir, "5vnq_mandi.h5")
 
     opt = FindUB(filename)
 
@@ -142,5 +140,3 @@ def test_lysozyme():
         assert success
 
 
-test_sucrose()
-test_lysozyme()

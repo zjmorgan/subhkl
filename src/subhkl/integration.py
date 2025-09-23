@@ -1,5 +1,6 @@
 import os
 import re
+import typing
 
 import numpy as np
 import numpy.typing as npt
@@ -10,12 +11,18 @@ from PIL import Image
 import skimage.feature
 import scipy.optimize
 
-from subhkl.config import beamlines
+from subhkl.config import beamlines, reduction_settings
 
 
 class Peaks:
 
-    def __init__(self, filename: str, instrument: str) -> dict[npt.NDArray]:
+    def __init__(
+            self,
+            filename: str,
+            instrument: str,
+            wavelength_min: typing.Optional[float] = None,
+            wavelength_max: typing.Optional[float] = None,
+        ):
         """
         Find peaks from an image.
 
@@ -29,13 +36,38 @@ class Peaks:
         name, ext = os.path.splitext(filename)
 
         self.instrument = instrument
+        self.wavelength_min = None
+        self.wavelength_max = None
 
         if ext == ".h5":
             self.ims = self.load_nexus(filename)
+            #self.wavelength_min, self.wavelength_max = self.get_wavelength_from_nexus(filename)
+            self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
+
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
+            self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
 
-        return self.ims
+
+        # Override wavelength or define if TIFF
+        if wavelength_min:
+            self.wavelength_min = wavelength_min
+        if wavelength_max:
+            self.wavelength_min = wavelength_max
+
+
+    # TODO: implement for each instrument...
+    def get_wavelength_from_nexus(self, filename: str) -> float:
+        print("NOT YET IMPLEMENTED: returning None for wavelength...")
+        wavelength_min = None
+        wavelength_max = None
+        return wavelength_min, wavelength_max
+    
+    def get_wavelength_from_settings(self) -> list[float]:
+        settings = reduction_settings[self.instrument]
+        wavelength_min, wavelength_max = settings.get("Wavelength")
+        return wavelength_min, wavelength_max
+
 
     def load_nexus(self, filename: str) -> dict[npt.NDArray]:
         """
@@ -114,7 +146,7 @@ class Peaks:
 
         return coords[:, 0], coords[:, 1]
 
-    def scale_coordinates(self, bank: int, i: list[int], j: list[int]) -> npt.NDArrayInt:
+    def scale_coordinates(self, bank: int, i: list[int], j: list[int]) -> npt.NDArray:
         """
         Scale from pixel coordinates to real positions.
 
@@ -222,7 +254,8 @@ class Peaks:
         x, y, z: array, float
             Real-space coordinates
         """
-        detector = beamlines[self.instrument][bank]
+        bank_id = str(bank)
+        detector = beamlines[self.instrument][bank_id]
 
         m = detector["m"]
         n = detector["n"]
@@ -258,7 +291,7 @@ class Peaks:
 
         return (c + du + dv).T
 
-    def transform_to_detector(self, bank: int, X: float, Y: float, Z: float) -> npt.NDArrayInt:
+    def transform_to_detector(self, bank: int, X: float, Y: float, Z: float) -> npt.NDArray:
         """
         Return image (i,j) using bank number and real-space coordinates (x, y, z).
 
@@ -634,3 +667,69 @@ class Peaks:
                     peak_dict[(x_val, y_val)] = items
 
         return peak_dict
+
+    def get_detector_peaks(self, **kwargs: dict):
+
+        """
+        Get peaks in detector space (rotation, angles, and wavelength).
+
+        Parameters
+        ----------
+        kwargs : dict
+            Method harvest_peaks key-word args.
+
+        Returns
+        -------
+        R, two_theta, az_phi, lambda: array, float
+            Rotations, angles, and wavelength of each peak
+
+        """
+        if not self.ims:
+            raise Exception("ERROR: Must have images for Peaks first...")
+
+        # Define outputs
+        R: list[float] = []
+        two_theta: list[float] = []
+        az_phi: list[float] = []
+        lamda: list[float] = []
+
+        # Calculate angles (two theta and phi), rotation, and wavelength
+        for bank in sorted(self.ims.keys()):
+                i, j = self.harvest_peaks(bank, **kwargs)
+                tt, az = self.detector_trajectories(bank, i, j)
+                two_theta += tt.tolist()
+                az_phi += az.tolist()
+                R += [np.eye(3)] * len(tt)
+                lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
+
+        return R, two_theta, az_phi, lamda
+    
+    # Write out the output HDF5 peaks file
+    def write_hdf5(self,
+        output_filename: str,
+        rotations: list[float],
+        two_theta: list[float],
+        phi: list[float],
+        wavelengths: list[float],
+    ):
+        """
+        Write output HDF5 file for peaks in detector space.
+
+        Parameters
+        ----------
+
+        rotations: array, float
+            Rotation matrices of peaks.
+        two_theta: array, float
+            Two theta angles of peaks.
+        az_phi: array, float
+            Azimuthal phi angles of peaks.
+        wavelengths: array, float
+            Wavelength min and max of each peak.
+        """
+        # Write HDF5 input file for indexer
+        with File(output_filename, "w") as f:
+            f["wavelengths"] = wavelengths
+            f["rotations"] = rotations
+            f["two_theta"] = two_theta
+            f["azimuthal"] = phi

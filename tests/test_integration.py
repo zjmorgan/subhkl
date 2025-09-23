@@ -16,7 +16,7 @@ def test_mesolite():
     # Ignoring this test until we get a version of the mesolite input file constructed from the image files to test with
     pass
 
-    directory = "tests/"
+    directory = "tests/data"
 
     im_name = "meso_2_15min_2-0_4-5_050.tif"
     filename = os.path.join(directory, im_name)
@@ -147,6 +147,3 @@ def test_mesolite():
             break
 
     assert success
-
-
-test_mesolite()
