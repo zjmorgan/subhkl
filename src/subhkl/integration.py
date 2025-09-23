@@ -97,7 +97,11 @@ class FindPeaks:
         for (x, y, data, hulls) in zip(xp, yp, peak_data, peak_hulls):
             core_hull, peak_hull, inner_hull, outer_hull = hulls
             _, _, bg_density, peak_intensity, peak_bg_intensity, sigma = data
-            peak_dict[(x, y)] = peak_hull, peak_intensity, sigma
+            if peak_hull is not None:
+                new_center = np.mean(peak_hull.points[peak_hull.vertices], axis=0)
+            else:
+                new_center = None
+            peak_dict[(x, y)] = new_center, peak_hull, peak_intensity, sigma
 
         return peak_dict
 

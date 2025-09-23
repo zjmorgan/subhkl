@@ -73,7 +73,7 @@ ax.set_ylabel("$y$ [m]")
 
 peak_dict = peaks.fit_convex_hull(i, j)
 
-for (x, y), (peak_hull, peak_intensity, sigma) in peak_dict.items():
+for (x, y), (center, peak_hull, peak_intensity, sigma) in peak_dict.items():
     if show_candidates:
         ax.scatter(*peaks.scale_coordinates(x, y), c='blue', zorder=99, marker='1')
 
@@ -94,7 +94,6 @@ for (x, y), (peak_hull, peak_intensity, sigma) in peak_dict.items():
         )
 
     if show_intensity:
-        center = np.mean(peak_hull.points[peak_hull.vertices], axis=0)
         cx, cy = peaks.scale_coordinates(*center, p / nx, h / ny)
         ax.text(
             cx,

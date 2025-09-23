@@ -3,6 +3,7 @@ import numpy as np
 import typer
 import uuid
 
+from subhkl.convex_hull_expansion import PeakIntegrator, RegionGrower
 from subhkl.detector import Detector, DetectorShape
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
@@ -48,17 +49,18 @@ def finder(
     output_xy_csv_filename: str,
     min_pixel_distance: float = -1,
     min_relative_intensities: float = -1,
+    normalize: bool = False
 ) -> None:
     # Create peak finder from tiff file
     print(f"Creating peaks from {tiff_filename}")
     peaks = FindPeaks(tiff_filename)
 
     # Setup optional arguments
-    kwargs = {}
+    kwargs = {"normalize": normalize}
     if min_pixel_distance > 0:
         kwargs["min_pix"] = min_pixel_distance
     if min_relative_intensities > 0:
-        kwargs["min_rel_intensities"]
+        kwargs["min_rel_intens"] = min_relative_intensities
 
     # Calculate the x,y of each peak in pixel space
     xp, yp = peaks.harvest_peaks(**kwargs)
@@ -68,6 +70,69 @@ def finder(
     np.savetxt(
         output_xy_csv_filename,
         np.column_stack((xp, yp)),
+        delimiter=",",
+    )
+
+
+@app.command()
+def finder_convex_hull(
+    tiff_filename: str,
+    output_xy_csv_filename: str,
+    min_pixel_distance: float = -1,
+    min_relative_intensities: float = -1,
+    normalize: bool = False,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_max_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 30,
+    peak_pixel_outlier_threshold: float = 2.0
+):
+    # Create peak finder from tiff file
+    print(f"Creating peaks from {tiff_filename}")
+
+    # Make PeakIntegrator
+    peak_integrator = PeakIntegrator(
+        RegionGrower(
+            distance_threshold=region_growth_distance_threshold,
+            min_intensity=region_growth_minimum_intensity,
+            max_size=region_growth_max_pixel_radius
+        ),
+        box_size=peak_center_box_size,
+        smoothing_window_size=peak_smoothing_window_size,
+        min_peak_pixels=peak_minimum_pixels,
+        outlier_threshold=peak_pixel_outlier_threshold
+    )
+
+    peaks = FindPeaks(tiff_filename, peak_integrator=peak_integrator)
+
+    # Setup optional arguments
+    kwargs = {"normalize": normalize}
+    if min_pixel_distance > 0:
+        kwargs["min_pix"] = min_pixel_distance
+    if min_relative_intensities > 0:
+        kwargs["min_rel_intens"] = min_relative_intensities
+
+    # Calculate candidate x,y of each peak in pixel space
+    xp, yp = peaks.harvest_peaks(**kwargs)
+
+    # Fit convex hulls and extract corrected peak centers; discard bad peaks
+    peak_dict = peaks.fit_convex_hull(xp, yp)
+    xy_ch = np.stack([
+        center
+        for center, _, _, _ in peak_dict.values()
+        if center is not None
+    ])
+
+    # Convert to integer pixel coordinates to match output from finder
+    xy_p = np.round(xy_ch).astype(int)
+
+    # Output CSV-style filename
+    print(f"Printing {output_xy_csv_filename}")
+    np.savetxt(
+        output_xy_csv_filename,
+        xy_p,
         delimiter=",",
     )
 
