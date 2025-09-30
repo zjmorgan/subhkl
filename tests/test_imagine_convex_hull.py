@@ -10,7 +10,7 @@ from subhkl.convex_hull_expansion import RegionGrower, PeakIntegrator
 show_intensity = False
 
 # Whether to show candidate peak locations
-show_candidates = False
+show_candidates = True
 
 # Whether to zoom in on a particular patch of the plot
 zoom = False
@@ -19,16 +19,16 @@ zoom = False
 title = 'convex_hull_norm'
 
 # Configure input image here
-folder = "tests"
-file = os.path.join(folder, "meso_2_15min_2-0_4-5_050.tif")
+folder = "ndip_data_test/meso_feb"
+file = os.path.join(folder, "MESO_02-27_2-4-5_30min136.tif")
 
 directory = os.path.dirname(os.path.abspath(__file__))
 
 peak_integrator = PeakIntegrator(
-    RegionGrower(distance_threshold=1.5, min_intensity=4500, max_size=17),
+    RegionGrower(distance_threshold=1.5, min_intensity=2000, max_size=17),
     box_size=15,
     smoothing_window_size=5,
-    min_peak_pixels=30,
+    min_peak_pixels=50,
     outlier_threshold=2.0
 )
 peaks = FindPeaks(file, peak_integrator=peak_integrator)
@@ -45,7 +45,7 @@ r = 0.2
 p = 2 * np.pi * r * 180 / 180
 h = 0.45
 
-i, j = peaks.harvest_peaks(min_pix=15, min_rel_intens=0.02, normalize=True)
+i, j = peaks.harvest_peaks(min_pix=15, min_rel_intens=0.04, normalize=True)
 x, y = peaks.scale_coordinates(i, j, p / nx, h / ny)
 
 extent = (-p / 2, p / 2, -h / 2, h / 2)
@@ -75,7 +75,7 @@ peak_dict = peaks.fit_convex_hull(i, j)
 
 for (x, y), (center, peak_hull, peak_intensity, sigma) in peak_dict.items():
     if show_candidates:
-        ax.scatter(*peaks.scale_coordinates(x, y), c='blue', zorder=99, marker='1')
+        ax.scatter(*peaks.scale_coordinates(x, y, p / nx, h / ny), c='blue', zorder=99, marker='1')
 
     if peak_hull is None:
         continue

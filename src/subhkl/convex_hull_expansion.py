@@ -726,7 +726,7 @@ class PeakIntegrator:
 
         # Use masks to compute intensity statistics
         for i_peak in range(len(peak_centers)):
-            if is_peak[i_peak]:
+            if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()) > 0:
                 stats = self._calculate_statistics(
                     intensity,
                     peak_masks[i_peak],

@@ -78,7 +78,7 @@ class FindPeaks:
         peak_dict : dictionary
             Refined peak geometry, peak intensities, and uncertainties.
             Dictionary keys are (x, y) pixel coordinates of corresponding
-            preliminary peak. Values are (peak_hull, peak_intensity, sigma),
+            preliminary peak. Values are (centroid, peak_hull, peak_intensity, sigma),
             where peak_hull is a ConvexHull describing the peak geometry.
 
         """
