@@ -4,7 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from subhkl.integration import FindPeaks
-from subhkl.convex_hull_expansion import RegionGrower, PeakIntegrator
+from subhkl.convex_hull.peak_integrator import PeakIntegrator
+from subhkl.convex_hull.region_grower import RegionGrower
 
 # Whether to add intensity labels to detections
 show_intensity = False

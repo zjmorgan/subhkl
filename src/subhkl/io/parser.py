@@ -3,7 +3,8 @@ import numpy as np
 import typer
 import uuid
 
-from subhkl.convex_hull_expansion import PeakIntegrator, RegionGrower
+from subhkl.convex_hull.peak_integrator import PeakIntegrator
+from subhkl.convex_hull.region_grower import RegionGrower
 from subhkl.detector import Detector, DetectorShape
 from subhkl.integration import FindPeaks
 from subhkl.optimization import FindUB
