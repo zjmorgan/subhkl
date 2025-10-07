@@ -1,14 +1,11 @@
-import os
 import typing
 import h5py
 import numpy as np
 import typer
 import uuid
 
-from subhkl.detector import Detector, DetectorShape
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
-from subhkl.utils import scale_coordinates
 
 app = typer.Typer()
 
@@ -42,7 +39,6 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
-
 
 
 @app.command()
@@ -85,7 +81,6 @@ def finder(
         phi=az_phi,
         wavelengths=wavelengths,
     )
-    
 
 
 @app.command()

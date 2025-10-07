@@ -21,10 +21,10 @@ def test_mesolite():
     im_name = "meso_2_15min_2-0_4-5_050.tif"
     filename = os.path.join(directory, im_name)
 
-    pks = Peaks(filename)
-    xp, yp = pks.harvest_peaks(min_pix=30, min_rel_intens=0.05)
+    pks = Peaks(filename, "MANDI")
+    xp, yp = pks.harvest_peaks(0, min_pix=30, min_rel_intens=0.05)
 
-    ny, nx = pks.im.shape
+    ny, nx = pks.ims[0].shape
 
     r = 0.2
     p = 2 * np.pi * r * 180 / 180
@@ -37,12 +37,12 @@ def test_mesolite():
 
     extent = [-p / 2, p / 2, -h / 2, h / 2]
 
-    ax[0].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
+    ax[0].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
 
     ax[0].minorticks_on()
     ax[0].set_aspect(1)
 
-    ax[1].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
+    ax[1].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
 
     ax[1].scatter(x, y, edgecolor="r", facecolor="none")
     ax[1].minorticks_on()

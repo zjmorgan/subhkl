@@ -15,14 +15,13 @@ from subhkl.config import beamlines, reduction_settings
 
 
 class Peaks:
-
     def __init__(
-            self,
-            filename: str,
-            instrument: str,
-            wavelength_min: typing.Optional[float] = None,
-            wavelength_max: typing.Optional[float] = None,
-        ):
+        self,
+        filename: str,
+        instrument: str,
+        wavelength_min: typing.Optional[float] = None,
+        wavelength_max: typing.Optional[float] = None,
+    ):
         """
         Find peaks from an image.
 
@@ -41,13 +40,16 @@ class Peaks:
 
         if ext == ".h5":
             self.ims = self.load_nexus(filename)
-            #self.wavelength_min, self.wavelength_max = self.get_wavelength_from_nexus(filename)
-            self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
+            # self.wavelength_min, self.wavelength_max = self.get_wavelength_from_nexus(filename)
+            self.wavelength_min, self.wavelength_max = (
+                self.get_wavelength_from_settings()
+            )
 
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
-            self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
-
+            self.wavelength_min, self.wavelength_max = (
+                self.get_wavelength_from_settings()
+            )
 
         # Override wavelength or define if TIFF
         if wavelength_min:
@@ -55,19 +57,17 @@ class Peaks:
         if wavelength_max:
             self.wavelength_min = wavelength_max
 
-
     # TODO: implement for each instrument...
     def get_wavelength_from_nexus(self, filename: str) -> float:
         print("NOT YET IMPLEMENTED: returning None for wavelength...")
         wavelength_min = None
         wavelength_max = None
         return wavelength_min, wavelength_max
-    
+
     def get_wavelength_from_settings(self) -> list[float]:
         settings = reduction_settings[self.instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
-
 
     def load_nexus(self, filename: str) -> dict[npt.NDArray]:
         """
@@ -94,7 +94,6 @@ class Peaks:
             banks = [key for key in keys if re.search(r"bank\d", key)]
 
             for bank in banks:
-
                 key = "/entry/" + bank + "/event_id"
 
                 b = int(bank.split("bank")[1].split("_")[0])
@@ -104,7 +103,6 @@ class Peaks:
                 det = detectors.get(b)
 
                 if det is not None:
-
                     m, n, offset = det["m"], det["n"], det["offset"]
 
                     bc = np.bincount(array - offset, minlength=m * n)
@@ -113,7 +111,9 @@ class Peaks:
 
         return ims
 
-    def harvest_peaks(self, bank, max_peaks=200, min_pix=50, min_rel_intens=0.5) -> list[npt.NDArray]:
+    def harvest_peaks(
+        self, bank, max_peaks=200, min_pix=50, min_rel_intens=0.5
+    ) -> list[npt.NDArray]:
         """
         Locate peak positions in pixel coordinates.
 
@@ -141,7 +141,7 @@ class Peaks:
             num_peaks=max_peaks,
             min_distance=min_pix,
             threshold_rel=min_rel_intens,
-            exclude_border=min_pix*3,
+            exclude_border=min_pix * 3,
         )
 
         return coords[:, 0], coords[:, 1]
@@ -195,9 +195,7 @@ class Peaks:
             Image pixel size.
 
         """
-        R = np.array(
-            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-        )
+        R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
 
         if np.isclose(a, 0) or np.isclose(b, 0):
             return 0, 0, 0
@@ -238,7 +236,9 @@ class Peaks:
 
         return width, height
 
-    def transform_from_detector(self, bank: int, i: list[int], j: list[int]) -> npt.NDArray:
+    def transform_from_detector(
+        self, bank: int, i: list[int], j: list[int]
+    ) -> npt.NDArray:
         """
         Return real-space coordinates from detector using bank and image (i,j).
 
@@ -272,13 +272,11 @@ class Peaks:
         dv = np.einsum("n,d->nd", v, vhat)
 
         if detector["panel"] == "flat":
-
             uhat = np.array(detector["uhat"])
 
             du = np.einsum("n,d->nd", u, uhat)
 
         else:
-
             radius = detector["radius"]
             rhat = np.array(detector["rhat"])
 
@@ -291,7 +289,9 @@ class Peaks:
 
         return (c + du + dv).T
 
-    def transform_to_detector(self, bank: int, X: float, Y: float, Z: float) -> npt.NDArray:
+    def transform_to_detector(
+        self, bank: int, X: float, Y: float, Z: float
+    ) -> npt.NDArray:
         """
         Return image (i,j) using bank number and real-space coordinates (x, y, z).
 
@@ -326,22 +326,20 @@ class Peaks:
         j = np.clip(np.dot(p.T - c, vhat) / dh, 0, n)
 
         if detector["panel"] == "flat":
-
             uhat = np.array(detector["uhat"])
 
             i = np.clip(np.dot(p.T - c, uhat) / dw, 0, m)
 
         else:
-
             radius = detector["radius"]
             rhat = np.array(detector["rhat"])
 
-            d = p.T - c - (np.dot(p.T - c, vhat)[:,np.newaxis] * vhat)
+            d = p.T - c - (np.dot(p.T - c, vhat)[:, np.newaxis] * vhat)
 
             what = np.cross(vhat, rhat)
 
-            dt = 2*np.arctan(-np.dot(d, rhat) / np.dot(d, what))
-            dt = np.mod(dt, 2*np.pi)
+            dt = 2 * np.arctan(-np.dot(d, rhat) / np.dot(d, what))
+            dt = np.mod(dt, 2 * np.pi)
 
             i = np.clip(dt * (radius / dw), 0, m)
 
@@ -376,7 +374,6 @@ class Peaks:
         vhat = np.array(detector["vhat"])
 
         if detector["panel"] == "flat":
-
             uhat = np.array(detector["uhat"])
             norm = np.cross(uhat, vhat)
 
@@ -384,14 +381,15 @@ class Peaks:
             t = np.dot(c, norm) / d
 
         else:
-
             radius = detector["radius"]
 
             d = np.einsum("i,in->n", vhat, [x, y, z])
 
-            norm = np.sqrt((x-d*vhat[0])**2 + (y-d*vhat[1])**2 + (z-d*vhat[2])**2)
+            norm = np.sqrt(
+                (x - d * vhat[0]) ** 2 + (y - d * vhat[1]) ** 2 + (z - d * vhat[2]) ** 2
+            )
 
-            t = radius/norm
+            t = radius / norm
 
         X, Y, Z = t * x, t * y, t * z
 
@@ -401,7 +399,7 @@ class Peaks:
 
         return mask, i, j
 
-    def detector_trajectories(self, bank: int, x: float, y:float) -> npt.NDArray:
+    def detector_trajectories(self, bank: int, x: float, y: float) -> npt.NDArray:
         """
         Calculate detector trajectories.
 
@@ -449,20 +447,12 @@ class Peaks:
 
         """
 
-        a = 0.5 * (
-            np.cos(theta) ** 2 / sigma_1**2 + np.sin(theta) ** 2 / sigma_2**2
-        )
-        b = 0.5 * (
-            np.sin(theta) ** 2 / sigma_1**2 + np.cos(theta) ** 2 / sigma_2**2
-        )
+        a = 0.5 * (np.cos(theta) ** 2 / sigma_1**2 + np.sin(theta) ** 2 / sigma_2**2)
+        b = 0.5 * (np.sin(theta) ** 2 / sigma_1**2 + np.cos(theta) ** 2 / sigma_2**2)
         c = 0.5 * (1 / sigma_1**2 - 1 / sigma_2**2) * np.sin(2 * theta)
 
         shape = np.exp(
-            -(
-                a * (x - mu_x) ** 2
-                + b * (y - mu_y) ** 2
-                + c * (x - mu_x) * (y - mu_y)
-            )
+            -(a * (x - mu_x) ** 2 + b * (y - mu_y) ** 2 + c * (x - mu_x) * (y - mu_y))
         )
 
         return A * shape + B
@@ -512,16 +502,12 @@ class Peaks:
 
         sigma_x = np.hypot(sigma_1 * np.cos(theta), sigma_2 * np.sin(theta))
         sigma_y = np.hypot(sigma_1 * np.sin(theta), sigma_2 * np.cos(theta))
-        rho = (
-            (sigma_1**2 - sigma_2**2)
-            * np.sin(2 * theta)
-            / (2 * sigma_x * sigma_y)
-        )
+        rho = (sigma_1**2 - sigma_2**2) * np.sin(2 * theta) / (2 * sigma_x * sigma_y)
 
         return sigma_x, sigma_y, rho
 
     def intensity(
-        self, 
+        self,
         A: float,
         B: float,
         sigma1: float,
@@ -538,12 +524,12 @@ class Peaks:
         B : float
             Input for shift factor (A * x + B)
         sigma1: float
-            Sigma 1 for intensity calculation. 
+            Sigma 1 for intensity calculation.
         sigma2: float
-            Sigma 1 for intensity calculation. 
+            Sigma 1 for intensity calculation.
         cov_matrix: array, float
             Covariance matrix
-            
+
         Returns
         -------
         I, sigma: array, float
@@ -551,18 +537,20 @@ class Peaks:
 
         """
 
-        I = A * 2 * np.pi * sigma1 * sigma2 - B
+        quantity_I = A * 2 * np.pi * sigma1 * sigma2 - B
 
-        dI = np.array([
-            2 * np.pi * sigma1 * sigma2,
-            -1,
-            2 * np.pi * A * sigma2,
-            2 * np.pi * A * sigma1,
-        ])
+        dI = np.array(
+            [
+                2 * np.pi * sigma1 * sigma2,
+                -1,
+                2 * np.pi * A * sigma2,
+                2 * np.pi * A * sigma1,
+            ]
+        )
 
         sigma = np.sqrt(dI @ cov_matrix @ dI.T)
 
-        return I, sigma
+        return quantity_I, sigma
 
     def fit(self, xp, yp, im, roi_pixels=50):
         """
@@ -578,7 +566,7 @@ class Peaks:
             Image array input
         roi_pixels: float
             Region of interest size in pixels. The default is 50.
-            
+
         Returns
         -------
         I, sigma: array, float
@@ -593,7 +581,6 @@ class Peaks:
         )
 
         for ind, (x_val, y_val) in enumerate(zip(xp[:], yp[:])):
-
             x_min = int(max(x_val - roi_pixels, 0))
             x_max = int(min(x_val + roi_pixels + 1, im.shape[0]))
 
@@ -605,62 +592,66 @@ class Peaks:
 
             z = im[x_min:x_max, y_min:y_max].copy()
 
-            x0 = np.array([
-                z.max(),
-                z.min(),
-                x_val,
-                y_val,
-                roi_pixels / 6,
-                roi_pixels / 6,
-                0,
-            ])
+            x0 = np.array(
+                [
+                    z.max(),
+                    z.min(),
+                    x_val,
+                    y_val,
+                    roi_pixels / 6,
+                    roi_pixels / 6,
+                    0,
+                ]
+            )
 
-            xmin = np.array([
-                z.min(),
-                0,
-                x_val - roi_pixels * 0.5,
-                y_val - roi_pixels * 0.5,
-                1,
-                1,
-                -np.pi / 2,
-            ])
+            xmin = np.array(
+                [
+                    z.min(),
+                    0,
+                    x_val - roi_pixels * 0.5,
+                    y_val - roi_pixels * 0.5,
+                    1,
+                    1,
+                    -np.pi / 2,
+                ]
+            )
 
-            xmax = np.array([
-                2 * z.max(),
-                z.mean(),
-                x_val + roi_pixels * 0.5,
-                y_val + roi_pixels * 0.5,
-                roi_pixels / 3,
-                roi_pixels / 3,
-                np.pi / 2,
-            ])
+            xmax = np.array(
+                [
+                    2 * z.max(),
+                    z.mean(),
+                    x_val + roi_pixels * 0.5,
+                    y_val + roi_pixels * 0.5,
+                    roi_pixels / 3,
+                    roi_pixels / 3,
+                    np.pi / 2,
+                ]
+            )
 
             if np.all(x0 > xmin) and np.all(x0 < xmax):
-
                 bounds = np.array([xmin, xmax])
 
                 args = (x, y, z)
 
                 sol = scipy.optimize.least_squares(
-                    self.residual, x0=x0, bounds=bounds, args=args, loss='soft_l1'
+                    self.residual, x0=x0, bounds=bounds, args=args, loss="soft_l1"
                 )
 
                 J = sol.jac
                 inv_cov = J.T.dot(J)
 
                 if np.linalg.det(inv_cov) > 0:
-
                     A, B, mu_1, mu_2, sigma_1, sigma_2, theta = sol.x
 
                     inds = [0, 1, 4, 5]
 
-                    cov = np.linalg.inv(inv_cov)[inds][:,inds]
+                    cov = np.linalg.inv(inv_cov)[inds][:, inds]
 
-                    I, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
+                    quantity_I, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
 
-                    if I < 10 * sig:
+                    if quantity_I < 10 * sig:
                         mu_1, mu_2 = x_val, y_val
-                        sigma_1, sigma_2, theta = 0., 0., 0.
+                        sigma_1, sigma_2, theta = 0.0, 0.0, 0.0
 
                     items = mu_1, mu_2, sigma_1, sigma_2, theta
 
@@ -669,7 +660,6 @@ class Peaks:
         return peak_dict
 
     def get_detector_peaks(self, **kwargs: dict):
-
         """
         Get peaks in detector space (rotation, angles, and wavelength).
 
@@ -695,17 +685,18 @@ class Peaks:
 
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
-                i, j = self.harvest_peaks(bank, **kwargs)
-                tt, az = self.detector_trajectories(bank, i, j)
-                two_theta += tt.tolist()
-                az_phi += az.tolist()
-                R += [np.eye(3)] * len(tt)
-                lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
+            i, j = self.harvest_peaks(bank, **kwargs)
+            tt, az = self.detector_trajectories(bank, i, j)
+            two_theta += tt.tolist()
+            az_phi += az.tolist()
+            R += [np.eye(3)] * len(tt)
+            lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
 
         return R, two_theta, az_phi, lamda
-    
+
     # Write out the output HDF5 peaks file
-    def write_hdf5(self,
+    def write_hdf5(
+        self,
         output_filename: str,
         rotations: list[float],
         two_theta: list[float],

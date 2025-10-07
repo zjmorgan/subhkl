@@ -138,5 +138,3 @@ def test_lysozyme(test_data_dir):
                 break
 
         assert success
-
-
