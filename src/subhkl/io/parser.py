@@ -95,7 +95,7 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, True)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
