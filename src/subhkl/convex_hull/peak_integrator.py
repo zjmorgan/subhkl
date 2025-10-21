@@ -6,9 +6,30 @@ from scipy.spatial import Delaunay
 from scipy.stats import zscore
 
 from subhkl.convex_hull.offset_mask import OffsetMask
+from subhkl.convex_hull.region_grower import RegionGrower
 
 
 class PeakIntegrator:
+    @staticmethod
+    def build_from_dictionary(integration_params):
+        region_growth_params = {
+            "distance_threshold": integration_params.pop("region_growth_distance_threshold"),
+            "min_intensity": integration_params.pop("region_growth_minimum_intensity"),
+            "max_size": integration_params.pop("region_growth_maximum_pixel_radius")
+        }
+        other_params = {
+            "box_size": integration_params["peak_center_box_size"],
+            "smoothing_window_size": integration_params["peak_smoothing_window_size"],
+            "min_peak_pixels": integration_params["peak_minimum_pixels"],
+            "outlier_threshold": integration_params["peak_pixel_outlier_threshold"]
+        }
+        integrator = PeakIntegrator(
+            RegionGrower(**region_growth_params),
+            **other_params
+        )
+
+        return integrator
+
     def __init__(
             self,
             region_grower,
@@ -64,7 +85,8 @@ class PeakIntegrator:
             (H, W)-shaped array of intensities measured by the bank
         peak_centers:
             (N, 2)-shaped array of coordinates of estimated peak centers to
-            compute intensity statistics for
+            compute intensity statistics for. First coordinate is y (row),
+            second coordinate is x (column).
         return_hulls:
             Whether to return convex hulls of peak regions for visualization
         return_headers:
@@ -97,13 +119,12 @@ class PeakIntegrator:
                     peak_masks[i_peak],
                     bg_masks[i_peak]
                 )
-                bg_density, peak_intensity, peak_bg_intensity, sigma = stats
+                bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
             else:
-                bg_density, peak_intensity, peak_bg_intensity, sigma = 0, 0, 0, 0
+                bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
 
             output_data.append([
-                bank_id, i_peak, float(bg_density), float(peak_intensity),
-                float(peak_bg_intensity), float(sigma)
+                bank_id, i_peak, bg_density, peak_intensity, peak_bg_intensity, sigma
             ])
 
         if return_hulls:

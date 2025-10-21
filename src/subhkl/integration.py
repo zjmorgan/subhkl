@@ -1,6 +1,7 @@
 import os
 import re
 import typing
+from collections import namedtuple
 
 import numpy as np
 import numpy.typing as npt
@@ -12,6 +13,20 @@ import skimage.feature
 import scipy.optimize
 
 from subhkl.config import beamlines, reduction_settings
+from subhkl.convex_hull.peak_integrator import PeakIntegrator
+
+
+DetectorPeaks = namedtuple(
+    "DetectorPeaks",
+    [
+        "R",
+        "two_theta",
+        "az_phi",
+        "wavelengths",
+        "intensity",
+        "sigma",
+    ]
+)
 
 
 class Peaks:
@@ -90,29 +105,32 @@ class Peaks:
         ims = {}
 
         with File(filename, "r") as f:
-            keys = f["/entry/"].keys()
-            banks = [key for key in keys if re.search(r"bank\d", key)]
+            keys = []
+            banks = []
+            for key in f["/entry/"].keys():
+                match = re.match(r"bank(\d+).*", key)
+                if match is not None:
+                    keys.append(key)
+                    banks.append(match.groups()[0])
 
-            for bank in banks:
-                key = "/entry/" + bank + "/event_id"
-
-                b = int(bank.split("bank")[1].split("_")[0])
+            for rel_key, bank in zip(keys, banks):
+                key = "/entry/" + rel_key + "/event_id"
 
                 array = f[key][()]
 
-                det = detectors.get(b)
+                det = detectors.get(bank)
 
                 if det is not None:
                     m, n, offset = det["m"], det["n"], det["offset"]
 
                     bc = np.bincount(array - offset, minlength=m * n)
 
-                    ims[b] = bc.reshape(m, n)
+                    ims[bank] = bc.reshape(m, n)
 
         return ims
 
     def harvest_peaks(
-        self, bank, max_peaks=200, min_pix=50, min_rel_intens=0.5
+        self, bank, max_peaks=200, min_pix=50, min_rel_intensity=0.5
     ) -> list[npt.NDArray]:
         """
         Locate peak positions in pixel coordinates.
@@ -125,22 +143,22 @@ class Peaks:
             Maximum number of peaks to limit for output. The default is 200.
         min_pix : int, optional
             Minimum pixel distance between peaks. The default is 50.
-        min_rel_intens: float, optional
+        min_rel_intensity: float, optional
             Minimum intensity relative to maximum value. The default is 0.5
 
         Returns
         -------
         i : array, int
-            x-pixel coordinates.
+            x-pixel coordinates (row).
         j : array, int
-            y-pixel coordinates.
+            y-pixel coordinates (column).
 
         """
         coords = skimage.feature.peak_local_max(
             self.ims[bank],
             num_peaks=max_peaks,
             min_distance=min_pix,
-            threshold_rel=min_rel_intens,
+            threshold_rel=min_rel_intensity,
             exclude_border=min_pix * 3,
         )
 
@@ -659,40 +677,110 @@ class Peaks:
 
         return peak_dict
 
-    def get_detector_peaks(self, **kwargs: dict):
+    def get_detector_peaks(self, harvest_peaks_kwargs, integration_params, visualize=False):
         """
-        Get peaks in detector space (rotation, angles, and wavelength).
+        Get peaks in detector space (rotation, angles, and wavelength)
+        and integrate using convex hull algorithm.
 
         Parameters
         ----------
-        kwargs : dict
+        harvest_peaks_kwargs : dict
             Method harvest_peaks key-word args.
+
+        integration_params : dict
+            Parameters for convex hull peak integration algorithm. Must contain
+            keys "region_growth_distance_threshold", "region_growth_minimum_intensity",
+            "region_growth_maximum_pixel_radius", "peak_center_box_size",
+            "peak_smoothing_window_size", "peak_minimum_pixels",
+            "peak_pixel_outlier_threshold"
+
+        visualize : bool
+            Whether to generate visualizations while running the detection
+            algorithm
 
         Returns
         -------
-        R, two_theta, az_phi, lambda: array, float
-            Rotations, angles, and wavelength of each peak
+        detector_peaks : DetectorPeaks
+            namedtuple of Rotations, angles, wavelengths, intensity and sigma
+            of each peak
 
         """
         if not self.ims:
             raise Exception("ERROR: Must have images for Peaks first...")
+
+        if visualize:
+            import matplotlib.pyplot as plt
+        else:
+            plt = None
 
         # Define outputs
         R: list[float] = []
         two_theta: list[float] = []
         az_phi: list[float] = []
         lamda: list[float] = []
+        intensity: list[float] = []
+        sigma: list[float] = []
+
+        integrator = PeakIntegrator.build_from_dictionary(integration_params)
 
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
-            i, j = self.harvest_peaks(bank, **kwargs)
-            tt, az = self.detector_trajectories(bank, i, j)
-            two_theta += tt.tolist()
-            az_phi += az.tolist()
-            R += [np.eye(3)] * len(tt)
-            lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
+            print(f"Processing bank {bank}")
 
-        return R, two_theta, az_phi, lamda
+            # Find candidate peaks
+            i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
+            print(f"Found {len(i)} candidate peaks")
+
+            if visualize:
+                fig, axes = plt.subplots(1, 2)
+                axes[0].imshow(self.ims[bank], cmap="binary")
+                axes[0].scatter(j, i, marker="1", c="blue")
+                axes[0].set_title("Candidate peaks")
+            else:
+                fig, axes = None, None
+
+            centers = np.stack([i, j], axis=-1)
+
+            # Integrate peaks
+            if visualize:
+                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+                axes[1].imshow(self.ims[bank], cmap="binary")
+                for _, hull, _, _ in hulls:
+                    if hull is not None:
+                        for simplex in hull.simplices:
+                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                axes[1].set_title("Convex hulls")
+                fig.savefig(str(bank) + ".png")
+                plt.show()
+            else:
+                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+
+            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
+            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            keep = [peak_in is not None for peak_in in bank_intensity]
+
+            # Only add integrated peaks to data
+            if sum(keep) > 0:
+                i, j = i[keep], j[keep]
+                bank_intensity = bank_intensity[keep]
+                bank_sigma = bank_sigma[keep]
+
+                # Calculate peak angles
+                tt, az = self.detector_trajectories(bank, i, j)
+
+                # Add peak data to output
+                two_theta += tt.tolist()
+                az_phi += az.tolist()
+                R += [np.eye(3)] * len(tt)
+                lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
+                intensity += bank_intensity.tolist()
+                sigma += bank_sigma.tolist()
+
+                print(f"Integrated {len(i)}/{len(centers)} peaks")
+            else:
+                print("Bank had 0 peaks")
+
+        return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
 
     # Write out the output HDF5 peaks file
     def write_hdf5(
@@ -700,8 +788,10 @@ class Peaks:
         output_filename: str,
         rotations: list[float],
         two_theta: list[float],
-        phi: list[float],
+        az_phi: list[float],
         wavelengths: list[float],
+        intensity: list[float],
+        sigma: list[float]
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -717,10 +807,16 @@ class Peaks:
             Azimuthal phi angles of peaks.
         wavelengths: array, float
             Wavelength min and max of each peak.
+        intensity: array, float
+            Integrated intensity of each peak
+        sigma: array, float
+            Uncertainty in integrated intensity of each peak
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
             f["wavelengths"] = wavelengths
             f["rotations"] = rotations
             f["two_theta"] = two_theta
-            f["azimuthal"] = phi
+            f["azimuthal"] = az_phi
+            f["intensity"] = intensity
+            f["sigma"] = sigma

@@ -31,6 +31,10 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
 
+    with h5py.File(hdf5_peaks_filename) as f:
+        intensity = np.array(f["peaks/intensity"])
+        sigma = np.array(f["peaks/sigma"])
+
     # Save output to HDF5 file
     with h5py.File(output_peaks_filename, "w") as f:
         f["sample/B"] = B
@@ -39,6 +43,8 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
+        f["peaks/intensity"] = intensity
+        f["peaks/sigma"] = sigma
 
 
 @app.command()
@@ -46,10 +52,17 @@ def finder(
     filename: str,
     instrument: str,
     output_filename: str = "output.h5",
-    min_pixel_distance: float = -1,
-    min_relative_intensities: float = -1,
+    min_pixel_distance: int = -1,
+    min_relative_intensity: float = -1,
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_maximum_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 30,
+    peak_pixel_outlier_threshold: float = 2.0
 ):
     # Create peak finder from file + instrument
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -67,27 +80,40 @@ def finder(
     peak_kwargs = {}
     if min_pixel_distance > 0:
         peak_kwargs["min_pix"] = min_pixel_distance
-    if min_relative_intensities > 0:
-        peak_kwargs["min_rel_intensities"] = min_relative_intensities
+    if min_relative_intensity > 0:
+        peak_kwargs["min_rel_intensity"] = min_relative_intensity
+
+    # Setup parameters for integration with convex hull algorithm
+    integration_params = {
+        "region_growth_distance_threshold": region_growth_distance_threshold,
+        "region_growth_minimum_intensity": region_growth_minimum_intensity,
+        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
+        "peak_center_box_size": peak_center_box_size,
+        "peak_smoothing_window_size": peak_smoothing_window_size,
+        "peak_minimum_pixels": peak_minimum_pixels,
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+    }
 
     # Calculate the peaks in detector space
-    R, two_theta, az_phi, wavelengths = peaks.get_detector_peaks(**peak_kwargs)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, True)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
         output_filename=output_filename,
-        rotations=R,
-        two_theta=two_theta,
-        phi=az_phi,
-        wavelengths=wavelengths,
+        rotations=detector_peaks.R,
+        two_theta=detector_peaks.two_theta,
+        az_phi=detector_peaks.az_phi,
+        wavelengths=detector_peaks.wavelengths,
+        intensity=detector_peaks.intensity,
+        sigma=detector_peaks.sigma
     )
 
 
 @app.command()
 def indexer(
     num_procs: int,
-    peaks_csv_filename: str,
-    goniometer_filename: str,
+    peaks_h5_filename: str,
+    goniometer_csv_filename: str,
     output_peaks_filename: str,
     a: float,
     b: float,
@@ -99,9 +125,15 @@ def indexer(
     wavelength_max: float,
     sample_centering,
 ) -> None:
+    # Load peaks h5 file
+    with h5py.File(peaks_h5_filename) as f:
+        two_theta = np.array(f["two_theta"])
+        az_phi = np.array(f["azimuthal"])
+        intensity = np.array(f["intensity"])
+        sigma = np.array(f["sigma"])
+
     # Read in goniometer from CSV filename
-    two_theta, az_phi = np.loadtxt(peaks_csv_filename, delimiter=",", unpack=True)
-    R = np.loadtxt(goniometer_filename, delimiter=",")
+    R = np.loadtxt(goniometer_csv_filename, delimiter=",")
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
@@ -117,6 +149,8 @@ def indexer(
         f["goniometer/R"] = R
         f["peaks/scattering"] = two_theta
         f["peaks/azimuthal"] = az_phi
+        f["peaks/intensity"] = intensity
+        f["peaks/sigma"] = sigma
 
     index(num_procs, unique_filename, output_peaks_filename)
 
