@@ -30,3 +30,6 @@ def test_scale_coordinates_no_scaling():
 
     assert x == xp
     assert y == yp
+
+if __name__ == "__main__":
+    pass

@@ -148,5 +148,5 @@ def test_mesolite():
 
     assert success
 
-
-test_mesolite()
+if __name__ == "__main__":
+    test_mesolite()

@@ -54,5 +54,5 @@ def test_mesolite():
     #
     #     fig.savefig(fname, bbox_inches='tight')
 
-
-test_mesolite()
+if __name__ == "__main__":
+    test_mesolite()
