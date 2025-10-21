@@ -73,18 +73,16 @@ class Peaks:
             self.wavelength_min = wavelength_max
 
     # TODO: implement for each instrument...
-    def get_wavelength_from_nexus(self, filename: str) -> float:
+    def get_wavelength_from_nexus(self, filename: str) -> tuple[float, float]:
         print("NOT YET IMPLEMENTED: returning None for wavelength...")
-        wavelength_min = None
-        wavelength_max = None
-        return wavelength_min, wavelength_max
+        raise NotImplementedError
 
-    def get_wavelength_from_settings(self) -> list[float]:
+    def get_wavelength_from_settings(self) -> tuple[float, float]:
         settings = reduction_settings[self.instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
 
-    def load_nexus(self, filename: str) -> dict[npt.NDArray]:
+    def load_nexus(self, filename: str) -> dict[str, npt.NDArray]:
         """
         Return images from a Nexus file.
 
@@ -131,7 +129,7 @@ class Peaks:
 
     def harvest_peaks(
         self, bank, max_peaks=200, min_pix=50, min_rel_intensity=0.5
-    ) -> list[npt.NDArray]:
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Locate peak positions in pixel coordinates.
 
@@ -164,7 +162,7 @@ class Peaks:
 
         return coords[:, 0], coords[:, 1]
 
-    def scale_coordinates(self, bank: int, i: list[int], j: list[int]) -> npt.NDArray:
+    def scale_coordinates(self, bank: int, i: npt.NDArray, j: npt.NDArray) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Scale from pixel coordinates to real positions.
 
@@ -189,20 +187,20 @@ class Peaks:
 
     def scale_ellipsoid(
         self,
-        a: list[float],
-        b: list[float],
-        theta: list[float],
+        a: float,
+        b: float,
+        theta: float,
         scale_x: float,
         scale_y: float,
-    ) -> npt.NDArray:
+    ) -> tuple[float, float, float]:
         """
         Scale from pixel coordinates to real units.
 
         Parameters
         ----------
-        a, b : array
+        a, b : float
             Image coordinates (eigenvalues).
-        theta: array
+        theta: float
             Orientation angle.
         scale_x, scale_y : float
             Pixel scaling factors.
@@ -216,7 +214,7 @@ class Peaks:
         R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
 
         if np.isclose(a, 0) or np.isclose(b, 0):
-            return 0, 0, 0
+            return 0., 0., 0.
 
         S_inv = np.diag([1 / scale_x, 1 / scale_y])
 
@@ -233,7 +231,7 @@ class Peaks:
 
         return new_a, new_b, new_theta
 
-    def detector_width_height(self, bank: int) -> npt.NDArray:
+    def detector_width_height(self, bank: int) -> tuple[float, float]:
         """
         Return bank's width and height for instrument.
 
@@ -255,7 +253,7 @@ class Peaks:
         return width, height
 
     def transform_from_detector(
-        self, bank: int, i: list[int], j: list[int]
+        self, bank: int, i: list[float] | npt.NDArray, j: list[float] | npt.NDArray
     ) -> npt.NDArray:
         """
         Return real-space coordinates from detector using bank and image (i,j).
@@ -309,7 +307,7 @@ class Peaks:
 
     def transform_to_detector(
         self, bank: int, X: float, Y: float, Z: float
-    ) -> npt.NDArray:
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Return image (i,j) using bank number and real-space coordinates (x, y, z).
 
@@ -317,7 +315,7 @@ class Peaks:
         ----------
         bank : int
             Bank number.
-        x, y, z: array, float
+        X, Y, Z: array, float
             Real-space coordinates
 
         Returns
@@ -363,7 +361,7 @@ class Peaks:
 
         return i.astype(int), j.astype(int)
 
-    def reflections_mask(self, bank: int, xyz: list[float]) -> npt.NDArray:
+    def reflections_mask(self, bank: int, xyz: list[float]) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Return mask  using bank number and real-space coordinates (x, y, z).
 
@@ -417,7 +415,12 @@ class Peaks:
 
         return mask, i, j
 
-    def detector_trajectories(self, bank: int, x: float, y: float) -> npt.NDArray:
+    def detector_trajectories(
+        self,
+        bank: int,
+        x: list[float] | npt.NDArray,
+        y: list[float] | npt.NDArray
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate detector trajectories.
 
@@ -451,10 +454,20 @@ class Peaks:
 
         Parameters
         ----------
-        bank : int
-            Bank number.
         x, y : array, float
             Pixel position in physical units.
+
+        A, B: float
+            Coefficients in linear function A * shape + B
+
+        mu_x, mu_y: float
+            Gaussian center coordinates
+
+        sigma_1, sigma_2: float
+            Gaussian standard deviations
+
+        theta: float
+            Gaussian rotation angle in radians
 
         Returns
         -------
@@ -531,7 +544,7 @@ class Peaks:
         sigma1: float,
         sigma2: float,
         cov_matrix: npt.ArrayLike,
-    ) -> npt.NDArray:
+    ) -> tuple[float, float]:
         """
         Calculated intensity of peak.
 
@@ -677,7 +690,12 @@ class Peaks:
 
         return peak_dict
 
-    def get_detector_peaks(self, harvest_peaks_kwargs, integration_params, visualize=False):
+    def get_detector_peaks(
+        self,
+        harvest_peaks_kwargs: dict,
+        integration_params: dict,
+        visualize: bool = False
+    ) -> DetectorPeaks:
         """
         Get peaks in detector space (rotation, angles, and wavelength)
         and integrate using convex hull algorithm.
@@ -798,7 +816,8 @@ class Peaks:
 
         Parameters
         ----------
-
+        output_filename: str
+            Name of file to write to
         rotations: array, float
             Rotation matrices of peaks.
         two_theta: array, float

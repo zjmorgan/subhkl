@@ -123,7 +123,7 @@ def indexer(
     gamma: float,
     wavelength_min: float,
     wavelength_max: float,
-    sample_centering,
+    sample_centering: str,
 ) -> None:
     # Load peaks h5 file
     with h5py.File(peaks_h5_filename) as f:
