@@ -109,14 +109,14 @@ class Peaks:
                 match = re.match(r"bank(\d+).*", key)
                 if match is not None:
                     keys.append(key)
-                    banks.append(match.groups()[0])
+                    banks.append(int(match.groups()[0]))
 
             for rel_key, bank in zip(keys, banks):
                 key = "/entry/" + rel_key + "/event_id"
 
                 array = f[key][()]
 
-                det = detectors.get(bank)
+                det = detectors.get(str(bank))
 
                 if det is not None:
                     m, n, offset = det["m"], det["n"], det["offset"]
