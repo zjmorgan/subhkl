@@ -6,7 +6,7 @@ import numpy as np
 from subhkl.optimization import FindUB
 
 directory = os.path.dirname(os.path.abspath(__file__))
-
+num_cores = os.cpu_count()
 
 def test_sucrose():
     filename = os.path.join(directory, "sucrose_mandi.h5")
@@ -55,7 +55,7 @@ def test_sucrose():
     while tries < 5:
         tries += 1
 
-        num, hkl, lamda = opt.minimize(64)
+        num, hkl, lamda = opt.minimize(num_cores)
 
         B = opt.reciprocal_lattice_B()
         U = opt.orientation_U(*opt.x)
@@ -71,7 +71,7 @@ def test_sucrose():
             success = True
             break
 
-    assert success
+    assert success, "no run succeeded"
 
 
 def test_lysozyme():
@@ -123,7 +123,7 @@ def test_lysozyme():
         while tries < 5:
             tries += 1
 
-            num, hkl, lamda = opt.minimize(64)
+            num, hkl, lamda = opt.minimize()
 
             B = opt.reciprocal_lattice_B()
             U = opt.orientation_U(*opt.x)
