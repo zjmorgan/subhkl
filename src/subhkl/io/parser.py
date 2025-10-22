@@ -31,9 +31,12 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
     B = opt.reciprocal_lattice_B()
     U = opt.orientation_U(*opt.x)
 
+    # Copy data from temporary HDF5
     with h5py.File(hdf5_peaks_filename) as f:
         intensity = np.array(f["peaks/intensity"])
         sigma = np.array(f["peaks/sigma"])
+        two_theta = np.array(f["peaks/scattering"])
+        az_phi = np.array(f["peaks/azimuthal"])
 
     # Save output to HDF5 file
     with h5py.File(output_peaks_filename, "w") as f:
@@ -45,6 +48,8 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
         f["peaks/lambda"] = lamda
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
+        f["peaks/scattering"] = two_theta
+        f["peaks/azimuthal"] = az_phi
 
 
 @app.command()
@@ -95,7 +100,7 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
