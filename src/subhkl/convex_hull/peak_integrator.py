@@ -21,6 +21,7 @@ class PeakIntegrator:
             "box_size": integration_params["peak_center_box_size"],
             "smoothing_window_size": integration_params["peak_smoothing_window_size"],
             "min_peak_pixels": integration_params["peak_minimum_pixels"],
+            "min_peak_snr": integration_params["peak_minimum_signal_to_noise"],
             "outlier_threshold": integration_params["peak_pixel_outlier_threshold"]
         }
         integrator = PeakIntegrator(
@@ -36,6 +37,7 @@ class PeakIntegrator:
             box_size: int = 5,
             smoothing_window_size: int = 5,
             min_peak_pixels: int = 3,
+            min_peak_snr: float = 1.0,
             outlier_threshold: float = 2.0,
     ):
         """
@@ -54,6 +56,8 @@ class PeakIntegrator:
         min_peak_pixels:
             Minimum number of pixels in grown region needed to
             count it as a peak detection
+        min_peak_snr:
+            Minimum peak signal-to-noise ratio needed to count it as a peak
         outlier_threshold:
             Threshold (in # of standard deviations) for culling
             outliers in the cluster to obtain the core cluster
@@ -64,6 +68,7 @@ class PeakIntegrator:
         self.box_size = box_size
         self.smoothing_window_size = smoothing_window_size
         self.min_peak_pixels = min_peak_pixels
+        self.min_peak_snr = min_peak_snr
         self.outlier_threshold = outlier_threshold
 
     def integrate_peaks(
@@ -120,6 +125,15 @@ class PeakIntegrator:
                     bg_masks[i_peak]
                 )
                 bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
+
+                # Discard peak if SNR is too low
+                snr = peak_intensity / sigma
+                if snr < self.min_peak_snr:
+                    bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
+                    is_peak[i_peak] = False
+                    peak_masks[i_peak] = None
+                    bg_masks[i_peak] = None
+                    peak_hulls[i_peak] = (None,) * len(peak_hulls[i_peak])
             else:
                 bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
 

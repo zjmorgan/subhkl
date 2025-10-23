@@ -57,8 +57,16 @@ def finder(
     filename: str,
     instrument: str,
     output_filename: str = "output.h5",
-    min_pixel_distance: int = -1,
-    min_relative_intensity: float = -1,
+    finder_algorithm: str = "peak_local_max",
+    peak_local_max_min_pixel_distance: int = -1,
+    peak_local_max_min_relative_intensity: float = -1,
+    s_thresholding_noise_cutoff_quantile: float = 0.8,
+    s_thresholding_min_peak_dist_pixels: float = 8.0,
+    s_thresholding_mask_file: typing.Optional[str] = None,
+    s_thresholding_mask_rel_erosion_radius: float = 0.05,
+    s_thresholding_rel_blur_radius: float = 0.008,
+    s_thresholding_open_kernel_size_pixels: int = 3,
+    s_thresholding_adaptive_normalization_rel_radius : typing.Optional[float] = None,
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
     region_growth_distance_threshold: float = 1.5,
@@ -67,6 +75,7 @@ def finder(
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
+    peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0
 ):
     # Create peak finder from file + instrument
@@ -82,11 +91,25 @@ def finder(
     peaks = Peaks(filename, instrument, **wavelength_kwargs)
 
     # Setup optional arguments for peak finding
-    peak_kwargs = {}
-    if min_pixel_distance > 0:
-        peak_kwargs["min_pix"] = min_pixel_distance
-    if min_relative_intensity > 0:
-        peak_kwargs["min_rel_intensity"] = min_relative_intensity
+    peak_kwargs = {"algorithm": finder_algorithm}
+    if finder_algorithm == "peak_local_max":
+        if peak_local_max_min_pixel_distance > 0:
+            peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
+        if peak_local_max_min_relative_intensity > 0:
+            peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
+    elif finder_algorithm == "thresholding":
+        peak_kwargs.update({
+            "noise_cutoff_quantile": s_thresholding_noise_cutoff_quantile,
+            "min_peak_dist_pixels": s_thresholding_min_peak_dist_pixels,
+            "mask_file": s_thresholding_mask_file,
+            "mask_rel_erosion_radius": s_thresholding_mask_rel_erosion_radius,
+            "rel_blur_radius": s_thresholding_rel_blur_radius,
+            "open_kernel_size_pixels": s_thresholding_open_kernel_size_pixels,
+            "adaptive_normalization_rel_radius": s_thresholding_adaptive_normalization_rel_radius
+        })
+    else:
+        raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
+                         "and \"thresholding\" are allowed")
 
     # Setup parameters for integration with convex hull algorithm
     integration_params = {
@@ -96,6 +119,7 @@ def finder(
         "peak_center_box_size": peak_center_box_size,
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
+        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
         "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
     }
 

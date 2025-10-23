@@ -14,6 +14,7 @@ import scipy.optimize
 
 from subhkl.config import beamlines, reduction_settings
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
+from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 
 
 DetectorPeaks = namedtuple(
@@ -82,7 +83,7 @@ class Peaks:
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
 
-    def load_nexus(self, filename: str) -> dict[str, npt.NDArray]:
+    def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
         """
         Return images from a Nexus file.
 
@@ -160,6 +161,68 @@ class Peaks:
             exclude_border=min_pix * 3,
         )
 
+        return coords[:, 0], coords[:, 1]
+
+    def harvest_peaks_thresholding(
+        self,
+        bank: int,
+        noise_cutoff_quantile: float = 0.8,
+        min_peak_dist_pixels: float = 8.0,
+        rel_blur_radius: float = 0.08,
+        open_kernel_size_pixels: int = 3,
+        adaptive_normalization_rel_radius: float | None = None,
+        mask_file: str | None = None,
+        mask_rel_erosion_radius: float = 0.05,
+        show_steps: bool = False,
+        show_scale: str = "linear"
+    ) -> tuple[npt.NDArray, npt.NDArray]:
+        """
+        Find peaks using a thresholding algorithm.
+
+        Parameters
+        ----------
+        bank : int
+            Bank ID of the image to search for peaks in
+        noise_cutoff_quantile : float
+            The quantile at which to threshold noise
+        min_peak_dist_pixels : int
+            Minimum distance in pixels allowed between detected peaks
+        rel_blur_radius : float
+            Radius (relative to smaller size of the image) of the blurring kernel
+        open_kernel_size_pixels : int
+            Size of the opening kernel; either 3 5, or 7. 3 catches weaker peaks
+            but may introduce false positive detections. 7 is mainly useful
+            for high resolution images.
+        adaptive_normalization_rel_radius : float | None
+            Optional radius (relative tot smaller size of the image) of the adaptive
+            window used for adaptive normalization. If not provided, then
+            no adaptive normalization will be applied.
+        mask_file : str | None
+            Optional file containing a mask that indicates (by nonzero pixels)
+            which pixels in the image should be IGNORED for peak detection
+        mask_rel_erosion_radius : float
+            Radius (relative to smaller size of the image) by which to
+            expand the ignored region of the mask, if it is given
+        show_steps : bool
+            Whether to show a plot visualizing the intermediate steps of the
+            algorithm. Useful for tuning parameters for a new instrument
+        show_scale : str
+            Scale of color units in image plots. Either "log" or "linear".
+            (currently only supports "linear")
+        """
+        alg = ThresholdingPeakFinder(
+            noise_cutoff_quantile=noise_cutoff_quantile,
+            min_peak_dist_pixels=min_peak_dist_pixels,
+            rel_blur_kernel_size=rel_blur_radius,
+            open_kernel_size_pixels=open_kernel_size_pixels,
+            adaptive_normalization_rel_kernel_size=adaptive_normalization_rel_radius,
+            mask_file=mask_file,
+            mask_rel_erosion_radius=mask_rel_erosion_radius,
+            show_steps=show_steps,
+            show_scale=show_scale
+        )
+
+        coords = alg.find_peaks(self.ims[bank])
         return coords[:, 0], coords[:, 1]
 
     def scale_coordinates(self, bank: int, i: npt.NDArray, j: npt.NDArray) -> tuple[npt.NDArray, npt.NDArray]:
@@ -703,14 +766,18 @@ class Peaks:
         Parameters
         ----------
         harvest_peaks_kwargs : dict
-            Method harvest_peaks key-word args.
+            Dictionary containing key "algorithm" which specifies either
+            "peak_local_max" or "thresholding" algorithm to use for peak finding.
+            Should also contain keyword arguments for `harvest_peaks` (if using
+            "peak_local_max" algorithm) or `harvest_peaks_thresholding` (if
+            using "thresholding" algorithm)
 
         integration_params : dict
             Parameters for convex hull peak integration algorithm. Must contain
             keys "region_growth_distance_threshold", "region_growth_minimum_intensity",
             "region_growth_maximum_pixel_radius", "peak_center_box_size",
             "peak_smoothing_window_size", "peak_minimum_pixels",
-            "peak_pixel_outlier_threshold"
+            "peak_minimum_signal_to_noise", "peak_pixel_outlier_threshold"
 
         visualize : bool
             Whether to generate visualizations while running the detection
@@ -740,13 +807,19 @@ class Peaks:
         sigma: list[float] = []
 
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
+        finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
 
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
 
             # Find candidate peaks
-            i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
+            if finder_algorithm == "peak_local_max":
+                i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
+            elif finder_algorithm == "thresholding":
+                i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
+            else:
+                raise ValueError("Invalid finder algorithm")
             print(f"Found {len(i)} candidate peaks")
 
             if visualize:
@@ -762,7 +835,18 @@ class Peaks:
             # Integrate peaks
             if visualize:
                 int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+            else:
+                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+
+            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
+            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            keep = [peak_in is not None for peak_in in bank_intensity]
+
+            if visualize:
                 axes[1].imshow(self.ims[bank], cmap="binary")
+                for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
+                    print(f'SNR: {peak_in / peak_sigma}')
+
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
@@ -770,12 +854,6 @@ class Peaks:
                 axes[1].set_title("Convex hulls")
                 fig.savefig(str(bank) + ".png")
                 plt.show()
-            else:
-                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
-
-            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
-            keep = [peak_in is not None for peak_in in bank_intensity]
 
             # Only add integrated peaks to data
             if sum(keep) > 0:
