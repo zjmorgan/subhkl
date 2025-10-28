@@ -89,7 +89,7 @@ def calc_goniometer_rotation_matrix(axes, angles):
         Parallel list of axes corresponding to the angles; each list is packed
         as in Mantid `SetGoniometer`.
     angles : list[float]
-        List of the three angles in degrees (in the same order as Mantid
+        List of the angles in degrees (in the same order as Mantid
         `SetGoniometer`)
 
     Returns
