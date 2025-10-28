@@ -20,10 +20,10 @@ Notes
   as [x, y, z, o] (see `reduction_settings.json` for examples).
 - ??? The order of the axes in `reduction_settings.json` corresponds to the
   order they would be input into Mantid `SetGoniometer` ???
-- Based on experimentation, scipy.spatial.transform.Rotation.from_rotvec
+- Based on experimentation, `scipy.spatial.transform.Rotation.from_rotvec`
   constructs a rotation from a rotation vector according to counter-clockwise
   orientation in a right-handed coordinate system (you can achieve clockwise by
-  negating the rotation vector and using from_rotvec). A rotation vector is
+  negating the rotation vector and using `from_rotvec`). A rotation vector is
   easily constructed from the axis-angle obtained by combining the Euler angle
   specification [x, y, z, o] and the corresponding angle read from a .nxs.h5
   file.
@@ -34,43 +34,72 @@ Notes
   (that is, it is consistent with constructing the rotation with from_rotvec)
   See here if you are interested: https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation#Rotation_identity
 """
-from .config import reduction_settings
-
+import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .config import reduction_settings
 
-def calc_goniometer_rotation_matrix(file, instrument):
+
+def get_rotation_data_from_nexus(filename, instrument):
+    """
+    Get goniometer axes and rotation angles from Nexus file
+
+    Parameters
+    ----------
+    filename : str
+        Name of nexus file to load angles from
+
+    instrument : str
+        Name of instrument used to collect data
+
+    Returns
+    -------
+    axes : list[length 4 numpy array]
+        List of axes in format used by Mantid `SetGoniometer`
+    angles : list[float]
+        List of angles in degrees about the axes
+    """
+    settings = reduction_settings[instrument]
+    axes, angles = [], []
+    with h5py.File(filename) as f:
+        das_logs = f["entry/DASlogs"]
+
+        # We can iterate directly over settings["Goniometer"] as of Python 3.6
+        # which guarantees that `json.load` keeps the iteration order of keys
+        # the same as it is in the original file.
+        # So this should work fine--assuming the order is correct in
+        # `reduction_settings.json`, that is!
+        for axis_name, axis_spec in settings["Goniometer"].items():
+            angle_deg = float(das_logs[axis_name]["average_value"][0])
+            axis = np.array(axis_spec, dtype=float)
+            angles.append(angle_deg)
+            axes.append(axis)
+
+    return axes, angles
+
+
+def calc_goniometer_rotation_matrix(axes, angles):
     """
     Calculate the goniometer rotation matrix.
 
     Parameters
     ----------
-    file : open h5 file
-        The .nxs.h5 file from which to load the goniometer Euler angles
-
-    instrument : str
-        The name of the instrument used to collect the data (from which the
-        Euler angle specification in `reduction_settings.json` is obtained)
+    axes : list[list[float]]
+        Parallel list of axes corresponding to the angles; each list is packed
+        as in Mantid `SetGoniometer`.
+    angles : list[float]
+        List of the three angles in degrees (in the same order as Mantid
+        `SetGoniometer`)
 
     Returns
     -------
     matrix : 3x3 numpy array
         The goniometer rotation matrix
     """
-    settings = reduction_settings[instrument]
-    das_logs = file["entry/DASlogs"]
-
     matrix = np.eye(3)
 
-    # We can iterate directly over settings['Goniometer'] as of Python 3.6
-    # which guarantees that `json.load` keeps the iteration order of keys
-    # the same as it is in the original file.
-    # So this should work fine--assuming the order is correct in
-    # `reduction_settings.json`, that is!
-    for axis_name, axis_spec in settings["Goniometer"].items():
-        angle_deg = float(das_logs[axis_name]["average_value"][0])
-
+    for angle_deg, axis_spec in zip(angles, axes):
         # Make rotation vector by combining angle and spec
         sign = axis_spec[3]
         direction = np.array(axis_spec[:3], dtype=float)

@@ -14,7 +14,8 @@ import scipy.optimize
 from subhkl.config import (
     beamlines,
     reduction_settings,
-    calc_goniometer_rotation_matrix
+    calc_goniometer_rotation_matrix,
+    get_rotation_data_from_nexus,
 )
 
 
@@ -23,6 +24,8 @@ class Peaks:
         self,
         filename: str,
         instrument: str,
+        goniometer_axes: typing.Optional[list[list[float]]] = None,
+        goniometer_angles: typing.Optional[list[float]] = None,
         wavelength_min: typing.Optional[float] = None,
         wavelength_max: typing.Optional[float] = None,
     ):
@@ -39,8 +42,15 @@ class Peaks:
         name, ext = os.path.splitext(filename)
 
         self.instrument = instrument
-        # Use identity if goniometer matrix cannot otherwise be loaded
-        self.goniometer_rotation = np.eye(3)
+
+        if goniometer_axes is not None and goniometer_angles is not None:
+            self.goniometer_rotation = calc_goniometer_rotation_matrix(
+                goniometer_axes, goniometer_angles
+            )
+        else:
+            # Use identity if goniometer matrix cannot otherwise be loaded
+            self.goniometer_rotation = np.eye(3)
+
         self.wavelength_min = None
         self.wavelength_max = None
 
@@ -50,7 +60,8 @@ class Peaks:
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
-            self.goniometer_rotation = self.get_goniometer_from_nexus(filename, instrument)
+            if goniometer_axes is None or goniometer_angles is None:
+                self.goniometer_rotation = self.get_goniometer_from_nexus(filename, instrument)
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
             self.wavelength_min, self.wavelength_max = (
@@ -92,8 +103,8 @@ class Peaks:
             The goniometer rotation matrix calculated from the angles in the
             nexus file
         """
-        with File(filename) as f:
-            return calc_goniometer_rotation_matrix(f, instrument)
+        axes, angles = get_rotation_data_from_nexus(filename, instrument)
+        return calc_goniometer_rotation_matrix(axes, angles)
 
     def load_nexus(self, filename: str) -> dict[npt.NDArray]:
         """
