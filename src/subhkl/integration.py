@@ -62,7 +62,7 @@ class Peaks:
             )
 
         else:
-            self.ims = {0: np.array(Image.open(filename)).T}
+            self.ims = {0: np.array(Image.open(filename))}
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
@@ -166,11 +166,10 @@ class Peaks:
     def harvest_peaks_thresholding(
         self,
         bank: int,
-        noise_cutoff_quantile: float = 0.8,
+        noise_cutoff_quantile: float = 0.9,
         min_peak_dist_pixels: float = 8.0,
-        rel_blur_radius: float = 0.08,
+        blur_kernel_sigma: int = 5,
         open_kernel_size_pixels: int = 3,
-        adaptive_normalization_rel_radius: float | None = None,
         mask_file: str | None = None,
         mask_rel_erosion_radius: float = 0.05,
         show_steps: bool = False,
@@ -187,16 +186,13 @@ class Peaks:
             The quantile at which to threshold noise
         min_peak_dist_pixels : int
             Minimum distance in pixels allowed between detected peaks
-        rel_blur_radius : float
-            Radius (relative to smaller size of the image) of the blurring kernel
+        blur_kernel_sigma : int
+            Typical size of the smaller blurring kernel used in difference-of-
+            Gaussians blob detection filter
         open_kernel_size_pixels : int
             Size of the opening kernel; either 3 5, or 7. 3 catches weaker peaks
             but may introduce false positive detections. 7 is mainly useful
             for high resolution images.
-        adaptive_normalization_rel_radius : float | None
-            Optional radius (relative tot smaller size of the image) of the adaptive
-            window used for adaptive normalization. If not provided, then
-            no adaptive normalization will be applied.
         mask_file : str | None
             Optional file containing a mask that indicates (by nonzero pixels)
             which pixels in the image should be IGNORED for peak detection
@@ -213,9 +209,8 @@ class Peaks:
         alg = ThresholdingPeakFinder(
             noise_cutoff_quantile=noise_cutoff_quantile,
             min_peak_dist_pixels=min_peak_dist_pixels,
-            rel_blur_kernel_size=rel_blur_radius,
+            blur_kernel_sigma=blur_kernel_sigma,
             open_kernel_size_pixels=open_kernel_size_pixels,
-            adaptive_normalization_rel_kernel_size=adaptive_normalization_rel_radius,
             mask_file=mask_file,
             mask_rel_erosion_radius=mask_rel_erosion_radius,
             show_steps=show_steps,

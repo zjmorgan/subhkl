@@ -35,19 +35,17 @@ class ThresholdingPeakFinder:
             min_peak_dist_pixels: float = 8.0,
             mask_file: str | None = None,
             mask_rel_erosion_radius: float = 0.05,
-            rel_blur_kernel_size: float = 0.08,
+            blur_kernel_sigma: int = 5,
             open_kernel_size_pixels: int = 3,
-            adaptive_normalization_rel_kernel_size: float | None = None,
             show_steps: bool = False,
             show_scale: str = "linear"
     ):
         self.noise_cutoff_quantile = noise_cutoff_quantile
         self.min_peak_dist_pixels = min_peak_dist_pixels
-        self.rel_blur_kernel_size = rel_blur_kernel_size
+        self.blur_kernel_sigma = blur_kernel_sigma
         assert open_kernel_size_pixels in (3, 5, 7), \
             "Invalid open kernel size. Only 3, 5 and 7 are available"
         self.open_kernel_size = open_kernel_size_pixels
-        self.adaptive_normalization_rel_kernel_size = adaptive_normalization_rel_kernel_size
 
         if mask_file is None:
             self.mask = None
@@ -124,43 +122,42 @@ class ThresholdingPeakFinder:
             plt.show()
             plt.imshow(
                 im * mask.astype(float),
-                cmap="binary"
+                cmap="binary",
+                norm=self.show_scale
             )
             plt.title("Masked image")
             plt.show()
 
-        sigma = self.rel_blur_kernel_size * min(im.shape)
-        k_size = 2 * (max(3, int(sigma * 2.5)) // 2) + 1
-        im_blur = cv2.GaussianBlur(im, (k_size, k_size), sigma)
+        # 1.6 as per Marr and Hildreth, "Theory of Edge Detection"
+        big_sigma = 1.6 * self.blur_kernel_sigma
+        k_size_desired = max(1, int(big_sigma*3))
+        k_size = 2 * (k_size_desired//2) + 1
+        blur_small = cv2.GaussianBlur(im, (k_size, k_size), self.blur_kernel_sigma)
+        blur_big = cv2.GaussianBlur(im, (k_size, k_size), big_sigma)
 
-        if self.adaptive_normalization_rel_kernel_size is not None:
-            sigma = self.adaptive_normalization_rel_kernel_size * min(im.shape)
-            k_size = 2 * (max(3, int(sigma * 2.5)) // 2) + 1
-            norm = np.maximum(1.0, cv2.GaussianBlur(im, (k_size, k_size), sigma))
-            im_blur /= norm
+        # small - big ~ -Laplacian, so peaks occur at *large* values of im_dog
+        # (red on the seismic color map)
+        im_dog = blur_small - blur_big
 
         if self.show_steps:
-            plt.imshow(im_blur * mask.astype(float), cmap="binary")
-            plt.title("Blurred")
+            plt.imshow(im_dog * mask.astype(float), cmap="seismic", norm=self.show_scale)
+            plt.title("DoG")
             plt.show()
 
-        if self.adaptive_normalization_rel_kernel_size is not None:
-            noise_est = np.quantile(im_blur[mask], self.noise_cutoff_quantile)
-        else:
-            noise_est = np.quantile(im[mask], self.noise_cutoff_quantile)
-        im_noise_sub = np.maximum(0.0, im_blur - noise_est)
+        noise_est = np.quantile(im_dog[mask], self.noise_cutoff_quantile)
+        im_thresh = (im_dog > noise_est)
 
         if self.show_steps:
-            plt.imshow(im_noise_sub * mask.astype(float), cmap="binary", vmax=1.0)
-            plt.title("Noise-subtracted")
+            plt.imshow(im_thresh * mask.astype(float), cmap="binary", vmax=1.0)
+            plt.title("Threshold")
             plt.show()
 
         open_kernel = _open_kernel3 if self.open_kernel_size == 3 else _open_kernel5
-        im_opened = cv2.morphologyEx(((im_noise_sub > 0) * mask).astype(np.uint8), cv2.MORPH_OPEN, open_kernel)
+        im_opened = cv2.morphologyEx(((im_thresh > 0) * mask).astype(np.uint8), cv2.MORPH_OPEN, open_kernel)
 
         if self.show_steps:
             fig, axes = plt.subplots(1, 2)
-            axes[0].imshow(im_noise_sub * mask.astype(float), cmap="binary", vmax=1.0)
+            axes[0].imshow(im_thresh * mask.astype(float), cmap="binary", vmax=1.0)
             axes[0].set_title("Noise-subtracted")
             axes[1].imshow(im_opened)
             axes[1].set_title("Opened")
@@ -169,7 +166,11 @@ class ThresholdingPeakFinder:
         contours, _ = cv2.findContours(im_opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if self.show_steps:
-            bg_im = (255 - (im - im.min()) / (im.max() - im.min()) * 255).astype(np.uint8)
+            if self.show_scale == 'linear':
+                bg_im = (255 - (im - im.min()) / (im.max() - im.min()) * 255).astype(np.uint8)
+            else:
+                log_im = np.maximum(0, np.log(im + 1e-5))
+                bg_im = (255 - (log_im / log_im.max()) * 255).astype(np.uint8)
             bg_color = cv2.cvtColor(bg_im, cv2.COLOR_GRAY2BGR)
 
             im_contours = cv2.drawContours(bg_color, contours, -1, (0, 255, 0))
@@ -233,7 +234,7 @@ class ThresholdingPeakFinder:
             contour_centers = np.empty((0, 2))
 
         if self.show_steps:
-            plt.imshow(im, cmap="binary")
+            plt.imshow(im, norm=self.show_scale, cmap="binary")
             plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
             plt.title("Peaks")
             plt.show()

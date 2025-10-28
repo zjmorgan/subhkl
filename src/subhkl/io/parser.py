@@ -64,9 +64,8 @@ def finder(
     s_thresholding_min_peak_dist_pixels: float = 8.0,
     s_thresholding_mask_file: typing.Optional[str] = None,
     s_thresholding_mask_rel_erosion_radius: float = 0.05,
-    s_thresholding_rel_blur_radius: float = 0.008,
+    s_thresholding_blur_kernel_sigma: int = 5,
     s_thresholding_open_kernel_size_pixels: int = 3,
-    s_thresholding_adaptive_normalization_rel_radius : typing.Optional[float] = None,
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
     region_growth_distance_threshold: float = 1.5,
@@ -103,9 +102,8 @@ def finder(
             "min_peak_dist_pixels": s_thresholding_min_peak_dist_pixels,
             "mask_file": s_thresholding_mask_file,
             "mask_rel_erosion_radius": s_thresholding_mask_rel_erosion_radius,
-            "rel_blur_radius": s_thresholding_rel_blur_radius,
+            "blur_kernel_sigma": s_thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": s_thresholding_open_kernel_size_pixels,
-            "adaptive_normalization_rel_radius": s_thresholding_adaptive_normalization_rel_radius
         })
     else:
         raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
