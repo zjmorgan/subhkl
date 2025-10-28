@@ -60,12 +60,12 @@ def finder(
     finder_algorithm: str = "peak_local_max",
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
-    s_thresholding_noise_cutoff_quantile: float = 0.8,
-    s_thresholding_min_peak_dist_pixels: float = 8.0,
-    s_thresholding_mask_file: typing.Optional[str] = None,
-    s_thresholding_mask_rel_erosion_radius: float = 0.05,
-    s_thresholding_blur_kernel_sigma: int = 5,
-    s_thresholding_open_kernel_size_pixels: int = 3,
+    thresholding_noise_cutoff_quantile: float = 0.8,
+    thresholding_min_peak_dist_pixels: float = 8.0,
+    thresholding_mask_file: typing.Optional[str] = None,
+    thresholding_mask_rel_erosion_radius: float = 0.05,
+    thresholding_blur_kernel_sigma: int = 5,
+    thresholding_open_kernel_size_pixels: int = 3,
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
     region_growth_distance_threshold: float = 1.5,
@@ -98,12 +98,12 @@ def finder(
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
     elif finder_algorithm == "thresholding":
         peak_kwargs.update({
-            "noise_cutoff_quantile": s_thresholding_noise_cutoff_quantile,
-            "min_peak_dist_pixels": s_thresholding_min_peak_dist_pixels,
-            "mask_file": s_thresholding_mask_file,
-            "mask_rel_erosion_radius": s_thresholding_mask_rel_erosion_radius,
-            "blur_kernel_sigma": s_thresholding_blur_kernel_sigma,
-            "open_kernel_size_pixels": s_thresholding_open_kernel_size_pixels,
+            "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
+            "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
+            "mask_file": thresholding_mask_file,
+            "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
+            "blur_kernel_sigma": thresholding_blur_kernel_sigma,
+            "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
         })
     else:
         raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
