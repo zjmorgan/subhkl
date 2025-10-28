@@ -36,7 +36,14 @@ class Peaks:
         ----------
         filename : str
             Filename of detector image.
-
+        goniometer_axes : list[list[float]]
+            Optional axes of the goniometer specified in the same manner as
+            Mantid `SetGoniometer`. See also notes in
+            `subhkl.config.goniometer.py`. If either this or goniometer_angles
+            is not specified, the goniometer rotation will be loaded from the
+            file, if possible, and will be set to the identity otherwise.
+        goniometer_angles : list[float]
+            Optional angles of the goniometer in degrees about the given axes.
         """
 
         name, ext = os.path.splitext(filename)
