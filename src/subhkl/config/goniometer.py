@@ -52,6 +52,11 @@ def calc_goniometer_rotation_matrix(file, instrument):
     instrument : str
         The name of the instrument used to collect the data (from which the
         Euler angle specification in `reduction_settings.json` is obtained)
+
+    Returns
+    -------
+    matrix : 3x3 numpy array
+        The goniometer rotation matrix
     """
     settings = reduction_settings[instrument]
     das_logs = file["entry/DASlogs"]

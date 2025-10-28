@@ -11,7 +11,11 @@ from PIL import Image
 import skimage.feature
 import scipy.optimize
 
-from subhkl.config import beamlines, reduction_settings
+from subhkl.config import (
+    beamlines,
+    reduction_settings,
+    calc_goniometer_rotation_matrix
+)
 
 
 class Peaks:
@@ -35,6 +39,8 @@ class Peaks:
         name, ext = os.path.splitext(filename)
 
         self.instrument = instrument
+        # Use identity if goniometer matrix cannot otherwise be loaded
+        self.goniometer_rotation = np.eye(3)
         self.wavelength_min = None
         self.wavelength_max = None
 
@@ -44,7 +50,7 @@ class Peaks:
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
-
+            self.goniometer_rotation = self.get_goniometer_from_nexus(filename, instrument)
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
             self.wavelength_min, self.wavelength_max = (
@@ -68,6 +74,26 @@ class Peaks:
         settings = reduction_settings[self.instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
+
+    def get_goniometer_from_nexus(self, filename: str, instrument: str) -> npt.NDArray:
+        """
+        Get goniometer rotation matrix from nexus file
+
+        Parameters
+        ----------
+        filename : str
+            Nexus filename
+        instrument : str
+            Name of the instrument
+
+        Returns
+        -------
+        matrix : 3x3 numpy array
+            The goniometer rotation matrix calculated from the angles in the
+            nexus file
+        """
+        with File(filename) as f:
+            return calc_goniometer_rotation_matrix(f, instrument)
 
     def load_nexus(self, filename: str) -> dict[npt.NDArray]:
         """
@@ -724,3 +750,4 @@ class Peaks:
             f["rotations"] = rotations
             f["two_theta"] = two_theta
             f["azimuthal"] = phi
+            f["goniometer_rotation"] = self.goniometer_rotation
