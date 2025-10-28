@@ -68,7 +68,7 @@ class Peaks:
                 self.get_wavelength_from_settings()
             )
             if goniometer_axes is None or goniometer_angles is None:
-                self.goniometer_rotation = self.get_goniometer_from_nexus(filename, instrument)
+                self.goniometer_rotation = self.get_goniometer_from_nexus(filename)
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
             self.wavelength_min, self.wavelength_max = (
@@ -93,7 +93,7 @@ class Peaks:
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
 
-    def get_goniometer_from_nexus(self, filename: str, instrument: str) -> npt.NDArray:
+    def get_goniometer_from_nexus(self, filename: str) -> npt.NDArray:
         """
         Get goniometer rotation matrix from nexus file
 
@@ -101,8 +101,6 @@ class Peaks:
         ----------
         filename : str
             Nexus filename
-        instrument : str
-            Name of the instrument
 
         Returns
         -------
@@ -110,7 +108,7 @@ class Peaks:
             The goniometer rotation matrix calculated from the angles in the
             nexus file
         """
-        axes, angles = get_rotation_data_from_nexus(filename, instrument)
+        axes, angles = get_rotation_data_from_nexus(filename, self.instrument)
         return calc_goniometer_rotation_matrix(axes, angles)
 
     def load_nexus(self, filename: str) -> dict[npt.NDArray]:
