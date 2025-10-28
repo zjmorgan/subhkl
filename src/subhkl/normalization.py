@@ -46,6 +46,10 @@ def lorentz_correction(wavelength, in_plane_angle):
     
     numerator = wavelength ** 4
     denominator = sin(in_plane_angle) ** 2
-    denominator = 2 * denominator
-    return numerator / denominator
+    denominator = 2.0 * denominator
+    
+    # Return 0 as a default value to avoid divide by zero
+    if not denominator == 0: 
+        return numerator / denominator
+    return 0
     
