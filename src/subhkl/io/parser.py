@@ -1,6 +1,7 @@
 import typing
 import h5py
 import numpy as np
+import subhkl.normalization as normalization
 import typer
 import uuid
 
@@ -191,6 +192,27 @@ def indexer_using_file(
     num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
 ):
     index(num_procs, hdf5_peaks_filename, output_peaks_filename)
+
+@app.command()
+def normalize(
+        hdf5_peaks_filename: str, output_peaks_filename: str
+    ):
+    
+    # Open the input filename
+    with h5py.File(hdf5_peaks_filename, "r") as f:
+        rows = f["key"]
+        
+        # Perform each normalization for each peak
+        for row in rows:
+            row["normalization/lorentz"] = normalization.lorentz(row["peaks/lambda"], row["peaks/theta"])
+            row["normalization/absorption"] = normalization.asorption(row["peaks/lambda"])
+            row["normalization/detecter_efficiency"] = normalization.detecter_efficiency(row["peaks/theta"])
+            row["normalization/extinction"] = normalization.extinction(row["peaks/lambda"])
+            
+        # Save a copy of the result
+        with h5py.File(output_peaks_filename, "w") as o:
+            for key in f:
+                o[key] = f[key]
 
 
 if __name__ == "__main__":
