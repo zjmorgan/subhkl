@@ -1,10 +1,10 @@
 import typing
 import h5py
 import numpy as np
-import subhkl.normalization as normalization
 import typer
 import uuid
 
+from subhkl import normalization
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
@@ -193,6 +193,7 @@ def indexer_using_file(
 ):
     index(num_procs, hdf5_peaks_filename, output_peaks_filename)
 
+
 @app.command()
 def normalize(
         hdf5_peaks_filename: str, output_peaks_filename: str
@@ -200,19 +201,21 @@ def normalize(
     
     # Open the input filename
     with h5py.File(hdf5_peaks_filename, "r") as f:
-        rows = f["key"]
-        
-        # Perform each normalization for each peak
-        for row in rows:
-            row["normalization/lorentz"] = normalization.lorentz(row["peaks/lambda"], row["peaks/theta"])
-            row["normalization/absorption"] = normalization.asorption(row["peaks/lambda"])
-            row["normalization/detecter_efficiency"] = normalization.detecter_efficiency(row["peaks/theta"])
-            row["normalization/extinction"] = normalization.extinction(row["peaks/lambda"])
-            
+        theta = np.array(f["peaks/scattering"]) / 2.0
+        lamda = np.array(f["peaks/lambda"])
+        detector_efficiency = normalization.detector_efficiency(lamda)
+        absorption = normalization.absorption(lamda)
+        extinction = normalization.extinction(lamda)
+        lorentz = normalization.lorentz_correction(lamda, theta)
+        full = detector_efficiency * extinction * absorption * lorentz
+
         # Save a copy of the result
         with h5py.File(output_peaks_filename, "w") as o:
             for key in f:
                 o[key] = f[key]
+
+            o["peaks/structure_factors"] = f["peaks/intensity"] / full
+            o["peaks/structure_factors_sigma"] = f["peaks/sigma"] / full
 
 
 if __name__ == "__main__":
