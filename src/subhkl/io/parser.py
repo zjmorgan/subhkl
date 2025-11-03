@@ -140,7 +140,6 @@ def finder(
 def indexer(
     num_procs: int,
     peaks_h5_filename: str,
-    goniometer_csv_filename: str,
     output_peaks_filename: str,
     a: float,
     b: float,
@@ -151,6 +150,7 @@ def indexer(
     wavelength_min: float,
     wavelength_max: float,
     sample_centering: str,
+    goniometer_csv_filename: typing.Optional[str] = None,
 ) -> None:
     # Load peaks h5 file
     with h5py.File(peaks_h5_filename) as f:
@@ -158,9 +158,13 @@ def indexer(
         az_phi = np.array(f["azimuthal"])
         intensity = np.array(f["intensity"])
         sigma = np.array(f["sigma"])
+        goniometer_rotation = np.array(f["goniometer_rotation"])
 
-    # Read in goniometer from CSV filename
-    R = np.loadtxt(goniometer_csv_filename, delimiter=",")
+    # Read in goniometer from CSV filename, if given
+    if goniometer_csv_filename is not None:
+        R = np.loadtxt(goniometer_csv_filename, delimiter=",")
+    else:
+        R = goniometer_rotation
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
