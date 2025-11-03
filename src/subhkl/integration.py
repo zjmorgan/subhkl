@@ -12,7 +12,12 @@ from PIL import Image
 import skimage.feature
 import scipy.optimize
 
-from subhkl.config import beamlines, reduction_settings
+from subhkl.config import (
+    beamlines,
+    reduction_settings,
+    calc_goniometer_rotation_matrix,
+    get_rotation_data_from_nexus,
+)
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 
@@ -35,6 +40,8 @@ class Peaks:
         self,
         filename: str,
         instrument: str,
+        goniometer_axes: typing.Optional[list[list[float]]] = None,
+        goniometer_angles: typing.Optional[list[float]] = None,
         wavelength_min: typing.Optional[float] = None,
         wavelength_max: typing.Optional[float] = None,
     ):
@@ -45,12 +52,28 @@ class Peaks:
         ----------
         filename : str
             Filename of detector image.
-
+        goniometer_axes : list[list[float]]
+            Optional axes of the goniometer specified in the same manner as
+            Mantid `SetGoniometer`. See also notes in
+            `subhkl.config.goniometer.py`. If either this or goniometer_angles
+            is not specified, the goniometer rotation will be loaded from the
+            file, if possible, and will be set to the identity otherwise.
+        goniometer_angles : list[float]
+            Optional angles of the goniometer in degrees about the given axes.
         """
 
         name, ext = os.path.splitext(filename)
 
         self.instrument = instrument
+
+        if goniometer_axes is not None and goniometer_angles is not None:
+            self.goniometer_rotation = calc_goniometer_rotation_matrix(
+                goniometer_axes, goniometer_angles
+            )
+        else:
+            # Use identity if goniometer matrix cannot otherwise be loaded
+            self.goniometer_rotation = np.eye(3)
+
         self.wavelength_min = None
         self.wavelength_max = None
 
@@ -60,7 +83,8 @@ class Peaks:
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
-
+            if goniometer_axes is None or goniometer_angles is None:
+                self.goniometer_rotation = self.get_goniometer_from_nexus(filename)
         else:
             self.ims = {0: np.array(Image.open(filename))}
             self.wavelength_min, self.wavelength_max = (
@@ -82,6 +106,24 @@ class Peaks:
         settings = reduction_settings[self.instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
+
+    def get_goniometer_from_nexus(self, filename: str) -> npt.NDArray:
+        """
+        Get goniometer rotation matrix from nexus file
+
+        Parameters
+        ----------
+        filename : str
+            Nexus filename
+
+        Returns
+        -------
+        matrix : 3x3 numpy array
+            The goniometer rotation matrix calculated from the angles in the
+            nexus file
+        """
+        axes, angles = get_rotation_data_from_nexus(filename, self.instrument)
+        return calc_goniometer_rotation_matrix(axes, angles)
 
     def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
         """
@@ -912,3 +954,4 @@ class Peaks:
             f["azimuthal"] = az_phi
             f["intensity"] = intensity
             f["sigma"] = sigma
+            f["goniometer_rotation"] = self.goniometer_rotation
