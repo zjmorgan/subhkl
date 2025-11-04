@@ -5,6 +5,7 @@ import typer
 import uuid
 
 from subhkl import normalization
+from subhkl.export import ConcatenateMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
@@ -33,24 +34,39 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
     U = opt.orientation_U(*opt.x)
 
     # Copy data from temporary HDF5
+    copy_keys = [
+        "sample/a",
+        "sample/b",
+        "sample/c",
+        "sample/alpha",
+        "sample/beta",
+        "sample/gamma",
+        "sample/centering",
+        "instrument/wavelength",
+        "goniometer/R",
+        "peaks/intensity",
+        "peaks/sigma",
+        "peaks/scattering",
+        "peaks/azimuthal",
+    ]
+
+    copied_data = {}
+
     with h5py.File(hdf5_peaks_filename) as f:
-        intensity = np.array(f["peaks/intensity"])
-        sigma = np.array(f["peaks/sigma"])
-        two_theta = np.array(f["peaks/scattering"])
-        az_phi = np.array(f["peaks/azimuthal"])
+        for key in copy_keys:
+            copied_data[key] = np.array(f[key])
 
     # Save output to HDF5 file
     with h5py.File(output_peaks_filename, "w") as f:
+        for key, value in copied_data.items():
+            f[key] = value
+
         f["sample/B"] = B
         f["sample/U"] = U
         f["peaks/h"] = h
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
-        f["peaks/intensity"] = intensity
-        f["peaks/sigma"] = sigma
-        f["peaks/scattering"] = two_theta
-        f["peaks/azimuthal"] = az_phi
 
 
 @app.command()
@@ -195,10 +211,9 @@ def indexer_using_file(
 
 
 @app.command()
-def normalize(
-        hdf5_peaks_filename: str, output_peaks_filename: str
-    ):
-    
+def normalizer(
+    hdf5_peaks_filename: str, output_peaks_filename: str
+):
     # Open the input filename
     with h5py.File(hdf5_peaks_filename, "r") as f:
         theta = np.array(f["peaks/scattering"]) / 2.0
@@ -209,13 +224,40 @@ def normalize(
         lorentz = normalization.lorentz_correction(lamda, theta)
         full = detector_efficiency * extinction * absorption * lorentz
 
-        # Save a copy of the result
+        # Save the result
         with h5py.File(output_peaks_filename, "w") as o:
-            for key in f:
-                o[key] = f[key]
+            for key in f.keys():
+                f.copy(f[key], o, key)
 
             o["peaks/structure_factors"] = f["peaks/intensity"] / full
             o["peaks/structure_factors_sigma"] = f["peaks/sigma"] / full
+
+
+@app.command()
+def merger(
+    indexed_h5_txt_list_filename: str,
+    output_filename: str,
+    method: str = "concatenate"
+):
+    with open(indexed_h5_txt_list_filename) as f:
+        indexed_h5_files = f.read().splitlines()
+
+    if method.lower() == "concatenate":
+        merging_algorithm = ConcatenateMerger(indexed_h5_files)
+    else:
+        raise ValueError("Invalid merging method")
+
+    merging_algorithm.merge(output_filename)
+
+
+@app.command()
+def mtz_exporter(
+    indexed_h5_filename: str,
+    output_mtz_filename: str,
+    space_group: str
+):
+    algorithm = MTZExporter(indexed_h5_filename, space_group)
+    algorithm.write_mtz(output_mtz_filename)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,8 @@ dependencies = [
     "pyswarms",
     "scikit-image>=0.23.2",
     "typer>=0.12.3",
-    "opencv-python>=4.11.0"
+    "opencv-python>=4.11.0",
+    "gemmi>=0.7.3"
 ]
 license = { text = "GPL3.0" }
 

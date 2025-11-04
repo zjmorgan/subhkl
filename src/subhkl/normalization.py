@@ -12,12 +12,12 @@ def absorption(wavelength):
     """
     return 1
 
-def detector_efficiency(in_plane_angle):
+def detector_efficiency(wavelength):
     """
     Calculate detector efficiency
     
     Args:
-        in_plane_angle Float in_plane_angle of the peak
+        wavelength Float wavelength of the peak
     Returns:
         The detector_efficiency as a float
     """
