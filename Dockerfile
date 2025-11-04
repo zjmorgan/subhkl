@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 ENV PATH="/root/.local/bin:$PATH"
 
 RUN apt update \
-    && apt install -y curl git make \
+    && apt install -y curl git make ffmpeg libsm6 libxext6 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -sSL https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py | python -
 
@@ -26,8 +26,8 @@ RUN pdm sync --dev -G:all
 
 RUN pdm build
 
-FROM python:3.10-slim as tool
+#FROM python:3.10-slim as tool
 
-COPY --from=build /build/dist/subhkl-*-py3-none-any.whl .
-RUN python -m pip install "$(find . -maxdepth 1 -name *.whl)"
+#COPY --from=build /build/dist/subhkl-*-py3-none-any.whl .
+#RUN python -m pip install "$(find . -maxdepth 1 -name *.whl)"
 

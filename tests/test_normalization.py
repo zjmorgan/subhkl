@@ -2,7 +2,7 @@ import h5py
 import os
 import pytest
 
-from subhkl.io.parser import normalize
+from subhkl.io.parser import normalize, normalize_intensities
 from subhkl.normalization import lorentz_correction
 
 directory = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +27,7 @@ def test_parser():
     '''
     
     # Normalize the h5 file
-    infile = os.path.join(directory, "5vnq_mandi.h5")
+    infile = os.path.join(directory, "data/5vnq_mandi.h5")
     normalize(infile, "out_test_parser.h5")
     
     # Check that the output file has normalization data
@@ -39,4 +39,24 @@ def test_parser():
     # Delete test file
     os.unlink("out_test_parser.h5")
     
+def test_parser_intensities():
+    '''
+    Test the parser normalization command.
+    '''
+    
+    # Normalize the h5 file
+    raw_file = os.path.join(directory, "data/MANDI_12937.nxs.h5")
+    infile = os.path.join(directory, "data/5vnq_mandi.h5")
+    normalize_intensities(raw_file, infile, "out_test_parser.h5", "MANDI")
+    
+    # Check that the output file has normalization data
+    with h5py.File("out_test_parser.h5") as f:
+    
+        # Each row should have normalization data
+        assert len(f["peaks"]["lambda"]) == len(f["peaks"]["normalization"]["lorentz"])
+    
+    # Delete test file
+    os.unlink("out_test_parser.h5")
+    
+
     

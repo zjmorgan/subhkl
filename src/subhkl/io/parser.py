@@ -5,6 +5,7 @@ import subhkl.normalization as normalization
 import typer
 import uuid
 
+from subhkl.config import reduction_settings
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
@@ -234,7 +235,45 @@ def normalize(
             output["peaks"]["normalization"]["detecter_efficiency"] = detector_efficiency
             output["peaks"]["normalization"]["extinction"] = extinction
         
-
+def normalize_intensities(raw_peaks_filename: str, hdf5_peaks_filename: str, output_peaks_filename: str, beamline: str):
+    '''
+    Create a copy of the input file, with each normalization value (from the normalization module) added to each row.
+    
+    Args:
+        raw_peaks_filename: String path for the raw input file
+        hdf5_peaks_filename: String path for the post-integration input file to calculate normalizations
+        output_peaks_file: String path for the output file location to write to.
+        beamline: The beamline name the file was generated with, in the same format as found in reduction_settings.json
+    '''    
+    
+    # Get the path to the scaling value for this beamline
+    scale_path = reduction_settings[beamline]["Scale"].split(".")
+    
+    with h5py.File(raw_peaks_filename, "r") as raw:
+        
+        # Seek out the scaling value at the path from the config    
+        scale_obj = raw
+        
+        for segment in scale_path:
+            if not segment == "metadata":
+                scale_obj = scale_obj[segment]
+            
+        # Read the numeric value
+        scale_value = scale_obj.astype('float32')
+    
+    with h5py.File(hdf5_peaks_filename, "r") as original:
+        with h5py.File(output_peaks_filename, "w") as output:
+            
+            # Copy all data to the output file
+            for h5obj in original.keys():
+                original.copy(h5obj, output)
+            
+            # For each peak, scale down the hkl and uncertaintity values by the above factor
+            for i in range(len(output["peaks"]["h"])):
+                
+                # TODO Confirm that these are the paths where intensity/uncertainty will be written
+                output["peaks"]["intensity"][i] = float(output["peaks"]["intensity"][i]) / scale_value
+                output["peaks"]["sigma"][i] = float(output["peaks"]["sigma"][i]) / scale_value
 
 if __name__ == "__main__":
     app()
