@@ -162,22 +162,47 @@ def indexer_using_file(
 def normalize(
         hdf5_peaks_filename: str, output_peaks_filename: str
     ):
+    '''
+    Create a copy of the input file, with each normalization value (from the normalization module) added to each row.
     
-    # Open the input filename
-    with h5py.File(hdf5_peaks_filename, "r") as f:
-        rows = f["key"]
-        
-        # Perform each normalization for each peak
-        for row in rows:
-            row["normalization/lorentz"] = normalization.lorentz(row["peaks/lambda"], row["peaks/theta"])
-            row["normalization/absorption"] = normalization.asorption(row["peaks/lambda"])
-            row["normalization/detecter_efficiency"] = normalization.detecter_efficiency(row["peaks/theta"])
-            row["normalization/extinction"] = normalization.extinction(row["peaks/lambda"])
+    Args:
+        hdf5_peaks_filename: String path for the input file to calculate normalizations
+        output_peaks_file: String path for the output file location to write to.
+    '''
+    
+    with h5py.File(hdf5_peaks_filename, "r") as original:
+        with h5py.File(output_peaks_filename, "w") as output:
             
-        # Save a copy of the result
-        with h5py.File(output_peaks_filename, "w") as o:
-            for key in f:
-                o[key] = f[key]
+            # Copy all data to the output file
+            for h5obj in original.keys():
+                original.copy(h5obj, output)
+            
+            # Lists of each normalization type's values per row
+            lorentz = []
+            absorption = []
+            detector_efficiency = []
+            extinction = []
+            
+            # Calculate normalization for each row
+            for i in range(len(output["peaks"]["lambda"])):
+                
+                # Get the lambda and theta values for each row
+                lambda_value = output["peaks"]["lambda"][i]
+                theta = output["peaks"]["scattering"][i] / 2.0
+                
+                # Add each normalization to the list
+                lorentz.append(normalization.lorentz_correction(lambda_value, theta))
+                absorption.append(normalization.absorption(lambda_value))
+                detector_efficiency.append(normalization.detector_efficiency(theta))
+                extinction.append(normalization.extinction(lambda_value))
+                
+            # Write final data to new normalization group
+            output["peaks"].create_group("normalization")
+            output["peaks"]["normalization"]["lorentz"] = lorentz
+            output["peaks"]["normalization"]["absorption"] = absorption
+            output["peaks"]["normalization"]["detecter_efficiency"] = detector_efficiency
+            output["peaks"]["normalization"]["extinction"] = extinction
+        
 
 
 if __name__ == "__main__":

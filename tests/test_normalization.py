@@ -1,3 +1,4 @@
+import h5py
 import os
 import pytest
 
@@ -25,7 +26,17 @@ def test_parser():
     Test the parser normalization command.
     '''
     
+    # Normalize the h5 file
     infile = os.path.join(directory, "5vnq_mandi.h5")
-    normalize(infile, "out.h5")
+    normalize(infile, "out_test_parser.h5")
+    
+    # Check that the output file has normalization data
+    with h5py.File("out_test_parser.h5") as f:
+        
+        # Each row should have normalization data
+        assert len(f["peaks"]["lambda"]) == len(f["peaks"]["normalization"]["lorentz"])
+    
+    # Delete test file
+    os.unlink("out_test_parser.h5")
     
     
