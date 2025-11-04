@@ -59,4 +59,3 @@ def test_parser_intensities():
     os.unlink("out_test_parser.h5")
     
 
-    
