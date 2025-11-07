@@ -86,7 +86,7 @@ class Peaks:
             if goniometer_axes is None or goniometer_angles is None:
                 self.goniometer_rotation = self.get_goniometer_from_nexus(filename)
         else:
-            self.ims = {0: np.array(Image.open(filename))}
+            self.ims = {0: np.array(Image.open(filename)).T}
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
