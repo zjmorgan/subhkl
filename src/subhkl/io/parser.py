@@ -12,11 +12,18 @@ from subhkl.optimization import FindUB
 app = typer.Typer()
 
 
-def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
+def index(
+    method: str,
+    num_procs: int,
+    hdf5_peaks_filename: str,
+    output_peaks_filename: str
+):
     """
     Index the given peak file and save it.
 
     Params:
+        method: Indexing method to use, either "swarm", for the swarm-based
+            algorithm, or "de", for the differential evolution algorithm
         num_procs: Number of pyswarm threads to use in optimization.
         hdf5_peaks_filename: Path to the input hdf5 file to index
         output_peaks_filename: Path to write the output hdf file.
@@ -24,7 +31,13 @@ def index(num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str):
 
     # Index the peaks
     opt = FindUB(hdf5_peaks_filename)
-    num, hkl, lamda = opt.minimize(num_procs)
+    if method == "swarm":
+        num, hkl, lamda = opt.minimize(num_procs)
+    elif method == "de":
+        num, hkl, lamda = opt.minimize_de(num_procs)
+    else:
+        raise ValueError("Invalid indexing method")
+
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
     l_list = [i[2] for i in hkl]
@@ -123,6 +136,8 @@ def finder(
             "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
             "blur_kernel_sigma": thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
+            "show_steps": True,
+            "show_scale": "log"
         })
     else:
         raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
@@ -157,6 +172,7 @@ def finder(
 
 @app.command()
 def indexer(
+    method: str,
     num_procs: int,
     peaks_h5_filename: str,
     output_peaks_filename: str,
@@ -202,7 +218,7 @@ def indexer(
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
 
-    index(num_procs, unique_filename, output_peaks_filename)
+    index(method, num_procs, unique_filename, output_peaks_filename)
 
 
 @app.command()
@@ -210,6 +226,51 @@ def indexer_using_file(
     num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
 ):
     index(num_procs, hdf5_peaks_filename, output_peaks_filename)
+
+
+@app.command()
+def peak_predictor(
+    filename: str,
+    instrument: str,
+    indexed_hdf5_filename: str,
+    d_min: float = 1.0,
+    create_visualizations: bool = False
+):
+    peaks = Peaks(filename, instrument, wavelength_min=1, wavelength_max=4)
+
+    with h5py.File(indexed_hdf5_filename) as f_indexed:
+        a = float(np.array(f_indexed["sample/a"]))
+        b = float(np.array(f_indexed["sample/b"]))
+        c = float(np.array(f_indexed["sample/c"]))
+        alpha = float(np.array(f_indexed["sample/alpha"]))
+        beta = float(np.array(f_indexed["sample/beta"]))
+        gamma = float(np.array(f_indexed["sample/gamma"]))
+        centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
+        U = np.array(f_indexed["sample/U"])
+        B = np.array(f_indexed["sample/B"])
+
+    UB = U @ B
+
+    peak_dict = peaks.predict_peaks(
+        a,
+        b,
+        c,
+        alpha,
+        beta,
+        gamma,
+        centering,
+        d_min,
+        UB
+    )
+
+    if create_visualizations:
+        import matplotlib.pyplot as plt
+
+        for bank, predicted_peaks in peak_dict.items():
+            plt.imshow(peaks.ims[bank], cmap="binary", norm="log")
+            plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
+            plt.title(str(bank))
+            plt.show()
 
 
 @app.command()

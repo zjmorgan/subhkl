@@ -437,7 +437,7 @@ class Peaks:
         """
         p = np.array([X, Y, Z])
 
-        detector = beamlines[self.instrument][bank]
+        detector = beamlines[self.instrument][str(bank)]
 
         m = detector["m"]
         n = detector["n"]
@@ -473,6 +473,67 @@ class Peaks:
 
         return i.astype(int), j.astype(int)
 
+    def allow_centering(self, h, k, l, centering="P"):
+        if centering == "P":
+            mask = np.full(l.shape, True, dtype=bool)
+        elif centering == "A":
+            mask = (k + l) % 2 == 0
+        elif centering == "B":
+            mask = (h + l) % 2 == 0
+        elif centering == "C":
+            mask = (h + k) % 2 == 0
+        elif centering == "I":
+            mask = (h + k + l) % 2 == 0
+        elif centering == "F":
+            mask = ((h + k) % 2 == 0) & ((h + l) % 2 == 0) & ((k + l) % 2 == 0)
+        elif centering == "R":
+            mask = (h + k + l) % 3 == 0
+        else:
+            raise ValueError("Invalid centering")
+
+        return h[mask], k[mask], l[mask]
+
+    def cartesian_matrix_metric_tensor(self, a, b, c, alpha, beta, gamma):
+        G = np.array(
+            [
+                [a ** 2, a * b * np.cos(gamma), a * c * np.cos(beta)],
+                [b * a * np.cos(gamma), b ** 2, b * c * np.cos(alpha)],
+                [c * a * np.cos(beta), c * b * np.cos(alpha), c ** 2],
+            ]
+        )
+
+        Gstar = np.linalg.inv(G)
+
+        B = scipy.linalg.cholesky(Gstar, lower=False)
+
+        return B, Gstar
+
+    def reflections(self, a, b, c, alpha, beta, gamma, centering="P", d_min=2):
+        constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
+        B, Gstar = self.cartesian_matrix_metric_tensor(*constants)
+
+        astar, bstar, cstar = np.sqrt(np.diag(Gstar))
+
+        h_max = int(np.floor(1 / d_min / astar))
+        k_max = int(np.floor(1 / d_min / bstar))
+        l_max = int(np.floor(1 / d_min / cstar))
+
+        h, k, l = np.meshgrid(
+            np.arange(-h_max, h_max + 1),
+            np.arange(-k_max, k_max + 1),
+            np.arange(-l_max, l_max + 1),
+            indexing="ij",
+        )
+
+        hkl = [h.flatten(), k.flatten(), l.flatten()]
+        h, k, l = hkl
+
+        d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+
+        mask = (d > d_min) & (d < np.inf)
+
+        return self.allow_centering(h[mask], k[mask], l[mask], centering)
+
     def reflections_mask(self, bank: int, xyz: list[float]) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Return mask  using bank number and real-space coordinates (x, y, z).
@@ -493,7 +554,7 @@ class Peaks:
         """
         x, y, z = xyz
 
-        detector = beamlines[self.instrument][bank]
+        detector = beamlines[self.instrument][str(bank)]
 
         m = detector["m"]
         n = detector["n"]
@@ -873,7 +934,7 @@ class Peaks:
 
             if visualize:
                 fig, axes = plt.subplots(1, 2)
-                axes[0].imshow(self.ims[bank], cmap="binary")
+                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
             else:
@@ -892,7 +953,7 @@ class Peaks:
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
-                axes[1].imshow(self.ims[bank], cmap="binary")
+                axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
                 for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                     print(f'SNR: {peak_in / peak_sigma}')
 
@@ -926,6 +987,49 @@ class Peaks:
                 print("Bank had 0 peaks")
 
         return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
+
+    def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
+        np.savez('test.npz', UB=UB)
+        wl_min, wl_max = wavelength
+
+        hkl = [h, k, l]
+
+        Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
+        Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
+
+        lamda = -4 * np.pi * Qz / Q ** 2
+        mask = np.logical_and(lamda > wl_min, lamda < wl_max)
+
+        Qx, Qy, Qz, Q = Qx[mask], Qy[mask], Qz[mask], Q[mask]
+
+        h, k, l, lamda = h[mask], k[mask], l[mask], lamda[mask]
+
+        tt = -2 * np.arcsin(Qz / Q)
+        az = np.arctan2(Qy, Qx)
+
+        x = np.sin(tt) * np.cos(az)
+        y = np.sin(tt) * np.sin(az)
+        z = np.cos(tt)
+
+        coords = np.vstack((x, y, z)).T
+        rounded = np.round(coords / tol).astype(int)
+
+        _, ind, mult = np.unique(rounded, axis=0, return_index=True, return_counts=True)
+
+        return [x[ind], y[ind], z[ind]], [h[ind], k[ind], l[ind]], lamda[ind], mult
+
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, centering, d_min, UB):
+        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, centering, d_min)
+        wavelength = [self.wavelength_min, self.wavelength_max]
+        xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
+        h, k, l = hkl
+
+        peak_dict = {}
+        for bank in sorted(self.ims.keys()):
+            mask, i, j = self.reflections_mask(bank, xyz)
+            peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask]]
+
+        return peak_dict
 
     # Write out the output HDF5 peaks file
     def write_hdf5(

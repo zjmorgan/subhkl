@@ -13,6 +13,146 @@ import pyswarms
 os.environ["OMP_NUM_THREADS"] = "1"
 
 
+class VectorizedObjective:
+    def __init__(self, B, kf_ki_dir, wavelength, angle, tol=0.15):
+        """
+        Parameters
+        ----------
+        B : array (3, 3)
+            B matrix
+        kf_ki_dir : array (3, M)
+            difference between incident and scattering directions for M
+            reflections
+        wavelength : array (M, 2)
+            wavelength lower and upper bounds for M reflections
+        angle
+        tol
+        """
+        self.B = B
+        self.kf_ki_dir = kf_ki_dir
+        self.angle = angle
+        self.tol = tol
+
+        wl_min = np.full(kf_ki_dir.shape[1], wavelength[0])  # (M)
+        wl_max = np.full(kf_ki_dir.shape[1], wavelength[1])  # (M)
+
+        self.lamda = np.linspace(wl_min, wl_max, 100).T
+        # (M, 100)
+
+    def indexer(self, UB):
+        """
+        Laue indexer for a given collection of :math:`UB` matrices
+
+        Parameters
+        ----------
+        UB : array, (S, 3, 3)
+            S, 3x3 sample oriented lattice matrices.
+
+        Returns
+        -------
+        err : array, (S)
+            Indexing cost for each UB
+        num : array (S)
+            Number of peaks indexed for each UB
+        hkl : array (S, M, 3)
+            Miller indices of peaks for each UB
+        lamda : array (S, M)
+            Resolved wavelength of each peak
+
+        """
+        UB_inv = np.linalg.inv(UB)
+
+        hkl_lamda = np.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
+        # (S, 3, M), M = number of reflections
+
+        hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
+        # (S, 3, M, 100)
+
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl - int_hkl  # (S, 3, M, 100)
+
+        dist = np.einsum("sij,sjmd->simd", UB, diff_hkl)
+        # (S, 3, M, 100)
+
+        dist = np.linalg.norm(dist, axis=1)  # (S, M, 100)
+        ind = np.argmin(dist, axis=2, keepdims=True)  # (S, M, 1)
+
+        err = np.take_along_axis(dist, ind, axis=2)[:, :, 0]  # (S, M)
+        lamda = np.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]
+        # (S, M)
+
+        hkl = hkl_lamda / lamda[:, None, :]  # (S, 3, M)
+
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl - int_hkl  # (S, 3, M)
+
+        mask = (np.abs(diff_hkl) < self.tol).all(axis=1)  # (S, M)
+        num = np.sum(mask, axis=1)  # (S)
+
+        return np.sum(err**2, axis=1), num, int_hkl.transpose((0, 2, 1)), lamda
+
+    def orientation_U(self, param):
+        """
+        Compute orientation matrices (U) from angles
+
+        Parameters
+        ----------
+        param : array, (3, S)
+            Rotation parameters. S = population size
+
+        Returns
+        -------
+        U : array (S, 3, 3)
+            sample orientation matrices for each set of input parameters.
+
+        """
+
+        u0, u1, u2 = param
+        theta = np.arccos(1 - 2 * u0)
+        phi = 2 * np.pi * u1
+
+        w = np.array(
+            [
+                np.sin(theta) * np.cos(phi),
+                np.sin(theta) * np.sin(phi),
+                np.cos(theta),
+            ]
+        )
+
+        omega = self.angle(u2)
+
+        U = scipy.spatial.transform.Rotation.from_rotvec((omega * w).T).as_matrix()
+
+        return U
+
+    def __call__(self, x):
+        """
+        Objective function.
+
+        Parameters
+        ----------
+        x : array (3, S)
+            Refineable parameters. S = population size
+
+        Returns
+        -------
+        neg_ind : int
+            Negative number of peaks indexed.
+
+        """
+
+        U = self.orientation_U(x)
+        if len(U.shape) == 2:
+            U = U[None]
+
+        UB = np.einsum("sij,jk->sik", U, self.B)
+        # (S, 3, 3)
+
+        error, num, hkl, lamda = self.indexer(UB)
+
+        return error
+
+
 class FindUB:
     """
     Optimizer of crystal orientation from peaks and known lattice parameters.
@@ -77,26 +217,18 @@ class FindUB:
         -------
         kf_ki_dir : list
             Difference between scattering and incident beam directions.
-        d_min : list
-            Lower limit of :math:`d`-spacing.
-        d_max : list
-            Upper limit of :math:`d`-spacing.
 
         """
 
-        wl_min, wl_max = self.wavelength
-
-        tt = np.deg2rad(self.two_theta)
-        az = np.deg2rad(self.az_phi)
+        tt = np.deg2rad(self.two_theta)  # (M)
+        az = np.deg2rad(self.az_phi)  # (M)
 
         kf_ki_dir = np.array(
             [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
-        )
+        )  # (3, M)
 
-        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
-        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
-
-        return kf_ki_dir, d_min, d_max
+        return np.einsum("ji,jm->im", self.R, kf_ki_dir)
+        # (3, M)
 
     def metric_G_tensor(self):
         """
@@ -159,7 +291,7 @@ class FindUB:
         Parameters
         ----------
         u0, u1, u2 : float
-            Rotation paramters.
+            Rotation parameters.
 
         Returns
         -------
@@ -168,7 +300,7 @@ class FindUB:
 
         """
 
-        theta = np.arccos(2 * u0 - 1)
+        theta = np.arccos(1 - 2 * u0)
         phi = 2 * np.pi * u1
         w = np.array(
             [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
@@ -364,3 +496,91 @@ class FindUB:
         UB = self.UB_matrix(U, B)
 
         return self.indexer(UB, *uls, self.wavelength)
+
+    def indexer_de(self, UB, kf_ki_dir, wavelength, tol=0.15):
+        """
+        Differential evolution algorithm Laue indexer for a given
+         :math:`UB` matrix.
+
+        Parameters
+        ----------
+        UB : 2d-array
+            3x3 sample oriented lattice matrix.
+        kf_ki_dir : array (3, M)
+            Difference between scattering and incident beam directions.
+        wavelength : list
+            Bandwidth of each reflection.
+        tol : float, optional
+            Indexing tolerance. Default is `0.15`.
+
+        Returns
+        -------
+        err : float
+            Indexing cost.
+        num : int
+            Number of peaks index.
+        hkl : list
+            Miller indices. Un-indexed are labeled [0,0,0].
+        lamda : list
+            Resolved wavelength. Unindexed are labeled inf.
+
+        """
+        wl_min = np.full(kf_ki_dir.shape[1], wavelength[0])  # (M)
+        wl_max = np.full(kf_ki_dir.shape[1], wavelength[1])  # (M)
+        x = np.linspace(0, 1, 100)
+        lamda = wl_min[:, None] + (wl_max - wl_min)[:, None] * x[None, :]
+
+        UB_inv = np.linalg.inv(UB)
+
+        hkl_lamda = np.einsum("ij,jk", UB_inv, kf_ki_dir)
+        hkl = hkl_lamda[:, :, np.newaxis] / lamda[np.newaxis, :, :]
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl - int_hkl
+
+        dist = np.einsum("ij,j...->i...", UB, diff_hkl)
+        dist = np.linalg.norm(dist, axis=0)
+
+        ind = np.argmin(dist, axis=1)
+        err = dist[np.arange(dist.shape[0]), ind]
+
+        lamda = lamda[np.arange(lamda.shape[0]), ind]
+        hkl = hkl_lamda / lamda
+        int_hkl = np.round(hkl)
+        diff_hkl = hkl - int_hkl
+
+        mask = (np.abs(diff_hkl) < tol).all(axis=0)
+        num = np.sum(mask)
+
+        return np.sum(err ** 2), num, int_hkl.T, lamda
+
+    def index_de(self):
+        kf_ki_dir = self.uncertainty_line_segements()
+
+        B = self.reciprocal_lattice_B()
+        U = self.orientation_U(*self.x)
+
+        UB = self.UB_matrix(U, B)
+
+        return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
+
+    def minimize_de(self, num_procs):
+        kf_ki_dir = self.uncertainty_line_segements()
+
+        objective = VectorizedObjective(
+            self.reciprocal_lattice_B(),
+            kf_ki_dir,
+            np.array(self.wavelength),
+            self._angle
+        )
+
+        self.x = scipy.optimize.differential_evolution(
+            objective,
+            [(0, 1), (0, 1), (0, 1)],
+            popsize=1000,
+            updating="deferred",
+            vectorized=True,
+            disp=True,
+            callback=lambda x, convergence: print(x, convergence)
+        ).x
+
+        return self.index_de()
