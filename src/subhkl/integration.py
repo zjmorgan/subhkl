@@ -171,7 +171,7 @@ class Peaks:
         return ims
 
     def harvest_peaks(
-        self, bank, max_peaks=200, min_pix=50, min_rel_intensity=0.5
+        self, bank, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Locate peak positions in pixel coordinates.
@@ -186,6 +186,10 @@ class Peaks:
             Minimum pixel distance between peaks. The default is 50.
         min_rel_intensity: float, optional
             Minimum intensity relative to maximum value. The default is 0.5
+        normalize: bool, optional
+            Whether to apply adaptive normalization to the image before
+            searching for peaks
+
 
         Returns
         -------
@@ -195,8 +199,16 @@ class Peaks:
             y-pixel coordinates (column).
 
         """
+        im = self.ims[bank]
+        if normalize:
+            blur = scipy.ndimage.gaussian_filter(im, 4)
+            div = scipy.ndimage.gaussian_filter(im, 60)
+            processed = blur / div
+        else:
+            processed = im
+
         coords = skimage.feature.peak_local_max(
-            self.ims[bank],
+            processed,
             num_peaks=max_peaks,
             min_distance=min_pix,
             threshold_rel=min_rel_intensity,

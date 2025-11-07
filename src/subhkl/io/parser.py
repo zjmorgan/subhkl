@@ -77,6 +77,7 @@ def finder(
     finder_algorithm: str = "peak_local_max",
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
+    peak_local_max_normalization: bool = False,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
     thresholding_mask_file: typing.Optional[str] = None,
@@ -113,6 +114,7 @@ def finder(
             peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
         if peak_local_max_min_relative_intensity > 0:
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
+        peak_kwargs['normalize'] = peak_local_max_normalization
     elif finder_algorithm == "thresholding":
         peak_kwargs.update({
             "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
