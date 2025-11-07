@@ -156,7 +156,7 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=True)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
@@ -233,6 +233,7 @@ def peak_predictor(
     filename: str,
     instrument: str,
     indexed_hdf5_filename: str,
+    integration_peaks_filename: str,
     d_min: float = 1.0,
     create_visualizations: bool = False
 ):
@@ -246,6 +247,8 @@ def peak_predictor(
         beta = float(np.array(f_indexed["sample/beta"]))
         gamma = float(np.array(f_indexed["sample/gamma"]))
         centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
+        wavelength = np.array(f_indexed["instrument/wavelength"])
+        R = np.array(f_indexed["goniometer/R"])
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
@@ -267,10 +270,98 @@ def peak_predictor(
         import matplotlib.pyplot as plt
 
         for bank, predicted_peaks in peak_dict.items():
-            plt.imshow(peaks.ims[bank], cmap="binary", norm="log")
-            plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
+            plt.imshow(peaks.ims[bank].T, cmap="binary", norm="log")
+            plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
             plt.title(str(bank))
             plt.show()
+
+    with h5py.File(integration_peaks_filename, "w") as f:
+        f["sample/a"] = a
+        f["sample/b"] = b
+        f["sample/c"] = c
+        f["sample/alpha"] = alpha
+        f["sample/beta"] = beta
+        f["sample/gamma"] = gamma
+        f["sample/centering"] = centering
+        f["instrument/wavelength"] = wavelength
+        f["goniometer/R"] = R
+
+        for bank, (i, j, h, k, l, wl) in peak_dict.items():
+            f[f"banks/{bank}/i"] = i
+            f[f"banks/{bank}/j"] = j
+            f[f"banks/{bank}/h"] = h
+            f[f"banks/{bank}/k"] = k
+            f[f"banks/{bank}/l"] = l
+            f[f"banks/{bank}/wavelength"] = wl
+
+
+@app.command()
+def integrator(
+    filename: str,
+    instrument: str,
+    integration_peaks_filename: str,
+    output_filename: str,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_maximum_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 30,
+    peak_minimum_signal_to_noise: float = 1.0,
+    peak_pixel_outlier_threshold: float = 2.0
+):
+    peak_dict = {}
+    with h5py.File(integration_peaks_filename) as f:
+        for bank in f["banks"].keys():
+            peak_dict[int(bank)] = [
+                np.array(f[f"banks/{bank}/i"]),
+                np.array(f[f"banks/{bank}/j"]),
+                np.array(f[f"banks/{bank}/h"]),
+                np.array(f[f"banks/{bank}/k"]),
+                np.array(f[f"banks/{bank}/l"]),
+                np.array(f[f"banks/{bank}/wavelength"])
+            ]
+
+    # Setup parameters for integration with convex hull algorithm
+    integration_params = {
+        "region_growth_distance_threshold": region_growth_distance_threshold,
+        "region_growth_minimum_intensity": region_growth_minimum_intensity,
+        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
+        "peak_center_box_size": peak_center_box_size,
+        "peak_smoothing_window_size": peak_smoothing_window_size,
+        "peak_minimum_pixels": peak_minimum_pixels,
+        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+    }
+
+    peaks = Peaks(filename, instrument)
+    result = peaks.integrate(peak_dict, integration_params)
+
+    copy_keys = [
+        "sample/a",
+        "sample/b",
+        "sample/c",
+        "sample/alpha",
+        "sample/beta",
+        "sample/gamma",
+        "sample/centering",
+        "instrument/wavelength",
+        "goniometer/R",
+    ]
+
+    with h5py.File(output_filename, "w") as f:
+        f["peaks/h"] = result.h
+        f["peaks/k"] = result.k
+        f["peaks/l"] = result.l
+        f["peaks/lambda"] = result.wavelength
+        f["peaks/intensity"] = result.intensity
+        f["peaks/sigma"] = result.sigma
+        f["peaks/scattering"] = result.tt
+        f["peaks/azimuthal"] = result.az
+
+        with h5py.File(integration_peaks_filename) as f_in:
+            for key in copy_keys:
+                f_in.copy(f_in[key], f, key)
 
 
 @app.command()
@@ -292,8 +383,8 @@ def normalizer(
             for key in f.keys():
                 f.copy(f[key], o, key)
 
-            o["peaks/structure_factors"] = f["peaks/intensity"] / full
-            o["peaks/structure_factors_sigma"] = f["peaks/sigma"] / full
+            o["peaks/intensity"] = f["peaks/intensity"] / full
+            o["peaks/sigma"] = f["peaks/sigma"] / full
 
 
 @app.command()

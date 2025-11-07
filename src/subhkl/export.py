@@ -93,9 +93,17 @@ class MTZExporter:
             self.lamda = np.array(f["peaks/lambda"])
             self.intensity = np.array(f["peaks/intensity"])
             self.sigma = np.array(f["peaks/sigma"])
-            self.f = np.array(f["peaks/structure_factors"])
-            self.f_sigma = np.array(f["peaks/structure_factors_sigma"])
-            self.runs = np.array(f["peaks/run_index"])
+            if "structure_factors" in f["peaks"].keys():
+                self.f = np.array(f["peaks/structure_factors"])
+                self.f_sigma = np.array(f["peaks/structure_factors_sigma"])
+            else:
+                self.f = None
+                self.f_sigma = None
+
+            if "run_index" in f["peaks"].keys():
+                self.runs = np.array(f["peaks/run_index"])
+            else:
+                self.runs = None
 
         self.space_group = space_group
 
@@ -112,8 +120,9 @@ class MTZExporter:
 
         mtz.add_column("I", "J")
         mtz.add_column("SIGI", "Q")
-        mtz.add_column("FP", "F")
-        mtz.add_column("SIGFP", "Q")
+        if self.f is not None:
+            mtz.add_column("FP", "F")
+            mtz.add_column("SIGFP", "Q")
         mtz.add_column("WAVEL", "W")
         mtz.add_column("BATCH", "B")
 
@@ -127,11 +136,20 @@ class MTZExporter:
                 continue
 
             intensity, sigma = self.intensity[i], self.sigma[i]
-            f, f_sigma = self.f[i], self.f_sigma[i]
             wl = self.lamda[i]
-            run = self.runs[i]
 
-            data.append([h, k, l, intensity, sigma, f, f_sigma, wl, run])
+            if self.runs is not None:
+                run = self.runs[i]
+            else:
+                run = 0
+
+            if self.f is not None:
+                f, f_sigma = self.f[i], self.f_sigma[i]
+                row = [h, k, l, intensity, sigma, f, f_sigma, wl, run]
+            else:
+                row = [h, k, l, intensity, sigma, wl, run]
+
+            data.append(row)
 
         data = np.array(data)
 

@@ -34,6 +34,20 @@ DetectorPeaks = namedtuple(
     ]
 )
 
+IntegrationResult = namedtuple(
+    "IntegrationResult",
+    [
+        "h",
+        "k",
+        "l",
+        "intensity",
+        "sigma",
+        "tt",
+        "az",
+        "wavelength"
+    ]
+)
+
 
 class Peaks:
     def __init__(
@@ -988,8 +1002,37 @@ class Peaks:
 
         return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
 
+    def integrate(self, peak_dict, integration_params):
+        integrator = PeakIntegrator.build_from_dictionary(integration_params)
+
+        h, k, l = [], [], []
+        intensity, sigma = [], []
+        tt, az = [], []
+        wavelength = []
+
+        for bank, peaks in peak_dict.items():
+            bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
+            centers = np.stack([bank_i, bank_j], axis=-1)
+            bank_tt, bank_az = self.detector_trajectories(bank, bank_i, bank_j)
+
+            int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+
+            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
+            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            keep = [peak_in is not None for peak_in in bank_intensity]
+
+            h.extend(bank_h[keep])
+            k.extend(bank_k[keep])
+            l.extend(bank_l[keep])
+            intensity.extend(bank_intensity[keep])
+            sigma.extend(bank_sigma[keep])
+            tt.extend(bank_tt[keep])
+            az.extend(bank_az[keep])
+            wavelength.extend(bank_wl[keep])
+
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength)
+
     def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
-        np.savez('test.npz', UB=UB)
         wl_min, wl_max = wavelength
 
         hkl = [h, k, l]
@@ -1027,7 +1070,7 @@ class Peaks:
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
             mask, i, j = self.reflections_mask(bank, xyz)
-            peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask]]
+            peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask], wl[mask]]
 
         return peak_dict
 
