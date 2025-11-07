@@ -95,7 +95,7 @@ class Peaks:
         if wavelength_min:
             self.wavelength_min = wavelength_min
         if wavelength_max:
-            self.wavelength_min = wavelength_max
+            self.wavelength_max = wavelength_max
 
     # TODO: implement for each instrument...
     def get_wavelength_from_nexus(self, filename: str) -> tuple[float, float]:
