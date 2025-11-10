@@ -91,6 +91,8 @@ class MTZExporter:
             self.k = np.array(f["peaks/k"])
             self.l = np.array(f["peaks/l"])
             self.lamda = np.array(f["peaks/lambda"])
+            self.theta = np.array(f["peaks/scattering"])/2
+            self.phi = np.array(f["peaks/azimuthal"])
             self.intensity = np.array(f["peaks/intensity"])
             self.sigma = np.array(f["peaks/sigma"])
             if "structure_factors" in f["peaks"].keys():
@@ -124,6 +126,8 @@ class MTZExporter:
             mtz.add_column("FP", "F")
             mtz.add_column("SIGFP", "Q")
         mtz.add_column("WAVEL", "W")
+        mtz.add_column("THETA", "W")
+        mtz.add_column("PHI", "W")
         mtz.add_column("BATCH", "B")
 
         data = []
@@ -137,6 +141,8 @@ class MTZExporter:
 
             intensity, sigma = self.intensity[i], self.sigma[i]
             wl = self.lamda[i]
+            theta = self.theta[i]
+            phi = self.phi[i]
 
             if self.runs is not None:
                 run = self.runs[i]
@@ -145,9 +151,9 @@ class MTZExporter:
 
             if self.f is not None:
                 f, f_sigma = self.f[i], self.f_sigma[i]
-                row = [h, k, l, intensity, sigma, f, f_sigma, wl, run]
+                row = [h, k, l, intensity, sigma, f, f_sigma, wl, theta, phi, run]
             else:
-                row = [h, k, l, intensity, sigma, wl, run]
+                row = [h, k, l, intensity, sigma, wl, theta, phi, run]
 
             data.append(row)
 
