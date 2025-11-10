@@ -156,7 +156,7 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=True)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
@@ -223,9 +223,9 @@ def indexer(
 
 @app.command()
 def indexer_using_file(
-    num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
+    method: str, num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
 ):
-    index(num_procs, hdf5_peaks_filename, output_peaks_filename)
+    index(method, num_procs, hdf5_peaks_filename, output_peaks_filename)
 
 
 @app.command()
@@ -252,7 +252,7 @@ def peak_predictor(
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
-    UB = U @ B
+    UB = R @ U @ B
 
     peak_dict = peaks.predict_peaks(
         a,
@@ -270,7 +270,7 @@ def peak_predictor(
         import matplotlib.pyplot as plt
 
         for bank, predicted_peaks in peak_dict.items():
-            plt.imshow(peaks.ims[bank].T, cmap="binary", norm="log")
+            plt.imshow(peaks.ims[bank].T + 1, cmap="binary", norm="log")
             plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
             plt.title(str(bank))
             plt.show()

@@ -180,7 +180,7 @@ class Peaks:
 
                     bc = np.bincount(array - offset, minlength=m * n)
 
-                    ims[bank] = bc.reshape(m, n).T
+                    ims[bank] = bc.reshape(m, n)
 
         return ims
 
