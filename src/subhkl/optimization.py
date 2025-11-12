@@ -1,47 +1,132 @@
 import os
-
+from functools import partial  # Added for static_argnames
 import h5py
-
 import numpy as np
-
 import scipy.linalg
 import scipy.spatial
 import scipy.interpolate
 
-import pyswarms
+# --- JAX and Evosax Imports ---
+import jax
+import jax.numpy as jnp
+import jax.scipy.linalg as jscipy_linalg
+# Corrected imports for DE and PSO
+from evosax.algorithms import DifferentialEvolution, PSO
+# ------------------------------
+
+# Try to import tqdm for a progress bar
+try:
+    from tqdm import trange
+except ImportError:
+    trange = None
 
 os.environ["OMP_NUM_THREADS"] = "1"
 
 
-class VectorizedObjective:
-    def __init__(self, B, kf_ki_dir, wavelength, angle, tol=0.15):
+class VectorizedObjectiveJAX:
+    """
+    JAX-compatible vectorized objective function for evosax.
+    (Replaces the numpy-based VectorizedObjective)
+    """
+    def __init__(self, B, kf_ki_dir, wavelength, angle_cdf, angle_t, tol=0.15):
         """
         Parameters
         ----------
         B : array (3, 3)
-            B matrix
+            B matrix (from reciprocal_lattice_B)
         kf_ki_dir : array (3, M)
             difference between incident and scattering directions for M
             reflections
-        wavelength : array (M, 2)
-            wavelength lower and upper bounds for M reflections
-        angle
-        tol
+        wavelength : array (2,)
+            wavelength lower and upper bounds [min, max]
+        angle_cdf : array
+            CDF values for angle interpolation (from FindUB._angle_cdf)
+        angle_t : array
+            Angle values for interpolation (from FindUB._angle_t)
+        tol : float
+            Indexing tolerance
         """
-        self.B = B
-        self.kf_ki_dir = kf_ki_dir
-        self.angle = angle
+        self.B = jnp.array(B)
+        self.kf_ki_dir = jnp.array(kf_ki_dir)
         self.tol = tol
+        self.angle_cdf = jnp.array(angle_cdf)
+        self.angle_t = jnp.array(angle_t)
 
-        wl_min = np.full(kf_ki_dir.shape[1], wavelength[0])  # (M)
-        wl_max = np.full(kf_ki_dir.shape[1], wavelength[1])  # (M)
+        # Ensure wavelength is a JAX array
+        wavelength = jnp.array(wavelength)
+        
+        wl_min = jnp.full(self.kf_ki_dir.shape[1], wavelength[0])  # (M)
+        wl_max = jnp.full(self.kf_ki_dir.shape[1], wavelength[1])  # (M)
 
-        self.lamda = np.linspace(wl_min, wl_max, 100).T
+        # Create 100 linearly spaced wavelengths for each reflection
+        self.lamda = jnp.linspace(wl_min, wl_max, 100).T
         # (M, 100)
 
-    def indexer(self, UB):
+    def orientation_U_jax(self, param):
         """
-        Laue indexer for a given collection of :math:`UB` matrices
+        Compute orientation matrices (U) from angles using JAX.
+        Implements Rodrigues' rotation formula.
+
+        Parameters
+        ----------
+        param : array, (S, 3)
+            Rotation parameters. S = population size.
+            param[:, 0] = u0
+            param[:, 1] = u1
+            param[:, 2] = u2
+
+        Returns
+        -------
+        U : array (S, 3, 3)
+            Sample orientation matrices for each set of input parameters.
+        """
+        u0, u1, u2 = param.T # (S,) each
+
+        theta = jnp.arccos(1 - 2 * u0)
+        phi = 2 * jnp.pi * u1
+
+        # Rotation axis (w)
+        w = jnp.array(
+            [
+                jnp.sin(theta) * jnp.cos(phi),
+                jnp.sin(theta) * jnp.sin(phi),
+                jnp.cos(theta),
+            ]
+        ).T # (S, 3)
+
+        # Rotation angle (omega)
+        omega = jnp.interp(u2, self.angle_cdf, self.angle_t) # (S,)
+
+        # JAX implementation of axis-angle to rotation matrix (Rodrigues' formula)
+        wx, wy, wz = w.T # (S,) each
+        c = jnp.cos(omega) # (S,)
+        s = jnp.sin(omega) # (S,)
+        t = 1.0 - c # (S,)
+
+        # Identity matrices
+        I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0) # (S, 3, 3)
+
+        # Skew-symmetric cross-product matrix K
+        K = jnp.array(
+            [
+                [jnp.zeros_like(wx), -wz, wy],
+                [wz, jnp.zeros_like(wy), -wx],
+                [-wy, wx, jnp.zeros_like(wz)]
+            ]
+        ) # (3, 3, S)
+        K = jnp.transpose(K, (2, 0, 1)) # (S, 3, 3)
+
+        # K^2
+        K2 = jnp.einsum('sij,sjk->sik', K, K) # (S, 3, 3)
+        
+        # Rodrigues' formula
+        U = I + s[:, None, None] * K + t[:, None, None] * K2 # (S, 3, 3)
+        
+        return U
+
+    def indexer_jax(self, UB):
+        """
+        JAX-compatible Laue indexer for a given collection of :math:`UB` matrices
 
         Parameters
         ----------
@@ -58,112 +143,72 @@ class VectorizedObjective:
             Miller indices of peaks for each UB
         lamda : array (S, M)
             Resolved wavelength of each peak
-
         """
-        UB_inv = np.linalg.inv(UB)
+        UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
 
-        hkl_lamda = np.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
+        hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
         # (S, 3, M), M = number of reflections
 
         hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
         # (S, 3, M, 100)
 
-        int_hkl = np.round(hkl)
+        int_hkl = jnp.round(hkl)
         diff_hkl = hkl - int_hkl  # (S, 3, M, 100)
 
-        dist = np.einsum("sij,sjmd->simd", UB, diff_hkl)
+        dist = jnp.einsum("sij,sjmd->simd", UB, diff_hkl)
         # (S, 3, M, 100)
 
-        dist = np.linalg.norm(dist, axis=1)  # (S, M, 100)
-        ind = np.argmin(dist, axis=2, keepdims=True)  # (S, M, 1)
+        dist = jnp.linalg.norm(dist, axis=1)  # (S, M, 100)
+        ind = jnp.argmin(dist, axis=2, keepdims=True)  # (S, M, 1)
 
-        err = np.take_along_axis(dist, ind, axis=2)[:, :, 0]  # (S, M)
-        lamda = np.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]
+        err = jnp.take_along_axis(dist, ind, axis=2)[:, :, 0]  # (S, M)
+        lamda = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]
         # (S, M)
 
         hkl = hkl_lamda / lamda[:, None, :]  # (S, 3, M)
 
-        int_hkl = np.round(hkl)
+        int_hkl = jnp.round(hkl)
         diff_hkl = hkl - int_hkl  # (S, 3, M)
 
-        mask = (np.abs(diff_hkl) < self.tol).all(axis=1)  # (S, M)
-        num = np.sum(mask, axis=1)  # (S)
+        mask = (jnp.abs(diff_hkl) < self.tol).all(axis=1)  # (S, M)
+        num = jnp.sum(mask, axis=1)  # (S)
 
-        return np.sum(err**2, axis=1), num, int_hkl.transpose((0, 2, 1)), lamda
+        # We minimize the sum of squared errors
+        return jnp.sum(err**2, axis=1), num, int_hkl.transpose((0, 2, 1)), lamda
 
-    def orientation_U(self, param):
-        """
-        Compute orientation matrices (U) from angles
-
-        Parameters
-        ----------
-        param : array, (3, S)
-            Rotation parameters. S = population size
-
-        Returns
-        -------
-        U : array (S, 3, 3)
-            sample orientation matrices for each set of input parameters.
-
-        """
-
-        u0, u1, u2 = param
-        theta = np.arccos(1 - 2 * u0)
-        phi = 2 * np.pi * u1
-
-        w = np.array(
-            [
-                np.sin(theta) * np.cos(phi),
-                np.sin(theta) * np.sin(phi),
-                np.cos(theta),
-            ]
-        )
-
-        omega = self.angle(u2)
-
-        U = scipy.spatial.transform.Rotation.from_rotvec((omega * w).T).as_matrix()
-
-        return U
-
+    # Use partial to make 'self' a static argument for JIT
+    @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
         """
-        Objective function.
+        JIT-compiled objective function.
 
         Parameters
         ----------
-        x : array (3, S)
+        x : array (S, 3)
             Refineable parameters. S = population size
 
         Returns
         -------
-        neg_ind : int
-            Negative number of peaks indexed.
-
+        error : array (S,)
+            Indexing error for each particle.
         """
 
-        U = self.orientation_U(x)
-        if len(U.shape) == 2:
-            U = U[None]
-
-        UB = np.einsum("sij,jk->sik", U, self.B)
+        U = self.orientation_U_jax(x) # (S, 3, 3)
+        
+        UB = jnp.einsum("sij,jk->sik", U, self.B)
         # (S, 3, 3)
 
-        error, num, hkl, lamda = self.indexer(UB)
+        error, num, hkl, lamda = self.indexer_jax(UB)
 
+        # Return the error.
+        # Clipping in the es_step function prevents NaNs.
         return error
 
 
 class FindUB:
     """
     Optimizer of crystal orientation from peaks and known lattice parameters.
-
-    Attributes
-    ----------
-    a, b, c : float
-        Lattice constants in ansgroms.
-    alpha, beta, gamma : float
-        Lattice angles in degrees.
-
+    ... (rest of class attributes) ...
     """
 
     def __init__(self, filename=None):
@@ -183,6 +228,11 @@ class FindUB:
         t = np.linspace(0, np.pi, 1024)
         cdf = (t - np.sin(t)) / np.pi
 
+        # Store data for JAX
+        self._angle_cdf = cdf
+        self._angle_t = t
+        
+        # Keep scipy interpolator for non-JAX methods
         self._angle = scipy.interpolate.interp1d(cdf, t, kind="linear")
 
     def load_peaks(self, filename):
@@ -286,7 +336,7 @@ class FindUB:
 
     def orientation_U(self, u0, u1, u2):
         """
-        The sample orientation matrix :math:`U`.
+        The sample orientation matrix :math:`U`. (Scipy/Numpy version)
 
         Parameters
         ----------
@@ -312,29 +362,8 @@ class FindUB:
 
     def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
         """
-
-        Parameters
-        ----------
-        UB : 2d-array
-            3x3 sample oriented lattice matrix.
-        kf_ki_dir : list
-            Difference between scattering and incident beam directions.
-        d_min : list
-            Lower limit of :math:`d`-spacing.
-        d_max : list
-            Upper limit of :math:`d`-spacing.
-        wavelength : list
-            Bandwidth.
-
-        Returns
-        -------
-        num : int
-            Number of peaks index.
-        hkl : list
-            Miller indices. Un-indexed are labeled [0,0,0].
-        lamda : list
-            Resolved wavelength. Unindexed are labeled inf.
-
+        (Original scipy/numpy indexer for post-optimization check)
+        ... (rest of method) ...
         """
 
         wl_min, wl_max = wavelength
@@ -398,146 +427,15 @@ class FindUB:
     def UB_matrix(self, U, B):
         """
         Calculate :math:`UB`-matrix.
-
-        Parameters
-        ----------
-        U : 2d-array
-            3x3 orientation matrix.
-        B : 2d-array
-            3x3 reciprocal lattice vectors Cartesian matrix.
-
-        Returns
-        -------
-        UB : 2d-array
-            3x3 oriented reciprocal lattice.
-
+        ... (rest of method) ...
         """
 
         return U @ B
 
-    def objective(self, x):
-        """
-        Cost function.
-
-        Parameters
-        ----------
-        x : array
-            Refineable parameters.
-
-        Returns
-        -------
-        neg_ind : int
-            Negative number of peaks indexed.
-
-        """
-
-        B = self.reciprocal_lattice_B()
-
-        kf_ki_dir = self.uncertainty_line_segements()
-
-        wavelength = self.wavelength
-
-        wl_min, wl_max = wavelength
-        tt = np.deg2rad(self.two_theta)
-        az = np.deg2rad(self.az_phi)
-
-        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
-        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
-
-        params = np.array(x)
-
-        Us = [self.orientation_U(*param) for param in params]
-        UBs = [self.UB_matrix(U, B) for U in Us]
-
-        return [
-            -self.indexer(UB, kf_ki_dir, d_min, d_max, wavelength)[0] / len(d_min) * 100
-            for UB in UBs
-        ]
-
-    def minimize(self, n_proc=-1):
-        """
-        Fit the orientation and other parameters.
-
-        Parameters
-        ----------
-        n_proc : int, optional
-            Number of processes to use. The default is -1.
-
-        Returns
-        -------
-        num : int
-            Number of peaks index.
-        hkl : list
-            Miller indices. Un-indexed are labeled [0,0,0].
-        lamda : list
-            Resolved wavelength. Un-indexed are labeled inf.
-
-        """
-
-        bounds = ([0, 0, 0], [1, 1, 1])
-        options = {"c1": 0.5, "c2": 0.5, "w": 0.5}
-
-        optimizer = pyswarms.single.GlobalBestPSO(
-            n_particles=3000, dimensions=3, options=options, bounds=bounds
-        )
-
-        n_ind, self.x = optimizer.optimize(
-            self.objective, n_processes=n_proc, iters=100
-        )
-
-        print(-n_ind)
-
-        # bounds = [slice(0, 1, 1/180),
-        #           slice(0, 1, 1/180),
-        #           slice(0, 0.5, 1/180)]
-
-        # self.x = scipy.optimize.brute(self.objective,
-        #                               ranges=bounds,
-        #                               workers=n_proc)
-
-        B = self.reciprocal_lattice_B()
-        uls = self.uncertainty_line_segements()
-
-        U = self.orientation_U(*self.x)
-
-        UB = self.UB_matrix(U, B)
-
-        wl_min, wl_max = self.wavelength
-        tt = np.deg2rad(self.two_theta)
-        az = np.deg2rad(self.az_phi)
-
-        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
-        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
-
-        return self.indexer(UB, uls, d_min, d_max, self.wavelength)
-
     def indexer_de(self, UB, kf_ki_dir, wavelength, tol=0.15):
         """
-        Differential evolution algorithm Laue indexer for a given
-         :math:`UB` matrix.
-
-        Parameters
-        ----------
-        UB : 2d-array
-            3x3 sample oriented lattice matrix.
-        kf_ki_dir : array (3, M)
-            Difference between scattering and incident beam directions.
-        wavelength : list
-            Bandwidth of each reflection.
-        tol : float, optional
-            Indexing tolerance. Default is `0.15`.
-
-        Returns
-        -------
-        err : float
-            Indexing cost.
-        num : int
-            Number of peaks index.
-        hkl : list
-            Miller indices. Un-indexed are labeled [0,0,0].
-        lamda : list
-            Resolved wavelength. Unindexed are labeled inf.
-
+        (Original numpy-based indexer for post-optimization)
+        ... (rest of method) ...
         """
         wl_min = np.full(kf_ki_dir.shape[1], wavelength[0])  # (M)
         wl_max = np.full(kf_ki_dir.shape[1], wavelength[1])  # (M)
@@ -568,33 +466,166 @@ class FindUB:
         return np.sum(err ** 2), num, int_hkl.T, lamda
 
     def index_de(self):
+        """
+        Run indexing using the best parameters (self.x) found by a minimizer.
+        Uses the original numpy-based indexer_de.
+        """
         kf_ki_dir = self.uncertainty_line_segements()
 
         B = self.reciprocal_lattice_B()
+        
+        # self.x should be (3,) numpy array
+        if not isinstance(self.x, np.ndarray):
+            self.x = np.array(self.x) 
+            
         U = self.orientation_U(*self.x)
 
         UB = self.UB_matrix(U, B)
 
         return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
 
-    def minimize_de(self, num_procs):
+    def minimize_evosax(
+        self, 
+        strategy_name: str, 
+        population_size: int = 1000, 
+        num_generations: int = 100, 
+        n_runs: int = 1, 
+        seed: int = 0
+    ):
+        """
+        Minimize the objective function using evosax JAX-based algorithms.
+        This replaces both the pyswarms (minimize) and scipy.DE (minimize_de) methods.
+        
+        It runs the optimization `n_runs` times with different seeds and
+        selects the best solution.
+
+        Parameters
+        ----------
+        strategy_name : str
+            Name of the evosax strategy to use (e.g., 'DE' or 'PSO').
+        population_size : int
+            Population size for the strategy.
+        num_generations : int
+            Number of generations to run the optimization.
+        n_runs : int
+            Number of times to run the minimization with different seeds.
+        seed : int
+            Base seed for the random number generator.
+
+        Returns
+        -------
+        (num, hkl, lamda)
+            Tuple containing results from index_de().
+        """
+        
         kf_ki_dir = self.uncertainty_line_segements()
 
-        objective = VectorizedObjective(
+        # 1. Instantiate the JAX-compatible objective function
+        objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             kf_ki_dir,
-            np.array(self.wavelength),
-            self._angle
+            np.array(self.wavelength), # Pass wavelength bounds
+            self._angle_cdf,           # Pass interpolation data
+            self._angle_t,             # Pass interpolation data
         )
 
-        self.x = scipy.optimize.differential_evolution(
-            objective,
-            [(0, 1), (0, 1), (0, 1)],
-            popsize=1000,
-            updating="deferred",
-            vectorized=True,
-            disp=True,
-            callback=lambda x, convergence: print(x, convergence)
-        ).x
+        # Define the sample solution (shape (3,)) to infer num_dims
+        sample_solution = jnp.zeros(3)
 
+        # 2. Initialize strategy
+        # clip_min/clip_max removed from constructor
+        if strategy_name.lower() == "de":
+            strategy = DifferentialEvolution(
+                solution=sample_solution,
+                population_size=population_size
+            )
+            print("Using Differential Evolution (DE) strategy.")
+        elif strategy_name.lower() == "pso":
+            strategy = PSO(
+                solution=sample_solution,
+                population_size=population_size
+            )
+            print("Using Particle Swarm Optimization (PSO) strategy.")
+        else:
+            raise ValueError(f"Unknown strategy: {strategy_name}. Choose 'DE' or 'PSO'.")
+
+        
+        # 3. Get default strategy parameters
+        params = strategy.default_params
+        
+        # 4. Define the JIT-compiled step function
+        @jax.jit
+        def es_step(rng, state, params):
+            rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+            
+            # Ask for new population
+            population, state = strategy.ask(rng_ask, state, params)
+            
+            # --- Manually clip the population to [0, 1] ---
+            population_clipped = jnp.clip(population, 0.0, 1.0)
+            
+            # Evaluate the *clipped* population
+            fitness = objective(population_clipped)
+            
+            # Tell strategy the results using the *clipped* population
+            state, metrics = strategy.tell(
+                rng_tell, population_clipped, fitness, state, params
+            )
+            return rng, state, metrics
+
+        # 5. Run the optimization loop N times
+        best_overall_fitness = jnp.inf
+        best_overall_member = None
+        
+        for i in range(n_runs):
+            run_seed = seed + i
+            print(f"\n--- Starting Run {i+1}/{n_runs} (Seed: {run_seed}) ---")
+            
+            # 6. Initialize strategy state for this run
+            rng = jax.random.PRNGKey(run_seed)
+            
+            # Create initial population and fitness
+            rng, rng_pop, rng_init = jax.random.split(rng, 3)
+            # Population is (popsize, 3) random numbers [0, 1]
+            population_init = jax.random.uniform(rng_pop, (population_size, 3))
+            
+            # Evaluate the initial population
+            fitness_init = objective(population_init)
+            
+            # Initialize state using .init()
+            state = strategy.init(rng_init, population_init, fitness_init, params) 
+            
+            pbar = range(num_generations)
+            if trange is not None:
+                pbar = trange(num_generations, desc=f"Run {i+1}/{n_runs}")
+
+            for gen in pbar:
+                # Run one step
+                rng, state, metrics = es_step(rng, state, params)
+                
+                # Update progress bar description
+                if trange is not None:
+                    pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best Fitness: {metrics['best_fitness']:.4f}")
+            
+            # --- Correctly get best member and fitness ---
+            # Access the attributes from the *final state*
+            current_run_fitness = state.best_fitness
+            current_run_member = state.best_solution
+            print(f"Run {i+1} finished. Best fitness: {current_run_fitness:.4f}")
+            
+            # 8. Check if this run is the best so far
+            if current_run_fitness < best_overall_fitness:
+                best_overall_fitness = current_run_fitness
+                best_overall_member = current_run_member # This is now the jax array
+                print(f"!!! New best solution found in Run {i+1} !!!")
+
+        # 9. Get the best parameters from all runs
+        print(f"\n--- All {n_runs} runs complete ---")
+        print(f"Best overall fitness: {best_overall_fitness:.4f}")
+        print(f"Best parameters (u0, u1, u2): {best_overall_member}")
+        
+        # Store the best parameters (converting back to numpy)
+        self.x = np.array(best_overall_member)
+        
+        # 10. Return results by running the numpy-based indexer on the best params
         return self.index_de()
