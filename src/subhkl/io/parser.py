@@ -15,8 +15,12 @@ app = typer.Typer()
 def index(
     method: str,
     num_procs: int,
+    num_attempts: int,
+    required_success_rate: float,
     hdf5_peaks_filename: str,
-    output_peaks_filename: str
+    output_peaks_filename: str,
+    show_progress: bool = False,
+    seed: typing.Optional[int] = None
 ):
     """
     Index the given peak file and save it.
@@ -34,10 +38,18 @@ def index(
     if method == "swarm":
         num, hkl, lamda = opt.minimize(num_procs)
     elif method == "de":
-        num, hkl, lamda = opt.minimize_de(num_procs)
+        num, hkl, lamda = opt.minimize_de(
+            num_procs,
+            num_attempts=num_attempts,
+            required_success_rate=required_success_rate, 
+            show_progress=show_progress,
+            seed=seed
+        )
     else:
         raise ValueError("Invalid indexing method")
-
+    
+    print(f"Indexed {int(num)} peaks out of {len(hkl)} ({100*num/len(hkl):.02f}%)")
+    
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
     l_list = [i[2] for i in hkl]
@@ -88,6 +100,7 @@ def finder(
     instrument: str,
     output_filename: str = "output.h5",
     finder_algorithm: str = "peak_local_max",
+    show_progress: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -136,7 +149,7 @@ def finder(
             "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
             "blur_kernel_sigma": thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-            "show_steps": True,
+            #"show_steps": True,
             "show_scale": "log"
         })
     else:
@@ -156,7 +169,7 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
+    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False, show_progress=show_progress)
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
@@ -174,6 +187,8 @@ def finder(
 def indexer(
     method: str,
     num_procs: int,
+    num_attempts: int,
+    required_success_rate: float,
     peaks_h5_filename: str,
     output_peaks_filename: str,
     a: float,
@@ -186,6 +201,8 @@ def indexer(
     wavelength_max: float,
     sample_centering: str,
     goniometer_csv_filename: typing.Optional[str] = None,
+    show_progress: bool = False,
+    seed: typing.Optional[int] = None
 ) -> None:
     # Load peaks h5 file
     with h5py.File(peaks_h5_filename) as f:
@@ -218,7 +235,7 @@ def indexer(
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
 
-    index(method, num_procs, unique_filename, output_peaks_filename)
+    index(method, num_procs, num_attempts, required_success_rate, unique_filename, output_peaks_filename, show_progress=show_progress, seed=seed)
 
 
 @app.command()
@@ -308,7 +325,9 @@ def integrator(
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0
+    peak_pixel_outlier_threshold: float = 2.0,
+    create_visualizations: bool = False,
+    show_progress: bool = False
 ):
     peak_dict = {}
     with h5py.File(integration_peaks_filename) as f:
@@ -335,7 +354,7 @@ def integrator(
     }
 
     peaks = Peaks(filename, instrument)
-    result = peaks.integrate(peak_dict, integration_params)
+    result = peaks.integrate(peak_dict, integration_params, create_visualizations=create_visualizations, show_progress=show_progress)
 
     copy_keys = [
         "sample/a",

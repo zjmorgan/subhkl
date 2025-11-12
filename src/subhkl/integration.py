@@ -881,6 +881,7 @@ class Peaks:
         self,
         harvest_peaks_kwargs: dict,
         integration_params: dict,
+        show_progress: bool = False,
         visualize: bool = False
     ) -> DetectorPeaks:
         """
@@ -902,7 +903,8 @@ class Peaks:
             "region_growth_maximum_pixel_radius", "peak_center_box_size",
             "peak_smoothing_window_size", "peak_minimum_pixels",
             "peak_minimum_signal_to_noise", "peak_pixel_outlier_threshold"
-
+        show_progress : bool
+            Whether to show progress messages
         visualize : bool
             Whether to generate visualizations while running the detection
             algorithm
@@ -944,7 +946,8 @@ class Peaks:
                 i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
             else:
                 raise ValueError("Invalid finder algorithm")
-            print(f"Found {len(i)} candidate peaks")
+            if show_progress:
+                print(f"Found {len(i)} candidate peaks")
 
             if visualize:
                 fig, axes = plt.subplots(1, 2)
@@ -968,8 +971,9 @@ class Peaks:
 
             if visualize:
                 axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
-                for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
-                    print(f'SNR: {peak_in / peak_sigma}')
+                if show_progress:
+                    for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
+                        print(f'SNR: {peak_in / peak_sigma}')
 
                 for _, hull, _, _ in hulls:
                     if hull is not None:
@@ -1002,7 +1006,7 @@ class Peaks:
 
         return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
 
-    def integrate(self, peak_dict, integration_params):
+    def integrate(self, peak_dict, integration_params, create_visualizations=False, show_progress=False):
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
 
         h, k, l = [], [], []
@@ -1015,11 +1019,33 @@ class Peaks:
             centers = np.stack([bank_i, bank_j], axis=-1)
             bank_tt, bank_az = self.detector_trajectories(bank, bank_i, bank_j)
 
-            int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+            int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
 
             bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
             bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
             keep = [peak_in is not None for peak_in in bank_intensity]
+            if show_progress:
+                print(f"Integrated {sum(keep)} peaks out of {len(keep)} predicted")
+            
+            if create_visualizations:
+                import matplotlib.pyplot as plt
+                plt.rc("font", size=8)
+                fig, axes = plt.subplots(1, 2)
+                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                axes[0].set_title("Predicted peaks")
+                axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
+                for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
+                    axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
+            	
+                axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                axes[1].set_title("Integrated peaks")
+            	
+                for _, hull, _, _ in hulls:
+                    if hull is not None:
+                        for simplex in hull.simplices:
+                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                fig.savefig(f"{bank}_int.png")
+                plt.show()
 
             h.extend(bank_h[keep])
             k.extend(bank_k[keep])

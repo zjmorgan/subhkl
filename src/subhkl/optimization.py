@@ -563,7 +563,7 @@ class FindUB:
 
         return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
 
-    def minimize_de(self, num_procs):
+    def minimize_de(self, num_procs, required_success_rate=0.9, num_attempts=1, seed=None, show_progress=False):
         kf_ki_dir = self.uncertainty_line_segements()
 
         objective = VectorizedObjective(
@@ -572,15 +572,33 @@ class FindUB:
             np.array(self.wavelength),
             self._angle
         )
+        
+        if show_progress:
+            callback = lambda x, convergence: print(x, convergence)
+        else:
+            callback = None
+        
+        rng = np.random.default_rng(seed=seed)
+        
+        for attempt in range(num_attempts):
+            print(f"Running indexing attempt #{attempt + 1}")
+            self.x = scipy.optimize.differential_evolution(
+                objective,
+                [(0, 1), (0, 1), (0, 1)],
+                popsize=1000,
+                updating="deferred",
+                vectorized=True,
+                disp=show_progress,
+                callback=callback,
+                rng=rng
+            ).x
+            
+            num, hkl, lamda = self.index_de()
+            
+            if num / len(hkl) >= required_success_rate:
+                break
+        else:
+            print(f"Warning: failed to find satisfactory indexing "
+                  f"(>{100*required_success_rate:.02f}% indexed) after {num_attempts} attempts")
 
-        self.x = scipy.optimize.differential_evolution(
-            objective,
-            [(0, 1), (0, 1), (0, 1)],
-            popsize=1000,
-            updating="deferred",
-            vectorized=True,
-            disp=True,
-            callback=lambda x, convergence: print(x, convergence)
-        ).x
-
-        return self.index_de()
+        return num, hkl, lamda
