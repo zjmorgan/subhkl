@@ -882,7 +882,8 @@ class Peaks:
         harvest_peaks_kwargs: dict,
         integration_params: dict,
         show_progress: bool = False,
-        visualize: bool = False
+        visualize: bool = False,
+        file_prefix: str | None = None
     ) -> DetectorPeaks:
         """
         Get peaks in detector space (rotation, angles, and wavelength)
@@ -896,7 +897,6 @@ class Peaks:
             Should also contain keyword arguments for `harvest_peaks` (if using
             "peak_local_max" algorithm) or `harvest_peaks_thresholding` (if
             using "thresholding" algorithm)
-
         integration_params : dict
             Parameters for convex hull peak integration algorithm. Must contain
             keys "region_growth_distance_threshold", "region_growth_minimum_intensity",
@@ -908,6 +908,9 @@ class Peaks:
         visualize : bool
             Whether to generate visualizations while running the detection
             algorithm
+        file_prefix : str | None
+            If generating visualizations, an optional file prefix to add to
+            output files
 
         Returns
         -------
@@ -980,7 +983,10 @@ class Peaks:
                         for simplex in hull.simplices:
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
                 axes[1].set_title("Convex hulls")
-                fig.savefig(str(bank) + ".png")
+                output_file = str(bank) + ".png"
+                if file_prefix is not None:
+                    output_file = file_prefix + "_" + output_file
+                fig.savefig(output_file)
                 plt.show()
 
             # Only add integrated peaks to data
@@ -1006,7 +1012,14 @@ class Peaks:
 
         return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
 
-    def integrate(self, peak_dict, integration_params, create_visualizations=False, show_progress=False):
+    def integrate(
+        self,
+        peak_dict,
+        integration_params,
+        create_visualizations=False,
+        show_progress=False,
+        file_prefix=None
+    ):
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
 
         h, k, l = [], [], []
@@ -1044,7 +1057,11 @@ class Peaks:
                     if hull is not None:
                         for simplex in hull.simplices:
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-                fig.savefig(f"{bank}_int.png")
+
+                output_file = str(bank) + "_int.png"
+                if file_prefix is not None:
+                    output_file = file_prefix + output_file
+                fig.savefig(output_file)
                 plt.show()
 
             h.extend(bank_h[keep])

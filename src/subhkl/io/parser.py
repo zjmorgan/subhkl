@@ -172,9 +172,10 @@ def finder(
     # Calculate the peaks in detector space
     detector_peaks = peaks.get_detector_peaks(
         peak_kwargs,
-        params_integration,
-        create=visualizations_visualize,
-        progress_show=progress_show
+        integration_params,
+        visualize=create_visualizations,
+        show_progress=show_progress,
+        file_prefix=filename
     )
 
     # Write out the output HDF5 peaks file
@@ -296,6 +297,7 @@ def peak_predictor(
             plt.imshow(peaks.ims[bank].T + 1, cmap="binary", norm="log")
             plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
             plt.title(str(bank))
+            plt.savefig(filename + str(bank) + "_pred.png")
             plt.show()
 
     with h5py.File(integration_peaks_filename, "w") as f:
@@ -360,7 +362,13 @@ def integrator(
     }
 
     peaks = Peaks(filename, instrument)
-    result = peaks.integrate(peak_dict, integration_params, create_visualizations=create_visualizations, show_progress=show_progress)
+    result = peaks.integrate(
+        peak_dict,
+        integration_params,
+        create_visualizations=create_visualizations,
+        show_progress=show_progress,
+        file_prefix=filename
+    )
 
     copy_keys = [
         "sample/a",
