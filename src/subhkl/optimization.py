@@ -1,4 +1,5 @@
 import os
+from functools import partial
 
 import h5py
 
@@ -9,8 +10,6 @@ import scipy.spatial
 import scipy.interpolate
 
 import pyswarms
-
-os.environ["OMP_NUM_THREADS"] = "1"
 
 
 class VectorizedObjective:
@@ -563,34 +562,103 @@ class FindUB:
 
         return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
 
-    def minimize_de(self, num_procs, required_success_rate=0.9, num_attempts=1, seed=None, show_progress=False):
+    def cost_de(self, param, B, kf_ki_dir, wavelength):
+        """
+        Cost function for indexing given a proposed orientation.
+
+        Parameters
+        ----------
+        param : tuple, float
+            Orientation parameters.
+        B : array, float
+            Reciprocal lattice B-matrix.
+        kf_ki_dir : array, float
+            Scattering trajectories.
+        wavelength : list, float
+            Wavelength band (min, max).
+
+        Returns
+        -------
+        error : float
+            Total indexing cost.
+
+        """
+
+        U = self.orientation_U(*param)
+
+        UB = self.UB_matrix(U, B)
+
+        error, num, hkl, lamda = self.indexer_de(UB, kf_ki_dir, wavelength)
+
+        return error
+
+    def objective_de(self, x):
+        """
+        Objective function.
+
+        Parameters
+        ----------
+        x : array
+            Refineable parameters.
+
+        Returns
+        -------
+        neg_ind : int
+            Negative number of peaks indexed.
+
+        """
+
+        B = self.reciprocal_lattice_B()
+
         kf_ki_dir = self.uncertainty_line_segements()
 
-        objective = VectorizedObjective(
-            self.reciprocal_lattice_B(),
-            kf_ki_dir,
-            np.array(self.wavelength),
-            self._angle
+        wavelength = self.wavelength
+
+        params = np.reshape(x, (-1, 3))
+
+        compute_with_bounds = partial(
+            self.cost_de, B=B, kf_ki_dir=kf_ki_dir, wavelength=wavelength
         )
+
+        results = [compute_with_bounds(param) for param in params]
+
+        return np.array(results)
+
+    def minimize_de(self, num_procs, required_success_rate=0.9, num_attempts=1, seed=None, show_progress=False):
+        kf_ki_dir = self.uncertainty_line_segements()
         
         if show_progress:
             callback = lambda x, convergence: print(x, convergence)
         else:
             callback = None
         
-        rng = np.random.default_rng(seed=seed)
-        
+        de_kwargs = {
+            "popsize": 1000,
+            "updating": "deferred",
+            "disp": show_progress,
+            "callback": callback,
+            "rng": np.random.default_rng(seed=seed)
+        }
+
+        if num_procs == 1:
+            # Vectorize if using only one process
+            objective = VectorizedObjective(
+                self.reciprocal_lattice_B(),
+                kf_ki_dir,
+                np.array(self.wavelength),
+                self._angle
+            )
+            de_kwargs["vectorized"] = True
+        else:
+            objective = self.objective_de
+            de_kwargs["workers"] = num_procs
+
         for attempt in range(num_attempts):
             print(f"Running indexing attempt #{attempt + 1}")
             self.x = scipy.optimize.differential_evolution(
                 objective,
                 [(0, 1), (0, 1), (0, 1)],
-                popsize=1000,
-                updating="deferred",
-                vectorized=True,
-                disp=show_progress,
-                callback=callback,
-                rng=rng
+                **de_kwargs
             ).x
             
             num, hkl, lamda = self.index_de()
@@ -602,3 +670,4 @@ class FindUB:
                   f"(>{100*required_success_rate:.02f}% indexed) after {num_attempts} attempts")
 
         return num, hkl, lamda
+
