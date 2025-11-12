@@ -101,6 +101,7 @@ def finder(
     output_filename: str = "output.h5",
     finder_algorithm: str = "peak_local_max",
     show_progress: bool = False,
+    create_visualizations: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -169,7 +170,12 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False, show_progress=show_progress)
+    detector_peaks = peaks.get_detector_peaks(
+        peak_kwargs,
+        params_integration,
+        create=visualizations_visualize,
+        progress_show=progress_show
+    )
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
