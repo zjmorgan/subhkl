@@ -433,9 +433,16 @@ class FindUB:
 
         B = self.reciprocal_lattice_B()
 
-        kf_ki_dir, d_min, d_max = self.uncertainty_line_segements()
+        kf_ki_dir = self.uncertainty_line_segements()
 
         wavelength = self.wavelength
+
+        wl_min, wl_max = wavelength
+        tt = np.deg2rad(self.two_theta)
+        az = np.deg2rad(self.az_phi)
+
+        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
+        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
 
         params = np.array(x)
 
@@ -495,7 +502,14 @@ class FindUB:
 
         UB = self.UB_matrix(U, B)
 
-        return self.indexer(UB, *uls, self.wavelength)
+        wl_min, wl_max = self.wavelength
+        tt = np.deg2rad(self.two_theta)
+        az = np.deg2rad(self.az_phi)
+
+        d_min = 0.5 * wl_min / np.sin(0.5 * tt)
+        d_max = 0.5 * wl_max / np.sin(0.5 * tt)
+
+        return self.indexer(UB, uls, d_min, d_max, self.wavelength)
 
     def indexer_de(self, UB, kf_ki_dir, wavelength, tol=0.15):
         """
