@@ -1151,7 +1151,7 @@ class Peaks:
             Integrated intensity of each peak
         sigma: array, float
             Uncertainty in integrated intensity of each peak
-        banks: array, int
+        bank: array, int
             Detector id for each peak
         """
         # Write HDF5 input file for indexer
@@ -1163,4 +1163,4 @@ class Peaks:
             f["intensity"] = intensity
             f["sigma"] = sigma
             f["goniometer_rotation"] = self.goniometer_rotation
-            f["banks"] = banks
+            f["bank"] = banks

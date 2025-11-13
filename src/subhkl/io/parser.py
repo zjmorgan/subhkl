@@ -187,7 +187,7 @@ def finder(
         wavelengths=detector_peaks.wavelengths,
         intensity=detector_peaks.intensity,
         sigma=detector_peaks.sigma,
-        banks=detector_peaks.banks
+        bank=detector_peaks.bank
     )
 
 
