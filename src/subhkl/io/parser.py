@@ -186,7 +186,8 @@ def finder(
         az_phi=detector_peaks.az_phi,
         wavelengths=detector_peaks.wavelengths,
         intensity=detector_peaks.intensity,
-        sigma=detector_peaks.sigma
+        sigma=detector_peaks.sigma,
+        banks=detector_peaks.banks
     )
 
 

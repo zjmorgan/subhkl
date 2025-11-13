@@ -31,6 +31,7 @@ DetectorPeaks = namedtuple(
         "wavelengths",
         "intensity",
         "sigma",
+        "bank",
     ]
 )
 
@@ -934,6 +935,7 @@ class Peaks:
         lamda: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
+        bank: list[int] = []
 
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
@@ -941,6 +943,7 @@ class Peaks:
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
+            banks.append(bank)
 
             # Find candidate peaks
             if finder_algorithm == "peak_local_max":
@@ -1014,7 +1017,7 @@ class Peaks:
             else:
                 print("Bank had 0 peaks")
 
-        return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
+        return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma, banks)
 
     def integrate(
         self,
@@ -1133,7 +1136,8 @@ class Peaks:
         az_phi: list[float],
         wavelengths: list[float],
         intensity: list[float],
-        sigma: list[float]
+        sigma: list[float],
+        banks: list[int]
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1154,6 +1158,8 @@ class Peaks:
             Integrated intensity of each peak
         sigma: array, float
             Uncertainty in integrated intensity of each peak
+        banks: array, int
+            Detector id for each peak
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
@@ -1164,3 +1170,4 @@ class Peaks:
             f["intensity"] = intensity
             f["sigma"] = sigma
             f["goniometer_rotation"] = self.goniometer_rotation
+            f["banks"] = banks
