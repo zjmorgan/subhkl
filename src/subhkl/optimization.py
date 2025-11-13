@@ -483,7 +483,6 @@ class FindUB:
 
         return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
 
-<<<<<<< HEAD
     def minimize_evosax(
         self, 
         strategy_name: str, 
