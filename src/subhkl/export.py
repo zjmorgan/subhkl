@@ -105,7 +105,9 @@ class MTZExporter:
             if "run_index" in f["peaks"].keys():
                 self.runs = np.array(f["peaks/run_index"])
             else:
-                self.runs = None
+                self.runs = np.zeros_like(self.h, dtype=np.int32)
+
+            self.runs = 1000 * self.runs + f["peaks/banks"]
 
         self.space_group = space_group
 
