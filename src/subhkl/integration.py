@@ -45,7 +45,8 @@ IntegrationResult = namedtuple(
         "sigma",
         "tt",
         "az",
-        "wavelength"
+        "wavelength",
+        "bank"
     ]
 )
 
@@ -1033,6 +1034,7 @@ class Peaks:
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
+        banks = []
 
         for bank, peaks in peak_dict.items():
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
@@ -1082,8 +1084,9 @@ class Peaks:
             tt.extend(bank_tt[keep])
             az.extend(bank_az[keep])
             wavelength.extend(bank_wl[keep])
+            banks.append(bank)
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength)
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
 
     def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
         wl_min, wl_max = wavelength
