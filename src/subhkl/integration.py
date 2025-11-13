@@ -935,7 +935,7 @@ class Peaks:
         lamda: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
-        bank: list[int] = []
+        banks: list[int] = []
 
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
