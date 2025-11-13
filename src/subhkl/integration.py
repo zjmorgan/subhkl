@@ -944,7 +944,6 @@ class Peaks:
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
-            banks.append(bank)
 
             # Find candidate peaks
             if finder_algorithm == "peak_local_max":
@@ -1009,6 +1008,7 @@ class Peaks:
                 lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
+                banks += [bank] * sum(keep)
 
                 print(f"Integrated {len(i)}/{len(centers)} peaks")
             else:
@@ -1077,7 +1077,7 @@ class Peaks:
             tt.extend(bank_tt[keep])
             az.extend(bank_az[keep])
             wavelength.extend(bank_wl[keep])
-            banks.append(bank)
+            banks.extend([bank] * sum(keep))
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
 
