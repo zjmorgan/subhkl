@@ -37,22 +37,21 @@ def index(
     # Index the peaks
     print("Initializing FindUB...")
     opt = FindUB(hdf5_peaks_filename)
+    if method == "swarm":
+        num, hkl, lamda = opt.minimize(num_procs)
+    elif method == "de":
+        num, hkl, lamda = opt.minimize_de(
+            num_procs,
+            num_attempts=num_attempts,
+            required_success_rate=required_success_rate, 
+            show_progress=show_progress,
+            seed=seed
+        )
+    else:
+        raise ValueError("Invalid indexing method")
     
-    print(f"Starting evosax optimization with strategy: {strategy_name}")
-    print(f"Running {n_runs} run(s)...")
-    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+    print(f"Indexed {int(num)} peaks out of {len(hkl)} ({100*num/len(hkl):.02f}%)")
     
-    # Call the new evosax minimizer
-    num, hkl, lamda = opt.minimize_evosax(
-        strategy_name=strategy_name,
-        population_size=population_size,
-        num_generations=gens,
-        n_runs=n_runs,
-        seed=seed
-    )
-
-    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
-
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
     l_list = [i[2] for i in hkl]
@@ -105,6 +104,8 @@ def finder(
     instrument: str,
     output_filename: str = "output.h5",
     finder_algorithm: str = "peak_local_max",
+    show_progress: bool = False,
+    create_visualizations: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -153,7 +154,7 @@ def finder(
             "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
             "blur_kernel_sigma": thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-            "show_steps": True,
+            #"show_steps": True,
             "show_scale": "log"
         })
     else:
@@ -173,7 +174,13 @@ def finder(
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
+    detector_peaks = peaks.get_detector_peaks(
+        peak_kwargs,
+        integration_params,
+        visualize=create_visualizations,
+        show_progress=show_progress,
+        file_prefix=filename
+    )
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
@@ -183,7 +190,8 @@ def finder(
         az_phi=detector_peaks.az_phi,
         wavelengths=detector_peaks.wavelengths,
         intensity=detector_peaks.intensity,
-        sigma=detector_peaks.sigma
+        sigma=detector_peaks.sigma,
+        banks=detector_peaks.banks
     )
 
 
@@ -369,6 +377,7 @@ def peak_predictor(
             plt.imshow(peaks.ims[bank].T + 1, cmap="binary", norm="log")
             plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
             plt.title(str(bank))
+            plt.savefig(filename + str(bank) + "_pred.png")
             plt.show()
 
     with h5py.File(integration_peaks_filename, "w") as f:
@@ -404,7 +413,9 @@ def integrator(
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0
+    peak_pixel_outlier_threshold: float = 2.0,
+    create_visualizations: bool = False,
+    show_progress: bool = False
 ):
     peak_dict = {}
     with h5py.File(integration_peaks_filename) as f:
@@ -431,7 +442,13 @@ def integrator(
     }
 
     peaks = Peaks(filename, instrument)
-    result = peaks.integrate(peak_dict, integration_params)
+    result = peaks.integrate(
+        peak_dict,
+        integration_params,
+        create_visualizations=create_visualizations,
+        show_progress=show_progress,
+        file_prefix=filename
+    )
 
     copy_keys = [
         "sample/a",

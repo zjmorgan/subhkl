@@ -1,5 +1,6 @@
 import os
-from functools import partial  # Added for static_argnames
+from functools import partial
+
 import h5py
 import numpy as np
 import scipy.linalg
@@ -19,8 +20,6 @@ try:
     from tqdm import trange
 except ImportError:
     trange = None
-
-os.environ["OMP_NUM_THREADS"] = "1"
 
 
 class VectorizedObjectiveJAX:
@@ -484,6 +483,7 @@ class FindUB:
 
         return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
 
+<<<<<<< HEAD
     def minimize_evosax(
         self, 
         strategy_name: str, 
