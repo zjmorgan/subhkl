@@ -35,23 +35,23 @@ def index(
     """
 
     # Index the peaks
-    print("Initializing FindUB...")
     opt = FindUB(hdf5_peaks_filename)
-    if method == "swarm":
-        num, hkl, lamda = opt.minimize(num_procs)
-    elif method == "de":
-        num, hkl, lamda = opt.minimize_de(
-            num_procs,
-            num_attempts=num_attempts,
-            required_success_rate=required_success_rate, 
-            show_progress=show_progress,
-            seed=seed
-        )
-    else:
-        raise ValueError("Invalid indexing method")
-    
-    print(f"Indexed {int(num)} peaks out of {len(hkl)} ({100*num/len(hkl):.02f}%)")
-    
+
+    print(f"Starting evosax optimization with strategy: {strategy_name}")
+    print(f"Running {n_runs} run(s)...")
+    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+
+    # Call the new evosax minimizer
+    num, hkl, lamda = opt.minimize_evosax(
+        strategy_name=strategy_name,
+        population_size=population_size,
+        num_generations=gens,
+        n_runs=n_runs,
+        seed=seed
+    )
+
+    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
+
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
     l_list = [i[2] for i in hkl]
