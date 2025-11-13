@@ -1130,7 +1130,7 @@ class Peaks:
         wavelengths: list[float],
         intensity: list[float],
         sigma: list[float],
-        banks: list[int]
+        bank: list[int]
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1163,4 +1163,4 @@ class Peaks:
             f["intensity"] = intensity
             f["sigma"] = sigma
             f["goniometer_rotation"] = self.goniometer_rotation
-            f["bank"] = banks
+            f["bank"] = bank
