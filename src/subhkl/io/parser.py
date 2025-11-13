@@ -392,6 +392,7 @@ def integrator(
         f["peaks/sigma"] = result.sigma
         f["peaks/scattering"] = result.tt
         f["peaks/azimuthal"] = result.az
+        f["peaks/bank"] = result.bank
 
         with h5py.File(integration_peaks_filename) as f_in:
             for key in copy_keys:
