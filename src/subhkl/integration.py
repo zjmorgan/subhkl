@@ -32,6 +32,7 @@ DetectorPeaks = namedtuple(
         "wavelength_maxes",
         "intensity",
         "sigma",
+        "bank",
     ]
 )
 
@@ -45,7 +46,8 @@ IntegrationResult = namedtuple(
         "sigma",
         "tt",
         "az",
-        "wavelength"
+        "wavelength",
+        "bank"
     ]
 )
 
@@ -936,6 +938,7 @@ class Peaks:
         lamda_max: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
+        banks: list[int] = []
 
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
@@ -1012,12 +1015,13 @@ class Peaks:
                 lamda_max += [self.wavelength_max] * len(tt)
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
+                banks += [bank] * sum(keep)
 
                 print(f"Integrated {len(i)}/{len(centers)} peaks")
             else:
                 print("Bank had 0 peaks")
 
-        return DetectorPeaks(np.stack(R), two_theta, az_phi, lamda_min, lamda_max, intensity, sigma)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
 
     def integrate(
         self,
@@ -1033,6 +1037,7 @@ class Peaks:
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
+        banks = []
 
         for bank, peaks in peak_dict.items():
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
@@ -1082,8 +1087,9 @@ class Peaks:
             tt.extend(bank_tt[keep])
             az.extend(bank_az[keep])
             wavelength.extend(bank_wl[keep])
+            banks.extend([bank] * sum(keep))
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength)
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
 
     def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
         wl_min, wl_max = wavelength
@@ -1138,7 +1144,8 @@ class Peaks:
         wavelength_mins: list[float],
         wavelength_maxes: list[float],
         intensity: list[float],
-        sigma: list[float]
+        sigma: list[float],
+        bank: list[int]
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1161,6 +1168,8 @@ class Peaks:
             Integrated intensity of each peak
         sigma: array, float
             Uncertainty in integrated intensity of each peak
+        bank: array, int
+            Detector id for each peak
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
@@ -1171,3 +1180,5 @@ class Peaks:
             f["azimuthal"] = az_phi
             f["intensity"] = intensity
             f["sigma"] = sigma
+            f["goniometer_rotation"] = self.goniometer_rotation
+            f["bank"] = bank
