@@ -332,11 +332,11 @@ def peak_predictor(
         gamma = float(np.array(f_indexed["sample/gamma"]))
         centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
-        R = np.array(f_indexed["goniometer/R"])
+        R = peaks.goniometer_rotation
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
-    UB = np.einsum("kil,lj->kij", R, U @ B)
+    UB = R @ U @ B
 
     peak_dict = peaks.predict_peaks(
         a,

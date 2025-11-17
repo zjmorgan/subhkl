@@ -1087,7 +1087,7 @@ class Peaks:
 
         hkl = [h, k, l]
 
-        Qx, Qy, Qz = np.einsum("kij,jk->ik", 2 * np.pi * UB, hkl)
+        Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
 
         lamda = -4 * np.pi * Qz / Q ** 2
