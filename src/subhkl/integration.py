@@ -953,7 +953,7 @@ class Peaks:
                 print(f"Found {len(i)} candidate peaks")
 
             if visualize:
-                fig, axes = plt.subplots(1, 2)
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
                 axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
@@ -967,13 +967,14 @@ class Peaks:
                 int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
             else:
                 int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+                hulls = None
 
             bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
             bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
-                axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                         print(f'SNR: {peak_in / peak_sigma}')
@@ -983,6 +984,9 @@ class Peaks:
                         for simplex in hull.simplices:
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
                 axes[1].set_title("Convex hulls")
+                fig.subplots_adjust(right=0.8)
+                cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
+                fig.colorbar(plt_im, cbar_ax)
                 output_file = str(bank) + ".png"
                 if file_prefix is not None:
                     output_file = file_prefix + "_" + output_file
@@ -1043,15 +1047,18 @@ class Peaks:
             if create_visualizations:
                 import matplotlib.pyplot as plt
                 plt.rc("font", size=8)
-                fig, axes = plt.subplots(1, 2)
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
                 axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
                 axes[0].set_title("Predicted peaks")
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
             	
-                axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
                 axes[1].set_title("Integrated peaks")
+                fig.subplots_adjust(right=0.8)
+                cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
+                fig.colorbar(plt_im, cbar_ax)
             	
                 for _, hull, _, _ in hulls:
                     if hull is not None:
