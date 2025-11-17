@@ -5,7 +5,11 @@ import typer
 import uuid
 
 from subhkl import normalization
-from subhkl.export import ConcatenateMerger, MTZExporter
+from subhkl.export import (
+    FinderConcatenateMerger,
+    IndexerConcatenateMerger,
+    MTZExporter
+)
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
@@ -190,6 +194,38 @@ def finder(
     )
 
 
+@app.command
+def finder_merger(
+    finder_h5_txt_list_filename: str,
+    output_pre_index_filename: str,
+    a: float,
+    b: float,
+    c: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    wavelength_min: float,
+    wavelength_max: float,
+    sample_centering: str
+):
+    with open(finder_h5_txt_list_filename) as f:
+        finder_h5_files = f.read().splitlines()
+
+    merging_algorithm = FinderConcatenateMerger(finder_h5_files)
+    merging_algorithm.merge(output_pre_index_filename)
+
+    # Write HDF5 input file for indexer
+    with h5py.File(output_pre_index_filename, "r+") as f:
+        f["sample/a"] = a
+        f["sample/b"] = b
+        f["sample/c"] = c
+        f["sample/alpha"] = alpha
+        f["sample/beta"] = beta
+        f["sample/gamma"] = gamma
+        f["sample/centering"] = sample_centering
+        f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
+
 @app.command()
 def indexer(
     method: str,
@@ -217,13 +253,12 @@ def indexer(
         az_phi = np.array(f["azimuthal"])
         intensity = np.array(f["intensity"])
         sigma = np.array(f["sigma"])
-        goniometer_rotation = np.array(f["goniometer_rotation"])
+        rotations = np.array(f["rotations"])
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
         R = np.loadtxt(goniometer_csv_filename, delimiter=",")
-    else:
-        R = goniometer_rotation
+        rotations = np.stack([R] * len(two_theta))  # (M, 3, 3)
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
@@ -236,20 +271,45 @@ def indexer(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
-        f["goniometer/R"] = R
+        f["goniometer/R"] = rotations
         f["peaks/scattering"] = two_theta
         f["peaks/azimuthal"] = az_phi
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
 
-    index(method, num_procs, num_attempts, required_success_rate, unique_filename, output_peaks_filename, show_progress=show_progress, seed=seed)
+    index(
+        method,
+        num_procs,
+        num_attempts,
+        required_success_rate,
+        unique_filename,
+        output_peaks_filename,
+        show_progress=show_progress,
+        seed=seed
+    )
 
 
 @app.command()
 def indexer_using_file(
-    method: str, num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
+    method: str,
+    num_procs: int,
+    num_attempts: int,
+    required_success_rate: float,
+    peaks_h5_filename: str,
+    output_peaks_filename: str,
+    show_progress: bool = False,
+    seed: typing.Optional[int] = None
 ):
-    index(method, num_procs, hdf5_peaks_filename, output_peaks_filename)
+    index(
+        method,
+        num_procs,
+        num_attempts,
+        required_success_rate,
+        peaks_h5_filename,
+        output_peaks_filename,
+        show_progress=show_progress,
+        seed=seed
+    )
 
 
 @app.command()
@@ -276,7 +336,7 @@ def peak_predictor(
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
-    UB = R @ U @ B
+    UB = np.einsum("kil,lj->kij", R, U @ B)
 
     peak_dict = peaks.predict_peaks(
         a,
@@ -430,7 +490,7 @@ def merger(
         indexed_h5_files = f.read().splitlines()
 
     if method.lower() == "concatenate":
-        merging_algorithm = ConcatenateMerger(indexed_h5_files)
+        merging_algorithm = IndexerConcatenateMerger(indexed_h5_files)
     else:
         raise ValueError("Invalid merging method")
 

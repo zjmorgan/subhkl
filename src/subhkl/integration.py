@@ -1005,7 +1005,7 @@ class Peaks:
                 # Add peak data to output
                 two_theta += tt.tolist()
                 az_phi += az.tolist()
-                R += [np.eye(3)] * len(tt)
+                R += [self.goniometer_rotation] * len(tt)
                 lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
@@ -1014,7 +1014,7 @@ class Peaks:
             else:
                 print("Bank had 0 peaks")
 
-        return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma)
+        return DetectorPeaks(np.stack(R), two_theta, az_phi, lamda, intensity, sigma)
 
     def integrate(
         self,
@@ -1087,7 +1087,7 @@ class Peaks:
 
         hkl = [h, k, l]
 
-        Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
+        Qx, Qy, Qz = np.einsum("kij,jk->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
 
         lamda = -4 * np.pi * Qz / Q ** 2
@@ -1163,4 +1163,3 @@ class Peaks:
             f["azimuthal"] = az_phi
             f["intensity"] = intensity
             f["sigma"] = sigma
-            f["goniometer_rotation"] = self.goniometer_rotation
