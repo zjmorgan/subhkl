@@ -28,7 +28,8 @@ DetectorPeaks = namedtuple(
         "R",
         "two_theta",
         "az_phi",
-        "wavelengths",
+        "wavelength_mins",
+        "wavelength_maxes",
         "intensity",
         "sigma",
     ]
@@ -915,8 +916,8 @@ class Peaks:
         Returns
         -------
         detector_peaks : DetectorPeaks
-            namedtuple of Rotations, angles, wavelengths, intensity and sigma
-            of each peak
+            namedtuple of Rotations, angles, wavelength_mins, wavelength_maxes, 
+            intensity and sigma of each peak
 
         """
         if not self.ims:
@@ -931,7 +932,8 @@ class Peaks:
         R: list[float] = []
         two_theta: list[float] = []
         az_phi: list[float] = []
-        lamda: list[float] = []
+        lamda_min: list[float] = []
+        lamda_max: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
 
@@ -1006,7 +1008,8 @@ class Peaks:
                 two_theta += tt.tolist()
                 az_phi += az.tolist()
                 R += [self.goniometer_rotation] * len(tt)
-                lamda += [self.wavelength_min, self.wavelength_max] * len(tt)
+                lamda_min += [self.wavelength_min] * len(tt)
+                lamda_max += [self.wavelength_max] * len(tt)
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
 
@@ -1014,7 +1017,7 @@ class Peaks:
             else:
                 print("Bank had 0 peaks")
 
-        return DetectorPeaks(np.stack(R), two_theta, az_phi, lamda, intensity, sigma)
+        return DetectorPeaks(np.stack(R), two_theta, az_phi, lamda_min, lamda_max, intensity, sigma)
 
     def integrate(
         self,
@@ -1085,7 +1088,8 @@ class Peaks:
     def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
         wl_min, wl_max = wavelength
 
-        hkl = [h, k, l]
+        hkl = np.stack([h, k, l], axis=0)
+        print(UB.shape, hkl.shape)
 
         Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
@@ -1131,7 +1135,8 @@ class Peaks:
         rotations: list[float],
         two_theta: list[float],
         az_phi: list[float],
-        wavelengths: list[float],
+        wavelength_mins: list[float],
+        wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float]
     ):
@@ -1148,8 +1153,10 @@ class Peaks:
             Two theta angles of peaks.
         az_phi: array, float
             Azimuthal phi angles of peaks.
-        wavelengths: array, float
-            Wavelength min and max of each peak.
+        wavelength_mins: array, float
+            Wavelength min of each peak.
+        wavelength_maxes: array, float
+            Wavelength max of each peak.
         intensity: array, float
             Integrated intensity of each peak
         sigma: array, float
@@ -1157,7 +1164,8 @@ class Peaks:
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
-            f["wavelengths"] = wavelengths
+            f["wavelength_mins"] = wavelength_mins
+            f["wavelength_maxes"] = wavelength_maxes
             f["rotations"] = rotations
             f["two_theta"] = two_theta
             f["azimuthal"] = az_phi

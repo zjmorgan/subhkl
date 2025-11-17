@@ -43,11 +43,13 @@ class BaseConcatenateMerger:
                 for key in self.copy_keys:
                     f_out[key] = np.array(f_typical[key])
 
-            for merge_key in self.merge_keys:
-                f_out.create_dataset(merge_key, total_peaks)
+                for merge_key in self.merge_keys:
+                    shape = (total_peaks,) + f_typical[merge_key].shape[1:]
+                    dtype = f_typical[merge_key].dtype
+                    f_out.create_dataset(merge_key, shape, dtype)
 
             offset = 0
-            f_out["files"] = np.array(self.h5_files)
+            f_out["files"] = np.array(list(map(lambda s: s.encode('utf-8'), self.h5_files)))
             f_out.create_dataset("file_offsets", (len(self.h5_files),), dtype=np.int64)
             for i_file, indexed_file in enumerate(self.h5_files):
                 with h5py.File(indexed_file, "r") as f_in:
@@ -63,7 +65,8 @@ class BaseConcatenateMerger:
 class FinderConcatenateMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
         merge_keys = [
-            "wavelengths",
+            "wavelength_mins",
+            "wavelength_maxes",
             "rotations",
             "two_theta",
             "azimuthal",

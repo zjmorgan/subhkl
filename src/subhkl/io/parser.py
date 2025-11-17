@@ -188,13 +188,14 @@ def finder(
         rotations=detector_peaks.R,
         two_theta=detector_peaks.two_theta,
         az_phi=detector_peaks.az_phi,
-        wavelengths=detector_peaks.wavelengths,
+        wavelength_mins=detector_peaks.wavelength_mins,
+        wavelength_maxes=detector_peaks.wavelength_maxes,
         intensity=detector_peaks.intensity,
         sigma=detector_peaks.sigma
     )
 
 
-@app.command
+@app.command()
 def finder_merger(
     finder_h5_txt_list_filename: str,
     output_pre_index_filename: str,
@@ -224,6 +225,12 @@ def finder_merger(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+        f["goniometer/R"] = f["rotations"]
+        f["peaks/scattering"] = f["two_theta"]
+        f["peaks/azimuthal"] = f["azimuthal"]
+        f["peaks/intensity"] = f["intensity"]
+        f["peaks/sigma"] = f["sigma"]
+        del f["rotations"], f["two_theta"], f["azimuthal"], f["intensity"], f["sigma"]
 
 
 @app.command()
