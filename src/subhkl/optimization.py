@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jscipy_linalg
 # Corrected imports for DE and PSO
-from evosax.algorithms import DifferentialEvolution, PSO
+from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 # ------------------------------
 
 # Try to import tqdm for a progress bar
@@ -147,9 +147,9 @@ class VectorizedObjectiveJAX:
 
         # 2. Smooth Periodic Distance
         # Instead of `hkl - round(hkl)`, use Sine.
-        # For small x, sin(pi*x)/pi approx x.
+        # For small x, sin(2*pi*x)/(2*pi) approx x.
         # This is differentiable everywhere and naturally periodic.
-        diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
+        diff_hkl_smooth = jnp.sin(jnp.pi * 2 * hkl) / (2 * jnp.pi)
 
         # 3. Map error back to Cartesian q-space
         # (S, 3, 3) @ (S, 3, M, 100) -> (S, 3, M, 100)
@@ -206,7 +206,7 @@ class VectorizedObjectiveJAX:
         hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
         # (S, 3, M, 100)
 
-        int_hkl = soft_round_sin(hkl)
+        int_hkl = jnp.round(hkl)
 
         diff_hkl = hkl - int_hkl  # (S, 3, M, 100)
 
@@ -254,7 +254,7 @@ class VectorizedObjectiveJAX:
         # (S, 3, 3)
 
 #        error, num, hkl, lamda = self.indexer_jax(UB)
-        error = self.indexer_soft_jax(UB)
+        error = self.indexer_soft_jax(UB, softness=self.tol)
 
         return error
 
@@ -547,7 +547,8 @@ class FindUB:
         population_size: int = 1000, 
         num_generations: int = 100, 
         n_runs: int = 1, 
-        seed: int = 0
+        seed: int = 0,
+        tol: float = 1e-3,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -568,6 +569,8 @@ class FindUB:
             Number of times to run the minimization with different seeds.
         seed : int
             Base seed for the random number generator.
+        tol : float
+            Softness parameter (the smaller, the more stringent the peak finding criteria)
 
         Returns
         -------
@@ -597,6 +600,7 @@ class FindUB:
             self._angle_cdf,           # Pass interpolation data
             self._angle_t,             # Pass interpolation data
             weights=weights,
+            tol=tol,
         )
 
         # Define the sample solution (shape (3,)) to infer num_dims
@@ -609,34 +613,42 @@ class FindUB:
                 solution=sample_solution,
                 population_size=population_size
             )
+            strategy_type = 'population_based'
             print("Using Differential Evolution (DE) strategy.")
         elif strategy_name.lower() == "pso":
             strategy = PSO(
                 solution=sample_solution,
                 population_size=population_size
             )
+            strategy_type = 'population_based'
             print("Using Particle Swarm Optimization (PSO) strategy.")
+        elif strategy_name.lower() == "cma_es":
+            strategy = CMA_ES(
+                solution=sample_solution,
+                population_size=population_size
+            )
+            strategy_type = 'distribution_based'
+            print("Using Covariance matrix adaptation evolution strategy (CMA-ES).")
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}. Choose 'DE' or 'PSO'.")
 
-        
         # 3. Get default strategy parameters
         params = strategy.default_params
-        
+
         # 4. Define the JIT-compiled step function
         @jax.jit
         def es_step(rng, state, params):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
-            
+
             # Ask for new population
             population, state = strategy.ask(rng_ask, state, params)
-            
+
             # --- Manually clip the population to [0, 1] ---
             population_clipped = jnp.clip(population, 0.0, 1.0)
-            
+
             # Evaluate the *clipped* population
             fitness = objective(population_clipped)
-            
+
             # Tell strategy the results using the *clipped* population
             state, metrics = strategy.tell(
                 rng_tell, population_clipped, fitness, state, params
@@ -646,25 +658,33 @@ class FindUB:
         # 5. Run the optimization loop N times
         best_overall_fitness = jnp.inf
         best_overall_member = None
-        
+
         for i in range(n_runs):
             run_seed = seed + i
             print(f"\n--- Starting Run {i+1}/{n_runs} (Seed: {run_seed}) ---")
-            
+
             # 6. Initialize strategy state for this run
             rng = jax.random.PRNGKey(run_seed)
-            
-            # Create initial population and fitness
+
+            # Create initial population and fitness.
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
-            # Population is (popsize, 3) random numbers [0, 1]
-            population_init = jax.random.uniform(rng_pop, (population_size, 3))
-            
-            # Evaluate the initial population
-            fitness_init = objective(population_init)
-            
             # Initialize state using .init()
-            state = strategy.init(rng_init, population_init, fitness_init, params) 
-            
+            if strategy_type == 'population_based':
+                # Population is (popsize, 3) random numbers [0, 1]
+                population_init = jax.random.uniform(rng_pop, (population_size, 3))
+
+                # Evaluate the initial population
+                fitness_init = objective(population_init)
+
+                state = strategy.init(rng_init, population_init, fitness_init, params)
+            elif strategy_type == 'distribution_based':
+                # solution is (3, ) random numbers [0, 1]
+                solution_init = jax.random.uniform(rng_pop, (3, ))
+
+                state = strategy.init(rng_init, solution_init, params)
+            else:
+                raise ValueError
+
             pbar = range(num_generations)
             if trange is not None:
                 pbar = trange(num_generations, desc=f"Run {i+1}/{n_runs}")
@@ -672,11 +692,11 @@ class FindUB:
             for gen in pbar:
                 # Run one step
                 rng, state, metrics = es_step(rng, state, params)
-                
+
                 # Update progress bar description
                 if trange is not None:
                     pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best Fitness: {metrics['best_fitness']:.4f}")
-            
+
             # --- Correctly get best member and fitness ---
             # Access the attributes from the *final state*
             current_run_fitness = state.best_fitness

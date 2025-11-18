@@ -23,7 +23,8 @@ def index(
     population_size: int,
     gens: int,
     n_runs: int,
-    seed: int
+    seed: int,
+    tol: float,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -51,7 +52,8 @@ def index(
         population_size=population_size,
         num_generations=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
+        tol=tol,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -271,6 +273,7 @@ def indexer(
         "--seed", 
         help="Base seed for the first optimization run."
     ),
+    tol: float = 0.001,
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -319,7 +322,8 @@ def indexer(
         population_size=population_size,
         gens=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
+        tol=tol,
     )
 
 
