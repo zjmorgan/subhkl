@@ -1095,7 +1095,6 @@ class Peaks:
         wl_min, wl_max = wavelength
 
         hkl = np.stack([h, k, l], axis=0)
-        print(UB.shape, hkl.shape)
 
         Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)

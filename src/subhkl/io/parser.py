@@ -231,7 +231,7 @@ def finder_merger(
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
         f["goniometer/R"] = f["rotations"]
-        f["peaks/scattering"] = f["two_theta"]
+        f["peaks/two_theta"] = f["two_theta"]
         f["peaks/azimuthal"] = f["azimuthal"]
         f["peaks/intensity"] = f["intensity"]
         f["peaks/sigma"] = f["sigma"]
@@ -285,11 +285,11 @@ def indexer(
     # Load peaks h5 file
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename) as f:
-        two_theta = np.array(f["two_theta"])
-        az_phi = np.array(f["azimuthal"])
-        intensity = np.array(f["intensity"])
-        sigma = np.array(f["sigma"])
-        rotations = np.array(f["rotations"])
+        two_theta = np.array(f["peaks/two_theta"])
+        az_phi = np.array(f["peaks/azimuthal"])
+        intensity = np.array(f["peaks/intensity"])
+        sigma = np.array(f["peaks/sigma"])
+        rotations = np.array(f["goniometer/R"])
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
@@ -298,7 +298,7 @@ def indexer(
         rotations = np.stack([R] * len(two_theta))  # (M, 3, 3)
     else:
         print("Using goniometer rotation from peaks file.")
-        R = goniometer_rotation
+        R = rotations
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
