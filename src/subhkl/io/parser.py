@@ -77,7 +77,7 @@ def index(
         "goniometer/R",
         "peaks/intensity",
         "peaks/sigma",
-        "peaks/scattering",
+        "peaks/two_theta",
         "peaks/azimuthal",
     ]
 
@@ -230,13 +230,6 @@ def finder_merger(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
-        f["goniometer/R"] = f["rotations"]
-        f["peaks/two_theta"] = f["two_theta"]
-        f["peaks/azimuthal"] = f["azimuthal"]
-        f["peaks/intensity"] = f["intensity"]
-        f["peaks/sigma"] = f["sigma"]
-        del f["rotations"], f["two_theta"], f["azimuthal"], f["intensity"], f["sigma"]
-
 
 @app.command()
 def indexer(
@@ -313,7 +306,7 @@ def indexer(
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
         f["goniometer/R"] = rotations
-        f["peaks/scattering"] = two_theta
+        f["peaks/two_theta"] = two_theta
         f["peaks/azimuthal"] = az_phi
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
@@ -513,7 +506,7 @@ def integrator(
         f["peaks/lambda"] = result.wavelength
         f["peaks/intensity"] = result.intensity
         f["peaks/sigma"] = result.sigma
-        f["peaks/scattering"] = result.tt
+        f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
 
@@ -528,7 +521,7 @@ def normalizer(
 ):
     # Open the input filename
     with h5py.File(hdf5_peaks_filename, "r") as f:
-        theta = np.array(f["peaks/scattering"]) / 2.0
+        theta = np.array(f["peaks/two_theta"]) / 2.0
         lamda = np.array(f["peaks/lambda"])
         detector_efficiency = normalization.detector_efficiency(lamda)
         absorption = normalization.absorption(lamda)

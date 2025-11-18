@@ -1174,10 +1174,9 @@ class Peaks:
         with File(output_filename, "w") as f:
             f["wavelength_mins"] = wavelength_mins
             f["wavelength_maxes"] = wavelength_maxes
-            f["rotations"] = rotations
-            f["two_theta"] = two_theta
-            f["azimuthal"] = az_phi
-            f["intensity"] = intensity
-            f["sigma"] = sigma
-            f["goniometer_rotation"] = self.goniometer_rotation
+            f["goniometer/R"] = rotations
+            f["peaks/two_theta"] = two_theta
+            f["peaks/azimuthal"] = az_phi
+            f["peaks/intensity"] = intensity
+            f["peaks/sigma"] = sigma
             f["bank"] = bank

@@ -123,6 +123,63 @@ class VectorizedObjectiveJAX:
         
         return U
 
+    def indexer_soft_jax(self, UB, softness=0.001):
+        """
+        A smooth, differentiable classification objective.
+        Instead of minimizing total error (sensitive to outliers),
+        this maximizes the 'soft count' of indexed peaks.
+
+        Parameters
+        ----------
+        UB : array (S, 3, 3)
+            Orientation matrices.
+        softness : float
+            Controls the width of the 'acceptance' window (sigma).
+            Similar to 'tol' but for the soft Gaussian kernel.
+
+        Returns
+        -------
+        loss : array (S,)
+            Negative soft count (minimize this to maximize indexed peaks).
+        """
+        UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
+
+        # 1. Map to HKL space (same as before)
+        hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
+        hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
+        # (S, 3, M, 100)
+
+        # 2. Smooth Periodic Distance
+        # Instead of `hkl - round(hkl)`, use Sine.
+        # For small x, sin(pi*x)/pi approx x.
+        # This is differentiable everywhere and naturally periodic.
+        diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
+
+        # 3. Map error back to Cartesian q-space
+        # (S, 3, 3) @ (S, 3, M, 100) -> (S, 3, M, 100)
+        dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
+
+        # Squared Euclidean distance for every wavelength candidate
+        dist_sq = jnp.sum(dist_vec**2, axis=1) # (S, M, 100)
+
+        # 4. Soft Wavelength Selection
+        # Instead of hard argmin, we can take the min distance
+        # (assuming the best wavelength is the one closest to integer HKL)
+        min_dist_sq = jnp.min(dist_sq, axis=2) # (S, M)
+
+        # 5. Soft Classification (Gaussian Kernel)
+        # If dist is 0, score is 1. If dist is large, score is 0.
+        # This acts as a "soft counter" of indexed peaks.
+        # We use the 'softness' parameter as the Gaussian width (variance).
+        peak_scores = jnp.exp(-min_dist_sq / (2 * softness**2))
+
+        # 6. Objective: Maximize the number of indexed peaks
+        # We return negative sum because optimizers minimize.
+        soft_count = jnp.sum(peak_scores, axis=1) # (S,)
+
+        num_peaks = self.kf_ki_dir.shape[1]
+        return num_peaks - soft_count
+
     def indexer_jax(self, UB):
         """
         JAX-compatible Laue indexer for a given collection of :math:`UB` matrices
@@ -151,7 +208,8 @@ class VectorizedObjectiveJAX:
         hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
         # (S, 3, M, 100)
 
-        int_hkl = jnp.round(hkl)
+        int_hkl = soft_round_sin(hkl)
+
         diff_hkl = hkl - int_hkl  # (S, 3, M, 100)
 
         dist = jnp.einsum("sij,sjmd->simd", UB, diff_hkl)
@@ -197,10 +255,9 @@ class VectorizedObjectiveJAX:
         UB = jnp.einsum("sij,jk->sik", U, self.B)
         # (S, 3, 3)
 
-        error, num, hkl, lamda = self.indexer_jax(UB)
+#        error, num, hkl, lamda = self.indexer_jax(UB)
+        error = self.indexer_soft_jax(UB)
 
-        # Return the error.
-        # Clipping in the es_step function prevents NaNs.
         return error
 
 
@@ -254,7 +311,7 @@ class FindUB:
             self.gamma = f["sample/gamma"][()]
             self.wavelength = f["instrument/wavelength"][()]
             self.R = f["goniometer/R"][()]
-            self.two_theta = f["peaks/scattering"][()]
+            self.two_theta = f["peaks/two_theta"][()]
             self.az_phi = f["peaks/azimuthal"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
 

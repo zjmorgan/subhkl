@@ -67,11 +67,11 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
         merge_keys = [
             "wavelength_mins",
             "wavelength_maxes",
-            "rotations",
-            "two_theta",
-            "azimuthal",
-            "intensity",
-            "sigma"
+            "goniometer/R",
+            "peaks/two_theta",
+            "peaks/azimuthal",
+            "peaks/intensity",
+            "peaks/sigma"
         ]
         super().__init__(h5_files, [], merge_keys)
 
@@ -104,7 +104,7 @@ class IndexerConcatenateMerger(BaseConcatenateMerger):
             "peaks/k",
             "peaks/l",
             "peaks/lambda",
-            "peaks/scattering",
+            "peaks/two_theta",
             "peaks/azimuthal",
         ]
 
@@ -125,7 +125,7 @@ class MTZExporter:
             self.k = np.array(f["peaks/k"])
             self.l = np.array(f["peaks/l"])
             self.lamda = np.array(f["peaks/lambda"])
-            self.theta = np.array(f["peaks/scattering"])/2
+            self.theta = np.array(f["peaks/two_theta"])/2
             self.phi = np.array(f["peaks/azimuthal"])
             self.intensity = np.array(f["peaks/intensity"])
             self.sigma = np.array(f["peaks/sigma"])
