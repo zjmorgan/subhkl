@@ -27,7 +27,7 @@ class VectorizedObjectiveJAX:
     JAX-compatible vectorized objective function for evosax.
     (Replaces the numpy-based VectorizedObjective)
     """
-    def __init__(self, B, kf_ki_dir, wavelength, angle_cdf, angle_t, tol=0.15):
+    def __init__(self, B, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, tol=0.15):
         """
         Parameters
         ----------
@@ -60,6 +60,16 @@ class VectorizedObjectiveJAX:
         # Create 100 linearly spaced wavelengths for each reflection
         self.lamda = jnp.linspace(wl_min, wl_max, 100).T
         # (M, 100)
+
+        # Handle weights: if None, default to 1.0 for everyone
+        if weights is None:
+            self.weights = jnp.ones(self.kf_ki_dir.shape[1])
+        else:
+            self.weights = jnp.array(weights)
+
+        # Pre-calculate the maximum possible score (sum of all weights)
+        # This is the score if every peak is perfectly indexed.
+        self.max_score = jnp.sum(self.weights)
 
     def orientation_U_jax(self, param):
         """
@@ -125,23 +135,9 @@ class VectorizedObjectiveJAX:
 
     def indexer_soft_jax(self, UB, softness=0.001):
         """
-        A smooth, differentiable classification objective.
-        Instead of minimizing total error (sensitive to outliers),
-        this maximizes the 'soft count' of indexed peaks.
-
-        Parameters
-        ----------
-        UB : array (S, 3, 3)
-            Orientation matrices.
-        softness : float
-            Controls the width of the 'acceptance' window (sigma).
-            Similar to 'tol' but for the soft Gaussian kernel.
-
-        Returns
-        -------
-        loss : array (S,)
-            Negative soft count (minimize this to maximize indexed peaks).
+        Weighted soft-indexing objective.
         """
+
         UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
 
         # 1. Map to HKL space (same as before)
@@ -162,23 +158,25 @@ class VectorizedObjectiveJAX:
         # Squared Euclidean distance for every wavelength candidate
         dist_sq = jnp.sum(dist_vec**2, axis=1) # (S, M, 100)
 
+        # dist_sq shape: (S, M, 100)
+
         # 4. Soft Wavelength Selection
-        # Instead of hard argmin, we can take the min distance
-        # (assuming the best wavelength is the one closest to integer HKL)
         min_dist_sq = jnp.min(dist_sq, axis=2) # (S, M)
 
-        # 5. Soft Classification (Gaussian Kernel)
-        # If dist is 0, score is 1. If dist is large, score is 0.
-        # This acts as a "soft counter" of indexed peaks.
-        # We use the 'softness' parameter as the Gaussian width (variance).
-        peak_scores = jnp.exp(-min_dist_sq / (2 * softness**2))
+        # 5. Weighted Soft Classification
+        # Calculate probability of fit (0 to 1) for each peak
+        peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2)) # (S, M)
 
-        # 6. Objective: Maximize the number of indexed peaks
-        # We return negative sum because optimizers minimize.
-        soft_count = jnp.sum(peak_scores, axis=1) # (S,)
+        # Apply weights: Strong peaks contribute more to the score
+        weighted_scores = peak_probs * self.weights[None, :] # (S, M)
 
-        num_peaks = self.kf_ki_dir.shape[1]
-        return num_peaks - soft_count
+        # 6. Objective: Minimize Weighted Misses
+        total_score = jnp.sum(weighted_scores, axis=1) # (S,)
+
+        # Return "Weighted Unindexed Peaks"
+        # If weights are normalized so mean(w)=1, this value is intuitively
+        # "How many average-quality peaks did we miss?"
+        return self.max_score - total_score
 
     def indexer_jax(self, UB):
         """
@@ -313,6 +311,8 @@ class FindUB:
             self.R = f["goniometer/R"][()]
             self.two_theta = f["peaks/two_theta"][()]
             self.az_phi = f["peaks/azimuthal"][()]
+            self.intensity = f["peaks/intensity"][()]
+            self.sigma_intensity = f["peaks/sigma"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
 
     def uncertainty_line_segements(self):
@@ -574,8 +574,20 @@ class FindUB:
         (num, hkl, lamda)
             Tuple containing results from index_de().
         """
-        
+
         kf_ki_dir = self.uncertainty_line_segements()
+
+        # 1. Use Signal-to-Noise (I / sigma)
+        # Add a small epsilon to sigma to prevent division by zero
+        weights = self.intensity / (self.sigma_intensity + 1e-6)
+
+        # 2. Normalize weights so mean is 1.0
+        # This keeps the loss function scale intuitive.
+        weights = weights / np.mean(weights)
+
+        # Optional: Clip extremely high weights to prevent one single peak
+        # from dominating the entire solution (e.g., max weight = 10x average)
+        weights = np.clip(weights, 0, 10.0)
 
         # 1. Instantiate the JAX-compatible objective function
         objective = VectorizedObjectiveJAX(
@@ -584,6 +596,7 @@ class FindUB:
             np.array(self.wavelength), # Pass wavelength bounds
             self._angle_cdf,           # Pass interpolation data
             self._angle_t,             # Pass interpolation data
+            weights=weights,
         )
 
         # Define the sample solution (shape (3,)) to infer num_dims
