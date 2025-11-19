@@ -1,6 +1,7 @@
 """
 Region growing (agglomerative clustering) algorithm
 """
+
 from math import ceil
 
 import numpy as np
@@ -26,12 +27,12 @@ class RegionGrower:
 
     def _get_neighbors_rel(self):
         threshold_int = ceil(self.distance_threshold)
-        threshold_sq = self.distance_threshold ** 2
+        threshold_sq = self.distance_threshold**2
 
         neighbors_rel = []
         for row in range(-threshold_int, threshold_int + 1):
             for col in range(-threshold_int, threshold_int + 1):
-                if row ** 2 + col ** 2 <= threshold_sq:
+                if row**2 + col**2 <= threshold_sq:
                     neighbors_rel.append((row, col))
 
         return neighbors_rel
@@ -93,7 +94,10 @@ class RegionGrower:
                         continue
 
                     neighbor_row, neighbor_col = neighbor_point
-                    dist_center = ((neighbor_row - initial[0]) ** 2 + (neighbor_col - initial[1]) ** 2) ** .5
+                    dist_center = (
+                        (neighbor_row - initial[0]) ** 2
+                        + (neighbor_col - initial[1]) ** 2
+                    ) ** 0.5
                     if dist_center < self.max_size:
                         grow_queue.append(neighbor_point)
                         cluster.add(neighbor_point)

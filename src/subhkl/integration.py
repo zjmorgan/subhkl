@@ -26,7 +26,7 @@ DetectorPeaks = namedtuple(
         "wavelengths",
         "intensity",
         "sigma",
-    ]
+    ],
 )
 
 
@@ -173,7 +173,7 @@ class Peaks:
         mask_file: str | None = None,
         mask_rel_erosion_radius: float = 0.05,
         show_steps: bool = False,
-        show_scale: str = "linear"
+        show_scale: str = "linear",
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Find peaks using a thresholding algorithm.
@@ -214,13 +214,15 @@ class Peaks:
             mask_file=mask_file,
             mask_rel_erosion_radius=mask_rel_erosion_radius,
             show_steps=show_steps,
-            show_scale=show_scale
+            show_scale=show_scale,
         )
 
         coords = alg.find_peaks(self.ims[bank])
         return coords[:, 0], coords[:, 1]
 
-    def scale_coordinates(self, bank: int, i: npt.NDArray, j: npt.NDArray) -> tuple[npt.NDArray, npt.NDArray]:
+    def scale_coordinates(
+        self, bank: int, i: npt.NDArray, j: npt.NDArray
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Scale from pixel coordinates to real positions.
 
@@ -272,7 +274,7 @@ class Peaks:
         R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
 
         if np.isclose(a, 0) or np.isclose(b, 0):
-            return 0., 0., 0.
+            return 0.0, 0.0, 0.0
 
         S_inv = np.diag([1 / scale_x, 1 / scale_y])
 
@@ -419,7 +421,9 @@ class Peaks:
 
         return i.astype(int), j.astype(int)
 
-    def reflections_mask(self, bank: int, xyz: list[float]) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
+    def reflections_mask(
+        self, bank: int, xyz: list[float]
+    ) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Return mask  using bank number and real-space coordinates (x, y, z).
 
@@ -474,10 +478,7 @@ class Peaks:
         return mask, i, j
 
     def detector_trajectories(
-        self,
-        bank: int,
-        x: list[float] | npt.NDArray,
-        y: list[float] | npt.NDArray
+        self, bank: int, x: list[float] | npt.NDArray, y: list[float] | npt.NDArray
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate detector trajectories.
@@ -752,7 +753,7 @@ class Peaks:
         self,
         harvest_peaks_kwargs: dict,
         integration_params: dict,
-        visualize: bool = False
+        visualize: bool = False,
     ) -> DetectorPeaks:
         """
         Get peaks in detector space (rotation, angles, and wavelength)
@@ -829,23 +830,33 @@ class Peaks:
 
             # Integrate peaks
             if visualize:
-                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+                int_result, hulls = integrator.integrate_peaks(
+                    bank, self.ims[bank], centers, return_hulls=True
+                )
             else:
                 int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
 
-            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            bank_intensity = np.array(
+                [peak_in for _, _, _, peak_in, _, _ in int_result]
+            )
+            bank_sigma = np.array(
+                [peak_sigma for _, _, _, _, _, peak_sigma in int_result]
+            )
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
                 axes[1].imshow(self.ims[bank], cmap="binary")
                 for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
-                    print(f'SNR: {peak_in / peak_sigma}')
+                    print(f"SNR: {peak_in / peak_sigma}")
 
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
-                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                            axes[1].plot(
+                                hull.points[simplex, 1],
+                                hull.points[simplex, 0],
+                                c="red",
+                            )
                 axes[1].set_title("Convex hulls")
                 fig.savefig(str(bank) + ".png")
                 plt.show()
@@ -882,7 +893,7 @@ class Peaks:
         az_phi: list[float],
         wavelengths: list[float],
         intensity: list[float],
-        sigma: list[float]
+        sigma: list[float],
     ):
         """
         Write output HDF5 file for peaks in detector space.

@@ -77,7 +77,7 @@ def finder(
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0
+    peak_pixel_outlier_threshold: float = 2.0,
 ):
     # Create peak finder from file + instrument
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -99,17 +99,21 @@ def finder(
         if peak_local_max_min_relative_intensity > 0:
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
     elif finder_algorithm == "thresholding":
-        peak_kwargs.update({
-            "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
-            "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-            "mask_file": thresholding_mask_file,
-            "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
-            "blur_kernel_sigma": thresholding_blur_kernel_sigma,
-            "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-        })
+        peak_kwargs.update(
+            {
+                "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
+                "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
+                "mask_file": thresholding_mask_file,
+                "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
+                "blur_kernel_sigma": thresholding_blur_kernel_sigma,
+                "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
+            }
+        )
     else:
-        raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
-                         "and \"thresholding\" are allowed")
+        raise ValueError(
+            'Invalid finder algorithm; only "peak_local_max" '
+            'and "thresholding" are allowed'
+        )
 
     # Setup parameters for integration with convex hull algorithm
     integration_params = {
@@ -120,11 +124,13 @@ def finder(
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
     }
 
     # Calculate the peaks in detector space
-    detector_peaks = peaks.get_detector_peaks(peak_kwargs, integration_params, visualize=False)
+    detector_peaks = peaks.get_detector_peaks(
+        peak_kwargs, integration_params, visualize=False
+    )
 
     # Write out the output HDF5 peaks file
     peaks.write_hdf5(
@@ -134,7 +140,7 @@ def finder(
         az_phi=detector_peaks.az_phi,
         wavelengths=detector_peaks.wavelengths,
         intensity=detector_peaks.intensity,
-        sigma=detector_peaks.sigma
+        sigma=detector_peaks.sigma,
     )
 
 
@@ -190,90 +196,97 @@ def indexer_using_file(
 ):
     index(num_procs, hdf5_peaks_filename, output_peaks_filename)
 
+
 @app.command()
-def normalize(
-        hdf5_peaks_filename: str, output_peaks_filename: str
-    ):
-    '''
+def normalize(hdf5_peaks_filename: str, output_peaks_filename: str):
+    """
     Create a copy of the input file, with each normalization value (from the normalization module) added to each row.
-    
+
     Args:
         hdf5_peaks_filename: String path for the input file to calculate normalizations
         output_peaks_file: String path for the output file location to write to.
-    '''
-    
+    """
+
     with h5py.File(hdf5_peaks_filename, "r") as original:
         with h5py.File(output_peaks_filename, "w") as output:
-            
             # Copy all data to the output file
             for h5obj in original.keys():
                 original.copy(h5obj, output)
-            
+
             # Lists of each normalization type's values per row
             lorentz = []
             absorption = []
             detector_efficiency = []
             extinction = []
-            
+
             # Calculate normalization for each row
             for i in range(len(output["peaks"]["lambda"])):
-                
                 # Get the lambda and theta values for each row
                 lambda_value = output["peaks"]["lambda"][i]
                 theta = output["peaks"]["scattering"][i] / 2.0
-                
+
                 # Add each normalization to the list
                 lorentz.append(normalization.lorentz_correction(lambda_value, theta))
                 absorption.append(normalization.absorption(lambda_value))
                 detector_efficiency.append(normalization.detector_efficiency(theta))
                 extinction.append(normalization.extinction(lambda_value))
-                
+
             # Write final data to new normalization group
             output["peaks"].create_group("normalization")
             output["peaks"]["normalization"]["lorentz"] = lorentz
             output["peaks"]["normalization"]["absorption"] = absorption
-            output["peaks"]["normalization"]["detecter_efficiency"] = detector_efficiency
+            output["peaks"]["normalization"]["detecter_efficiency"] = (
+                detector_efficiency
+            )
             output["peaks"]["normalization"]["extinction"] = extinction
-        
-def normalize_intensities(raw_peaks_filename: str, hdf5_peaks_filename: str, output_peaks_filename: str, beamline: str):
-    '''
+
+
+def normalize_intensities(
+    raw_peaks_filename: str,
+    hdf5_peaks_filename: str,
+    output_peaks_filename: str,
+    beamline: str,
+):
+    """
     Create a copy of the input file, with each normalization value (from the normalization module) added to each row.
-    
+
     Args:
         raw_peaks_filename: String path for the raw input file
         hdf5_peaks_filename: String path for the post-integration input file to calculate normalizations
         output_peaks_file: String path for the output file location to write to.
         beamline: The beamline name the file was generated with, in the same format as found in reduction_settings.json
-    '''    
-    
+    """
+
     # Get the path to the scaling value for this beamline
     scale_path = reduction_settings[beamline]["Scale"].split(".")
-    
+
     with h5py.File(raw_peaks_filename, "r") as raw:
-        
-        # Seek out the scaling value at the path from the config    
+        # Seek out the scaling value at the path from the config
         scale_obj = raw
-        
+
         for segment in scale_path:
             if not segment == "metadata":
                 scale_obj = scale_obj[segment]
-            
+
         # Read the numeric value
-        scale_value = scale_obj.astype('float32')
-    
+        scale_value = scale_obj.astype("float32")
+
     with h5py.File(hdf5_peaks_filename, "r") as original:
         with h5py.File(output_peaks_filename, "w") as output:
-            
             # Copy all data to the output file
             for h5obj in original.keys():
                 original.copy(h5obj, output)
-            
+
             # For each peak, scale down the hkl and uncertaintity values by the above factor
             for i in range(len(output["peaks"]["h"])):
-                
                 # TODO Confirm that these are the paths where intensity/uncertainty will be written
-                output["peaks"]["intensity"][i] = float(output["peaks"]["intensity"][i]) / scale_value
-                output["peaks"]["sigma"][i] = float(output["peaks"]["sigma"][i]) / scale_value
+                output["peaks"]["intensity"][i] = (
+                    float(output["peaks"]["intensity"][i]) / scale_value
+                )
+                output["peaks"]["sigma"][i] = (
+                    float(output["peaks"]["sigma"][i]) / scale_value
+                )
+
 
 if __name__ == "__main__":
     app()
