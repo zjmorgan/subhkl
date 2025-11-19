@@ -127,10 +127,10 @@ class VectorizedObjectiveJAX:
 
         # K^2
         K2 = jnp.einsum('sij,sjk->sik', K, K) # (S, 3, 3)
-        
+
         # Rodrigues' formula
         U = I + s[:, None, None] * K + t[:, None, None] * K2 # (S, 3, 3)
-        
+
         return U
 
     def indexer_soft_jax(self, UB, softness=0.001):
@@ -173,10 +173,15 @@ class VectorizedObjectiveJAX:
         # 6. Objective: Minimize Weighted Misses
         total_score = jnp.sum(weighted_scores, axis=1) # (S,)
 
+        # for reporting
+        ind = jnp.argmin(dist_sq, axis=2, keepdims=True) # (S, M, 1)
+        min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0] # (S, M)
+        int_hkl = jnp.take_along_axis(jnp.round(hkl), ind[:, None], axis=3)[..., 0]
+
         # Return "Weighted Unindexed Peaks"
         # If weights are normalized so mean(w)=1, this value is intuitively
         # "How many average-quality peaks did we miss?"
-        return self.max_score - total_score
+        return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
 
     def indexer_jax(self, UB):
         """
@@ -249,12 +254,11 @@ class VectorizedObjectiveJAX:
         """
 
         U = self.orientation_U_jax(x) # (S, 3, 3)
-        
         UB = jnp.einsum("sij,jk->sik", U, self.B)
         # (S, 3, 3)
 
 #        error, num, hkl, lamda = self.indexer_jax(UB)
-        error = self.indexer_soft_jax(UB, softness=self.tol)
+        error, _, _, _ = self.indexer_soft_jax(UB, softness=self.tol)
 
         return error
 
@@ -522,7 +526,7 @@ class FindUB:
 
         return np.sum(err ** 2), num, int_hkl.T, lamda
 
-    def index_de(self):
+    def index(self):
         """
         Run indexing using the best parameters (self.x) found by a minimizer.
         Uses the original numpy-based indexer_de.
@@ -530,19 +534,19 @@ class FindUB:
         kf_ki_dir = self.uncertainty_line_segements()
 
         B = self.reciprocal_lattice_B()
-        
+
         # self.x should be (3,) numpy array
         if not isinstance(self.x, np.ndarray):
             self.x = np.array(self.x) 
-            
+
         U = self.orientation_U(*self.x)
 
         UB = self.UB_matrix(U, B)
 
-        return self.indexer_de(UB, kf_ki_dir, self.wavelength)[1:]
+        return self.indexer_soft_jax(UB, kf_ki_dir, self.wavelength)[1:]
 
     def minimize_evosax(
-        self, 
+        self,
         strategy_name: str, 
         population_size: int = 1000, 
         num_generations: int = 100, 
@@ -553,7 +557,7 @@ class FindUB:
         """
         Minimize the objective function using evosax JAX-based algorithms.
         This replaces both the pyswarms (minimize) and scipy.DE (minimize_de) methods.
-        
+
         It runs the optimization `n_runs` times with different seeds and
         selects the best solution.
 
@@ -702,7 +706,7 @@ class FindUB:
             current_run_fitness = state.best_fitness
             current_run_member = state.best_solution
             print(f"Run {i+1} finished. Best fitness: {current_run_fitness:.4f}")
-            
+
             # 8. Check if this run is the best so far
             if current_run_fitness < best_overall_fitness:
                 best_overall_fitness = current_run_fitness
@@ -713,9 +717,13 @@ class FindUB:
         print(f"\n--- All {n_runs} runs complete ---")
         print(f"Best overall fitness: {best_overall_fitness:.4f}")
         print(f"Best parameters (u0, u1, u2): {best_overall_member}")
-        
+
         # Store the best parameters (converting back to numpy)
         self.x = np.array(best_overall_member)
-        
-        # 10. Return results by running the numpy-based indexer on the best params
-        return self.index_de()
+
+        U = objective.orientation_U_jax(self.x[None])[0]
+        _, score, hkl, lamb = objective.indexer_soft_jax(
+            (U @ self.reciprocal_lattice_B())[None], softness=tol
+        )
+
+        return score[0], hkl[0], lamb[0]
