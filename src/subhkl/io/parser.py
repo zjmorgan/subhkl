@@ -47,7 +47,7 @@ def index(
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
 
     # Call the new evosax minimizer
-    num, hkl, lamda = opt.minimize_evosax(
+    num, hkl, lamda, U = opt.minimize_evosax(
         strategy_name=strategy_name,
         population_size=population_size,
         num_generations=gens,
@@ -64,7 +64,6 @@ def index(
 
     # Get UB to save to output
     B = opt.reciprocal_lattice_B()
-    U = opt.orientation_U(*opt.x)
 
     # Copy data from temporary HDF5
     copy_keys = [
@@ -382,7 +381,6 @@ def peak_predictor(
     d_min: float = 1.0,
     create_visualizations: bool = False
 ):
-    peaks = Peaks(filename, instrument, wavelength_min=1, wavelength_max=4)
 
     with h5py.File(indexed_hdf5_filename) as f_indexed:
         a = float(np.array(f_indexed["sample/a"]))
@@ -393,10 +391,15 @@ def peak_predictor(
         gamma = float(np.array(f_indexed["sample/gamma"]))
         centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
-        R = peaks.goniometer_rotation
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
+    peaks = Peaks(filename,
+                  instrument,
+                  wavelength_min=wavelength[0],
+                  wavelength_max=wavelength[1])
+
+    R = peaks.goniometer_rotation
     UB = R @ U @ B
 
     peak_dict = peaks.predict_peaks(
@@ -563,7 +566,7 @@ def merger(
 def mtz_exporter(
     indexed_h5_filename: str,
     output_mtz_filename: str,
-    space_group: str
+    space_group: str,
 ):
     algorithm = MTZExporter(indexed_h5_filename, space_group)
     algorithm.write_mtz(output_mtz_filename)

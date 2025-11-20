@@ -7,13 +7,13 @@ import scipy.linalg
 import scipy.spatial
 import scipy.interpolate
 
-# --- JAX and Evosax Imports ---
+import gemmi
+
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jscipy_linalg
-# Corrected imports for DE and PSO
+
 from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
-# ------------------------------
 
 # Try to import tqdm for a progress bar
 try:
@@ -53,7 +53,7 @@ class VectorizedObjectiveJAX:
 
         # Ensure wavelength is a JAX array
         wavelength = jnp.array(wavelength)
-        
+
         wl_min = jnp.full(self.kf_ki_dir.shape[1], wavelength[0])  # (M)
         wl_max = jnp.full(self.kf_ki_dir.shape[1], wavelength[1])  # (M)
 
@@ -289,9 +289,11 @@ class FindUB:
         # Store data for JAX
         self._angle_cdf = cdf
         self._angle_t = t
-        
+
         # Keep scipy interpolator for non-JAX methods
         self._angle = scipy.interpolate.interp1d(cdf, t, kind="linear")
+
+        # create a gemmi spacegroup object
 
     def load_peaks(self, filename):
         """
@@ -318,6 +320,48 @@ class FindUB:
             self.intensity = f["peaks/intensity"][()]
             self.sigma_intensity = f["peaks/sigma"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
+
+    def get_consistent_U_for_symmetry(self, U_mat, B_mat):
+        """
+        Return the proper rotations for this spacegroup and pick
+        a consistent U matrix among all symmetry-related possibilities.
+
+        Parameters:
+        ----------
+        U_mat: array, (3, 3)
+            rotation matrix
+
+        B_mat: array, (3, 3)
+            B (instrument) matrix
+
+        Returns:
+            (U_unique, T)
+
+            where U_unique is a symmetry-equivalent (3, 3) matrix, and T is used to transform
+            the input U to the unique one
+        """
+
+        uc = gemmi.UnitCell(
+            self.a, self.b, self.c, self.alpha, self.beta, self.gamma
+        )
+
+        # extract the proper rotations from the point group
+        gops = gemmi.find_lattice_symmetry(uc, self.centering, max_obliq=3.0)
+        transforms = [ np.array(g.rot) // 24 for g in gops.sym_ops ]
+
+        # select a rotation that maximes the trace of UB
+        cost, T = -np.inf, np.eye(3)
+        for M in transforms:
+            UBp = U_mat @ B_mat @ np.linalg.inv(M)
+            trace = np.trace(UBp)
+            if trace > cost:
+                cost = trace
+                T = M.copy()
+
+        # the new U matrix
+        U_prime = U_mat @ B_mat @ np.linalg.inv(T) @ np.linalg.inv(B_mat)
+
+        return U_prime, T
 
     def uncertainty_line_segements(self):
         """
@@ -722,8 +766,10 @@ class FindUB:
         self.x = np.array(best_overall_member)
 
         U = objective.orientation_U_jax(self.x[None])[0]
-        _, score, hkl, lamb = objective.indexer_soft_jax(
-            (U @ self.reciprocal_lattice_B())[None], softness=tol
-        )
+        B = self.reciprocal_lattice_B()
+        _, score, hkl, lamb = objective.indexer_soft_jax((U @ B)[None], softness=tol)
 
-        return score[0], hkl[0], lamb[0]
+        U_new, T = self.get_consistent_U_for_symmetry(U, B)
+        hkl_unique = jnp.einsum('ij,kj->ki', T, hkl[0])
+
+        return score[0], hkl_unique, lamb[0], U_new
