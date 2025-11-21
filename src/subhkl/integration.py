@@ -1126,6 +1126,23 @@ class Peaks:
         xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
         h, k, l = hkl
 
+        # Reduce to base harmonic
+        hkl_arr = np.stack([h, k, l], axis=1)
+        g = np.gcd.reduce(np.abs(np.round(hkl_arr).astype(int)), axis=1)
+        g = np.maximum(g, 1)
+
+        hkl_prim = hkl_arr / g[:, None]
+        wl_prim = wl * g
+
+        n_best = np.ceil(wl_prim / self.wavelength_max).astype(int)
+        n_best = np.maximum(n_best, 1)
+
+        hkl_final = hkl_prim * n_best[:, None]
+        wl_final = wl_prim / n_best
+
+        h, k, l = hkl_final[:, 0], hkl_final[:, 1], hkl_final[:, 2]
+        wl = wl_final
+
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
             mask, i, j = self.reflections_mask(bank, xyz)

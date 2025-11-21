@@ -772,4 +772,27 @@ class FindUB:
         U_new, T = self.get_consistent_U_for_symmetry(U, B)
         hkl_unique = jnp.einsum('ij,kj->ki', T, hkl[0])
 
-        return score[0], hkl_unique, lamb[0], U_new
+        # Filter harmonics to base harmonic accessible in [wl_min, wl_max]
+        hkl_np = np.array(hkl_unique)
+        lamda_np = np.array(lamb[0])
+        wl_min, wl_max = self.wavelength
+
+        # Compute the GCD of the indices to find the primitive ray
+        g = np.gcd.reduce(np.abs(np.round(hkl_np).astype(int)), axis=1)
+        g = np.maximum(g, 1) # Safety for zeros
+
+        # Calculate primitive hkl and lambda (n=1 relative to primitive)
+        hkl_prim = hkl_np / g[:, None]
+        lamda_prim = lamda_np * g
+
+        # Find smallest n such that lambda = lambda_prim / n <= wl_max
+        # This maximizes lambda (keeping it closest to wl_max from below)
+        # and minimizes hkl indices.
+        n_best = np.ceil(lamda_prim / wl_max).astype(int)
+        n_best = np.maximum(n_best, 1)
+
+        # Re-scale to the best harmonic
+        hkl_final = hkl_prim * n_best[:, None]
+        lamda_final = lamda_prim / n_best
+
+        return score[0], hkl_final, lamda_final, U_new
