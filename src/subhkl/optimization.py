@@ -27,12 +27,14 @@ class VectorizedObjectiveJAX:
     JAX-compatible vectorized objective function for evosax.
     (Replaces the numpy-based VectorizedObjective)
     """
-    def __init__(self, B, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, tol=0.15):
+    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.15):
         """
         Parameters
         ----------
         B : array (3, 3)
             B matrix (from reciprocal_lattice_B)
+        centering : stsr
+            Bravais lattice centering
         kf_ki_dir : array (3, M)
             difference between incident and scattering directions for M
             reflections
@@ -42,12 +44,13 @@ class VectorizedObjectiveJAX:
             CDF values for angle interpolation (from FindUB._angle_cdf)
         angle_t : array
             Angle values for interpolation (from FindUB._angle_t)
-        tol : float
-            Indexing tolerance
+        softness : float
+            Shape parameter for rounding hkls
         """
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
-        self.tol = tol
+        self.softness = softness
+        self.centering = centering
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
 
@@ -158,6 +161,29 @@ class VectorizedObjectiveJAX:
         # Squared Euclidean distance for every wavelength candidate
         dist_sq = jnp.sum(dist_vec**2, axis=1) # (S, M, 100)
 
+        valid = jnp.full_like(hkl[:, 0], True, dtype=bool)
+
+        h, k, l = jnp.round(hkl).transpose(1, 0, 2, 3)
+
+        if self.centering == "A":
+            valid = (k + l) % 2 == 0
+        elif self.centering == "B":
+            valid = (h + l) % 2 == 0
+        elif self.centering == "C":
+            valid = (h + k) % 2 == 0
+        elif self.centering == "I":
+            valid = (h + k + l) % 2 == 0
+        elif self.centering == "F":
+            valid = ((h + k) % 2 == 0) & ((l + h) % 2 == 0) & ((k + l) % 2 == 0)
+        elif self.centering == "R":
+            valid = (h + k + l) % 3 == 0
+        elif self.centering == "R_obv":
+            valid = (-h + k + l) % 3 == 0
+        elif self.centering == "R_rev":
+            valid = (h - k + l) % 3 == 0
+
+        dist_sq = jnp.where(valid, dist_sq, jnp.inf)
+
         # dist_sq shape: (S, M, 100)
 
         # 4. Soft Wavelength Selection
@@ -176,65 +202,15 @@ class VectorizedObjectiveJAX:
         # for reporting
         ind = jnp.argmin(dist_sq, axis=2, keepdims=True) # (S, M, 1)
         min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0] # (S, M)
-        int_hkl = jnp.take_along_axis(jnp.round(hkl), ind[:, None], axis=3)[..., 0]
+        int_hkl = jnp.take_along_axis(jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3)[..., 0]
+
+        mask = jnp.isfinite(dist_sq)
+        int_hkl = jnp.where(~mask[:, None][:, :, :, 0], 0, int_hkl)
 
         # Return "Weighted Unindexed Peaks"
         # If weights are normalized so mean(w)=1, this value is intuitively
         # "How many average-quality peaks did we miss?"
         return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
-
-    def indexer_jax(self, UB):
-        """
-        JAX-compatible Laue indexer for a given collection of :math:`UB` matrices
-
-        Parameters
-        ----------
-        UB : array, (S, 3, 3)
-            S, 3x3 sample oriented lattice matrices.
-
-        Returns
-        -------
-        err : array, (S)
-            Indexing cost for each UB
-        num : array (S)
-            Number of peaks indexed for each UB
-        hkl : array (S, M, 3)
-            Miller indices of peaks for each UB
-        lamda : array (S, M)
-            Resolved wavelength of each peak
-        """
-        UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
-
-        hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
-        # (S, 3, M), M = number of reflections
-
-        hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
-        # (S, 3, M, 100)
-
-        int_hkl = jnp.round(hkl)
-
-        diff_hkl = hkl - int_hkl  # (S, 3, M, 100)
-
-        dist = jnp.einsum("sij,sjmd->simd", UB, diff_hkl)
-        # (S, 3, M, 100)
-
-        dist = jnp.linalg.norm(dist, axis=1)  # (S, M, 100)
-        ind = jnp.argmin(dist, axis=2, keepdims=True)  # (S, M, 1)
-
-        err = jnp.take_along_axis(dist, ind, axis=2)[:, :, 0]  # (S, M)
-        lamda = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]
-        # (S, M)
-
-        hkl = hkl_lamda / lamda[:, None, :]  # (S, 3, M)
-
-        int_hkl = jnp.round(hkl)
-        diff_hkl = hkl - int_hkl  # (S, 3, M)
-
-        mask = (jnp.abs(diff_hkl) < self.tol).all(axis=1)  # (S, M)
-        num = jnp.sum(mask, axis=1)  # (S)
-
-        # We minimize the sum of squared errors
-        return jnp.sum(err**2, axis=1), num, int_hkl.transpose((0, 2, 1)), lamda
 
     # Use partial to make 'self' a static argument for JIT
     @partial(jax.jit, static_argnames='self')
@@ -258,7 +234,7 @@ class VectorizedObjectiveJAX:
         # (S, 3, 3)
 
 #        error, num, hkl, lamda = self.indexer_jax(UB)
-        error, _, _, _ = self.indexer_soft_jax(UB, softness=self.tol)
+        error, _, _, _ = self.indexer_soft_jax(UB, softness=self.softness)
 
         return error
 
@@ -465,70 +441,6 @@ class FindUB:
 
         return scipy.spatial.transform.Rotation.from_rotvec(ax * w).as_matrix()
 
-    def indexer(self, UB, kf_ki_dir, d_min, d_max, wavelength, tol=0.1):
-        """
-        (Original scipy/numpy indexer for post-optimization check)
-        ... (rest of method) ...
-        """
-
-        wl_min, wl_max = wavelength
-
-        UB_inv = np.linalg.inv(UB)
-
-        hkl_lamda = np.einsum("ij,jk", UB_inv, kf_ki_dir)
-
-        lamda = np.linspace(wl_min, wl_max, 100)
-
-        hkl = hkl_lamda[:, :, np.newaxis] / lamda
-
-        s = np.einsum("ij,j...->i...", UB, hkl)
-        s = np.linalg.norm(s, axis=0)
-
-        int_hkl = np.round(hkl)
-        diff_hkl = hkl - int_hkl
-
-        dist = np.einsum("ij,j...->i...", UB, diff_hkl)
-        dist = np.linalg.norm(dist, axis=0)
-
-        dist[(s.T > 1 / d_min).T] = np.inf
-        dist[(s.T < 1 / d_max).T] = np.inf
-
-        h, k, l = int_hkl  # noqa: E741
-
-        valid = np.full_like(l, True, dtype=bool)
-
-        if self.centering == "A":
-            valid = (k + l) % 2 == 0
-        elif self.centering == "B":
-            valid = (h + l) % 2 == 0
-        elif self.centering == "C":
-            valid = (h + k) % 2 == 0
-        elif self.centering == "I":
-            valid = (h + k + l) % 2 == 0
-        elif self.centering == "F":
-            valid = ((h + k) % 2 == 0) & ((l + h) % 2 == 0) & ((k + l) % 2 == 0)
-        elif self.centering == "R_obv":
-            valid = (-h + k + l) % 3 == 0
-        elif self.centering == "R_obv":
-            valid = (h - k + l) % 3 == 0
-
-        dist[~valid] = np.inf
-
-        ind = np.argmin(dist, axis=1)
-
-        hkl = hkl[:, np.arange(hkl_lamda.shape[1]), ind]
-        lamda = lamda[ind]
-
-        int_hkl = np.round(hkl)
-        diff_hkl = hkl - int_hkl
-
-        mask = (np.abs(diff_hkl) < tol).all(axis=0)
-        int_hkl[:, ~mask] = 0
-
-        num = np.sum(mask)
-
-        return num, int_hkl.T, lamda
-
     def UB_matrix(self, U, B):
         """
         Calculate :math:`UB`-matrix.
@@ -536,39 +448,6 @@ class FindUB:
         """
 
         return U @ B
-
-    def indexer_de(self, UB, kf_ki_dir, wavelength, tol=0.15):
-        """
-        (Original numpy-based indexer for post-optimization)
-        ... (rest of method) ...
-        """
-        wl_min = np.full(kf_ki_dir.shape[1], wavelength[0])  # (M)
-        wl_max = np.full(kf_ki_dir.shape[1], wavelength[1])  # (M)
-        x = np.linspace(0, 1, 100)
-        lamda = wl_min[:, None] + (wl_max - wl_min)[:, None] * x[None, :]
-
-        UB_inv = np.linalg.inv(UB)
-
-        hkl_lamda = np.einsum("ij,jk", UB_inv, kf_ki_dir)
-        hkl = hkl_lamda[:, :, np.newaxis] / lamda[np.newaxis, :, :]
-        int_hkl = np.round(hkl)
-        diff_hkl = hkl - int_hkl
-
-        dist = np.einsum("ij,j...->i...", UB, diff_hkl)
-        dist = np.linalg.norm(dist, axis=0)
-
-        ind = np.argmin(dist, axis=1)
-        err = dist[np.arange(dist.shape[0]), ind]
-
-        lamda = lamda[np.arange(lamda.shape[0]), ind]
-        hkl = hkl_lamda / lamda
-        int_hkl = np.round(hkl)
-        diff_hkl = hkl - int_hkl
-
-        mask = (np.abs(diff_hkl) < tol).all(axis=0)
-        num = np.sum(mask)
-
-        return np.sum(err ** 2), num, int_hkl.T, lamda
 
     def index(self):
         """
@@ -596,7 +475,7 @@ class FindUB:
         num_generations: int = 100, 
         n_runs: int = 1, 
         seed: int = 0,
-        tol: float = 1e-3,
+        softness: float = 1e-3,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -617,7 +496,7 @@ class FindUB:
             Number of times to run the minimization with different seeds.
         seed : int
             Base seed for the random number generator.
-        tol : float
+        softness : float
             Softness parameter (the smaller, the more stringent the peak finding criteria)
 
         Returns
@@ -643,12 +522,13 @@ class FindUB:
         # 1. Instantiate the JAX-compatible objective function
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
+            self.centering,
             kf_ki_dir,
             np.array(self.wavelength), # Pass wavelength bounds
             self._angle_cdf,           # Pass interpolation data
             self._angle_t,             # Pass interpolation data
             weights=weights,
-            tol=tol,
+            softness=softness,
         )
 
         # Define the sample solution (shape (3,)) to infer num_dims
@@ -767,7 +647,7 @@ class FindUB:
 
         U = objective.orientation_U_jax(self.x[None])[0]
         B = self.reciprocal_lattice_B()
-        _, score, hkl, lamb = objective.indexer_soft_jax((U @ B)[None], softness=tol)
+        _, score, hkl, lamb = objective.indexer_soft_jax((U @ B)[None], softness=softness)
 
         U_new, T = self.get_consistent_U_for_symmetry(U, B)
         hkl_unique = jnp.einsum('ij,kj->ki', T, hkl[0])
@@ -778,11 +658,11 @@ class FindUB:
         wl_min, wl_max = self.wavelength
 
         # Compute the GCD of the indices to find the primitive ray
-        g = np.gcd.reduce(np.abs(np.round(hkl_np).astype(int)), axis=1)
+        g = np.gcd.reduce(np.abs(np.round(hkl_np).astype(np.int32)), axis=1)
         g = np.maximum(g, 1) # Safety for zeros
 
         # Calculate primitive hkl and lambda (n=1 relative to primitive)
-        hkl_prim = hkl_np / g[:, None]
+        hkl_prim = hkl_np // g[:, None]
         lamda_prim = lamda_np * g
 
         # Find smallest n such that lambda = lambda_prim / n <= wl_max
@@ -790,6 +670,44 @@ class FindUB:
         # and minimizes hkl indices.
         n_best = np.ceil(lamda_prim / wl_max).astype(int)
         n_best = np.maximum(n_best, 1)
+
+        # Centering correction
+
+        # Ensure n_best results in an allowed reflection
+        h_p = np.round(hkl_prim[:, 0]).astype(int)
+        k_p = np.round(hkl_prim[:, 1]).astype(int)
+        l_p = np.round(hkl_prim[:, 2]).astype(int)
+
+        valid = np.full(h_p.shape, True, dtype=bool)
+
+        if self.centering == "A":
+            valid = (k_p + l_p) % 2 == 0
+        elif self.centering == "B":
+            valid = (h_p + l_p) % 2 == 0
+        elif self.centering == "C":
+            valid = (h_p + k_p) % 2 == 0
+        elif self.centering == "I":
+            valid = (h_p + k_p + l_p) % 2 == 0
+        elif self.centering == "F":
+            valid = ((h_p + k_p) % 2 == 0) & ((k_p + l_p) % 2 == 0) & ((h_p + l_p) % 2 == 0)
+        elif self.centering == "R":
+             valid = (h_p + k_p + l_p) % 3 == 0
+        elif self.centering == "R_obv":
+             valid = (-h_p + k_p + l_p) % 3 == 0
+        elif self.centering == "R_rev":
+             valid = (h_p - k_p + l_p) % 3 == 0
+
+        # Determine step size (multiplier) for n
+        # For R centerings, if n=1 fails, n=3 is usually required
+        # For others (A,B,C,I,F), if n=1 fails, n=2 is usually required
+        step = np.full(h_p.shape, 1, dtype=int)
+        if self.centering.startswith("R"):
+             step[~valid] = 3
+        elif self.centering != "P":
+             step[~valid] = 2
+
+        # Adjust n_best to be next multiple of step
+        n_best = (np.ceil(n_best / step) * step).astype(int)
 
         # Re-scale to the best harmonic
         hkl_final = hkl_prim * n_best[:, None]

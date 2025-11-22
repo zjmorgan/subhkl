@@ -505,6 +505,10 @@ class Peaks:
             mask = ((h + k) % 2 == 0) & ((h + l) % 2 == 0) & ((k + l) % 2 == 0)
         elif centering == "R":
             mask = (h + k + l) % 3 == 0
+        elif centering == "R_obv":
+            mask = (-h + k + l) % 3 == 0
+        elif centering == "R_rev":
+            mask = (h - k + l) % 3 == 0
         else:
             raise ValueError("Invalid centering")
 
@@ -1128,14 +1132,45 @@ class Peaks:
 
         # Reduce to base harmonic
         hkl_arr = np.stack([h, k, l], axis=1)
-        g = np.gcd.reduce(np.abs(np.round(hkl_arr).astype(int)), axis=1)
+        g = np.gcd.reduce(np.abs(np.round(hkl_arr).astype(np.int32)), axis=1)
         g = np.maximum(g, 1)
 
-        hkl_prim = hkl_arr / g[:, None]
+        hkl_prim = hkl_arr // g[:, None]
         wl_prim = wl * g
 
         n_best = np.ceil(wl_prim / self.wavelength_max).astype(int)
         n_best = np.maximum(n_best, 1)
+
+        # centering check
+        h_p = np.round(hkl_prim[:, 0]).astype(int)
+        k_p = np.round(hkl_prim[:, 1]).astype(int)
+        l_p = np.round(hkl_prim[:, 2]).astype(int)
+
+        valid = np.full(h_p.shape, True, dtype=bool)
+        if centering == "A":
+            valid = (k_p + l_p) % 2 == 0
+        elif centering == "B":
+            valid = (h_p + l_p) % 2 == 0
+        elif centering == "C":
+            valid = (h_p + k_p) % 2 == 0
+        elif centering == "I":
+            valid = (h_p + k_p + l_p) % 2 == 0
+        elif centering == "F":
+            valid = ((h_p + k_p) % 2 == 0) & ((k_p + l_p) % 2 == 0) & ((h_p + l_p) % 2 == 0)
+        elif self.centering == "R":
+            valid = (h_p + k_p + l_p) % 3 == 0
+        elif self.centering == "R_obv":
+            valid = (-h_p + k_p + l_p) % 3 == 0
+        elif self.centering == "R_rev":
+            valid = (h_p - k_p + l_p) % 3 == 0
+
+        step = np.full(h_p.shape, 1, dtype=int)
+        if centering.startswith("R"):
+             step[~valid] = 3
+        elif centering != "P":
+             step[~valid] = 2
+
+        n_best = (np.ceil(n_best / step) * step).astype(int)
 
         hkl_final = hkl_prim * n_best[:, None]
         wl_final = wl_prim / n_best
