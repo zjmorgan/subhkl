@@ -449,25 +449,6 @@ class FindUB:
 
         return U @ B
 
-    def index(self):
-        """
-        Run indexing using the best parameters (self.x) found by a minimizer.
-        Uses the original numpy-based indexer_de.
-        """
-        kf_ki_dir = self.uncertainty_line_segements()
-
-        B = self.reciprocal_lattice_B()
-
-        # self.x should be (3,) numpy array
-        if not isinstance(self.x, np.ndarray):
-            self.x = np.array(self.x) 
-
-        U = self.orientation_U(*self.x)
-
-        UB = self.UB_matrix(U, B)
-
-        return self.indexer_soft_jax(UB, kf_ki_dir, self.wavelength)[1:]
-
     def minimize_evosax(
         self,
         strategy_name: str, 
