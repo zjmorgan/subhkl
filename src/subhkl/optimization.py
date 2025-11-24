@@ -647,70 +647,7 @@ class FindUB:
 
         U = objective.orientation_U_jax(self.x[None])[0]
         B = self.reciprocal_lattice_B()
-        _, score, hkl, lamb = objective.indexer_soft_jax((U @ B)[None], softness=softness)
+        U_new, _ = self.get_consistent_U_for_symmetry(U, B)
+        _, score, hkl, lamb = objective.indexer_soft_jax((U_new @ B)[None], softness=softness)
 
-        U_new, T = self.get_consistent_U_for_symmetry(U, B)
-        hkl_unique = jnp.einsum('ij,kj->ki', T, hkl[0])
-
-        # Filter harmonics to base harmonic accessible in [wl_min, wl_max]
-        hkl_np = np.array(hkl_unique)
-        lamda_np = np.array(lamb[0])
-        wl_min, wl_max = self.wavelength
-
-        # Compute the GCD of the indices to find the primitive ray
-        g = np.gcd.reduce(np.abs(np.round(hkl_np).astype(np.int32)), axis=1)
-        g = np.maximum(g, 1) # Safety for zeros
-
-        # Calculate primitive hkl and lambda (n=1 relative to primitive)
-        hkl_prim = hkl_np // g[:, None]
-        lamda_prim = lamda_np * g
-
-        # Find smallest n such that lambda = lambda_prim / n <= wl_max
-        # This maximizes lambda (keeping it closest to wl_max from below)
-        # and minimizes hkl indices.
-        n_best = np.ceil(lamda_prim / wl_max).astype(int)
-        n_best = np.maximum(n_best, 1)
-
-        # Centering correction
-
-        # Ensure n_best results in an allowed reflection
-        h_p = np.round(hkl_prim[:, 0]).astype(int)
-        k_p = np.round(hkl_prim[:, 1]).astype(int)
-        l_p = np.round(hkl_prim[:, 2]).astype(int)
-
-        valid = np.full(h_p.shape, True, dtype=bool)
-
-        if self.centering == "A":
-            valid = (k_p + l_p) % 2 == 0
-        elif self.centering == "B":
-            valid = (h_p + l_p) % 2 == 0
-        elif self.centering == "C":
-            valid = (h_p + k_p) % 2 == 0
-        elif self.centering == "I":
-            valid = (h_p + k_p + l_p) % 2 == 0
-        elif self.centering == "F":
-            valid = ((h_p + k_p) % 2 == 0) & ((k_p + l_p) % 2 == 0) & ((h_p + l_p) % 2 == 0)
-        elif self.centering == "R":
-             valid = (h_p + k_p + l_p) % 3 == 0
-        elif self.centering == "R_obv":
-             valid = (-h_p + k_p + l_p) % 3 == 0
-        elif self.centering == "R_rev":
-             valid = (h_p - k_p + l_p) % 3 == 0
-
-        # Determine step size (multiplier) for n
-        # For R centerings, if n=1 fails, n=3 is usually required
-        # For others (A,B,C,I,F), if n=1 fails, n=2 is usually required
-        step = np.full(h_p.shape, 1, dtype=int)
-        if self.centering.startswith("R"):
-             step[~valid] = 3
-        elif self.centering != "P":
-             step[~valid] = 2
-
-        # Adjust n_best to be next multiple of step
-        n_best = (np.ceil(n_best / step) * step).astype(int)
-
-        # Re-scale to the best harmonic
-        hkl_final = hkl_prim * n_best[:, None]
-        lamda_final = lamda_prim / n_best
-
-        return score[0], hkl_final, lamda_final, U_new
+        return score[0], hkl[0], lamb[0], U_new
