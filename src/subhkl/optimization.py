@@ -143,18 +143,15 @@ class VectorizedObjectiveJAX:
 
         UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
 
-        # 1. Map to HKL space (same as before)
+        # map to HKL space
         hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
         hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
         # (S, 3, M, 100)
 
-        # 2. Smooth Periodic Distance
-        # Instead of `hkl - round(hkl)`, use Sine.
-        # For small x, sin(2*pi*x)/(2*pi) approx x.
-        # This is differentiable everywhere and naturally periodic.
-        diff_hkl_smooth = jnp.sin(jnp.pi * 2 * hkl) / (2 * jnp.pi)
+        # Smooth periodic distance: instead of `hkl - round(hkl)`, use Sine.
+        diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
 
-        # 3. Map error back to Cartesian q-space
+        # map error back to Cartesian q-space
         # (S, 3, 3) @ (S, 3, M, 100) -> (S, 3, M, 100)
         dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
 
@@ -186,17 +183,17 @@ class VectorizedObjectiveJAX:
 
         # dist_sq shape: (S, M, 100)
 
-        # 4. Soft Wavelength Selection
+        # soft Wavelength Selection
         min_dist_sq = jnp.min(dist_sq, axis=2) # (S, M)
 
-        # 5. Weighted Soft Classification
-        # Calculate probability of fit (0 to 1) for each peak
+        # calculate probability of fit (0 to 1) for each peak
         peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2)) # (S, M)
 
-        # Apply weights: Strong peaks contribute more to the score
+        # apply weights: Strong peaks contribute more to the score
         weighted_scores = peak_probs * self.weights[None, :] # (S, M)
 
-        # 6. Objective: Minimize Weighted Misses
+        # If weights are normalized so mean(w)=1, this value is intuitively
+        # "How many average-quality peaks did we index?"
         total_score = jnp.sum(weighted_scores, axis=1) # (S,)
 
         # for reporting
@@ -207,9 +204,6 @@ class VectorizedObjectiveJAX:
         mask = jnp.isfinite(dist_sq)
         int_hkl = jnp.where(~mask[:, None][:, :, :, 0], 0, int_hkl)
 
-        # Return "Weighted Unindexed Peaks"
-        # If weights are normalized so mean(w)=1, this value is intuitively
-        # "How many average-quality peaks did we miss?"
         return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
 
     # Use partial to make 'self' a static argument for JIT
