@@ -25,6 +25,7 @@ def index(
     n_runs: int,
     seed: int,
     softness: float,
+    bootstrap_filename: str = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -46,6 +47,16 @@ def index(
     print(f"Running {n_runs} run(s)...")
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
 
+    # Load bootstrap params if file is provided
+    init_params = None
+    if bootstrap_filename:
+        print(f"Bootstrapping from solution in: {bootstrap_filename}")
+        with h5py.File(bootstrap_filename, "r") as f:
+            if "optimization/best_params" in f:
+                init_params = f["optimization/best_params"][()]
+            else:
+                print("WARNING: No optimization params found in bootstrap file. Starting random.")
+
     # Call the new evosax minimizer
     num, hkl, lamda, U = opt.minimize_evosax(
         strategy_name=strategy_name,
@@ -54,6 +65,7 @@ def index(
         n_runs=n_runs,
         seed=seed,
         softness=softness,
+        init_params=init_params,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -100,6 +112,7 @@ def index(
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
+        f["optimization/best_params"] = opt.x
     print("Done.")
 
 
@@ -273,6 +286,7 @@ def indexer(
         help="Base seed for the first optimization run."
     ),
     softness: float = 0.1,
+    bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -323,6 +337,7 @@ def indexer(
         n_runs=n_runs,
         seed=seed,
         softness=softness,
+        bootstrap_filename=bootstrap_filename,
     )
 
 

@@ -448,6 +448,7 @@ class FindUB:
         n_runs: int = 1, 
         seed: int = 0,
         softness: float = 1e-3,
+        init_params: np.ndarray = None,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -568,22 +569,38 @@ class FindUB:
 
             # Create initial population and fitness.
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
-            # Initialize state using .init()
-            if strategy_type == 'population_based':
-                # Population is (popsize, 3) random numbers [0, 1]
-                population_init = jax.random.uniform(rng_pop, (population_size, 3))
 
-                # Evaluate the initial population
-                fitness_init = objective(population_init)
+            if init_params is None:
+                # Initialize random state
+                if strategy_type == 'population_based':
+                    # Population is (popsize, 3) random numbers [0, 1]
+                    population_init = jax.random.uniform(rng_pop, (population_size, 3))
 
-                state = strategy.init(rng_init, population_init, fitness_init, params)
-            elif strategy_type == 'distribution_based':
-                # solution is (3, ) random numbers [0, 1]
-                solution_init = jax.random.uniform(rng_pop, (3, ))
+                    # Evaluate the initial population
+                    fitness_init = objective(population_init)
 
-                state = strategy.init(rng_init, solution_init, params)
+                    state = strategy.init(rng_init, population_init, fitness_init, params)
+                elif strategy_type == 'distribution_based':
+                    # solution is (3, ) random numbers [0, 1]
+                    solution_init = jax.random.uniform(rng_pop, (3, ))
+
+                    state = strategy.init(rng_init, solution_init, params)
+                else:
+                    raise ValueError
+
             else:
-                raise ValueError
+                # resume using save parameters
+                start_sol = jnp.array(init_params)
+                if strategy_type == 'population_based':
+                    # Initialize population as a tight Gaussian ball around the guess
+                    # Sigma = 0.05 ensures we stay local but have some diversity
+                    noise = jax.random.normal(rng_pop, (population_size, 3)) * 0.05
+                    population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                    fitness_init = objective(population_init)
+                    state = strategy.init(rng_init, population_init, fitness_init, params)
+                elif strategy_type == 'distribution_based': # e.g. CMA-ES
+                    # Initialize the mean of the distribution at our guess
+                    state = strategy.init(rng_init, start_sol, params)
 
             pbar = range(num_generations)
             if trange is not None:
