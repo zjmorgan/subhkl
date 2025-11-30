@@ -201,9 +201,6 @@ class VectorizedObjectiveJAX:
         min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0] # (S, M)
         int_hkl = jnp.take_along_axis(jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3)[..., 0]
 
-        mask = jnp.isfinite(dist_sq)
-        int_hkl = jnp.where(~mask[:, None][:, :, :, 0], 0, int_hkl)
-
         return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
 
     # Use partial to make 'self' a static argument for JIT
