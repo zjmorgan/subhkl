@@ -183,7 +183,9 @@ class Peaks:
 
                     bc = np.bincount(array - offset, minlength=m * n)
 
-                    ims[bank] = bc.reshape(m, n)
+                    # skip "empty" detector data
+                    if np.sum(bc) > 0:
+                        ims[bank] = bc.reshape(m, n)
 
         return ims
 
@@ -951,79 +953,85 @@ class Peaks:
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
 
-            # Find candidate peaks
-            if finder_algorithm == "peak_local_max":
-                i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
-            elif finder_algorithm == "thresholding":
-                i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
-            else:
-                raise ValueError("Invalid finder algorithm")
-            if show_progress:
-                print(f"Found {len(i)} candidate peaks")
-
-            if visualize:
-                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
-                axes[0].scatter(j, i, marker="1", c="blue")
-                axes[0].set_title("Candidate peaks")
-            else:
-                fig, axes = None, None
-
-            centers = np.stack([i, j], axis=-1)
-
-            # Integrate peaks
-            if visualize:
-                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
-            else:
-                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
-                hulls = None
-
-            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
-            keep = [peak_in is not None for peak_in in bank_intensity]
-
-            if visualize:
-                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+            try:
+                # Find candidate peaks
+                if finder_algorithm == "peak_local_max":
+                    i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
+                elif finder_algorithm == "thresholding":
+                    i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
+                else:
+                    raise ValueError("Invalid finder algorithm")
                 if show_progress:
-                    for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
-                        print(f'SNR: {peak_in / peak_sigma}')
+                    print(f"Found {len(i)} candidate peaks")
 
-                for _, hull, _, _ in hulls:
-                    if hull is not None:
-                        for simplex in hull.simplices:
-                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-                axes[1].set_title("Convex hulls")
-                fig.subplots_adjust(right=0.8)
-                cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
-                fig.colorbar(plt_im, cbar_ax)
-                output_file = str(bank) + ".png"
-                if file_prefix is not None:
-                    output_file = file_prefix + "_" + output_file
-                fig.savefig(output_file)
-                plt.show()
+                if visualize:
+                    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+                    axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                    axes[0].scatter(j, i, marker="1", c="blue")
+                    axes[0].set_title("Candidate peaks")
+                else:
+                    fig, axes = None, None
 
-            # Only add integrated peaks to data
-            if sum(keep) > 0:
-                i, j = i[keep], j[keep]
-                bank_intensity = bank_intensity[keep]
-                bank_sigma = bank_sigma[keep]
+                centers = np.stack([i, j], axis=-1)
 
-                # Calculate peak angles
-                tt, az = self.detector_trajectories(bank, i, j)
+                # Integrate peaks
+                if visualize:
+                    int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+                else:
+                    int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+                    hulls = None
 
-                # Add peak data to output
-                two_theta += tt.tolist()
-                az_phi += az.tolist()
-                R += [self.goniometer_rotation] * len(tt)
-                lamda_min += [self.wavelength_min] * len(tt)
-                lamda_max += [self.wavelength_max] * len(tt)
-                intensity += bank_intensity.tolist()
-                sigma += bank_sigma.tolist()
-                banks += [bank] * sum(keep)
+                bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
+                bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+                keep = [peak_in is not None for peak_in in bank_intensity]
 
-                print(f"Integrated {len(i)}/{len(centers)} peaks")
-            else:
-                print("Bank had 0 peaks")
+                if visualize:
+                    try:
+                        plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                        if show_progress:
+                            for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
+                                print(f'SNR: {peak_in / peak_sigma}')
+
+                        for _, hull, _, _ in hulls:
+                            if hull is not None:
+                                for simplex in hull.simplices:
+                                    axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                        axes[1].set_title("Convex hulls")
+                        fig.subplots_adjust(right=0.8)
+                        cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
+                        fig.colorbar(plt_im, cbar_ax)
+                        output_file = str(bank) + ".png"
+                        if file_prefix is not None:
+                            output_file = file_prefix + "_" + output_file
+                        fig.savefig(output_file)
+                        plt.show()
+                    except Exception as e:
+                        print(f"Unable to create image for bank {bank}: {e}")
+
+                # Only add integrated peaks to data
+                if sum(keep) > 0:
+                    i, j = i[keep], j[keep]
+                    bank_intensity = bank_intensity[keep]
+                    bank_sigma = bank_sigma[keep]
+
+                    # Calculate peak angles
+                    tt, az = self.detector_trajectories(bank, i, j)
+
+                    # Add peak data to output
+                    two_theta += tt.tolist()
+                    az_phi += az.tolist()
+                    R += [self.goniometer_rotation] * len(tt)
+                    lamda_min += [self.wavelength_min] * len(tt)
+                    lamda_max += [self.wavelength_max] * len(tt)
+                    intensity += bank_intensity.tolist()
+                    sigma += bank_sigma.tolist()
+                    banks += [bank] * sum(keep)
+
+                    print(f"Integrated {len(i)}/{len(centers)} peaks")
+                else:
+                    print("Bank had 0 peaks")
+            except Exception as e:
+                print(f"Error while processing peaks for bank {bank}: {e}")
 
         return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
 
