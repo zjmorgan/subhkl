@@ -10,8 +10,8 @@ Both subcommands use the same CLI parameters, documented below in order of likel
 - `--region-growth-minimum-intensity`: number, units events/pixel
     - Minimum average intensity (# of events) of neighboring pixels required for a pixel to be included in a peak
     - Set this slightly above the average noise level of each image
-    - $\uparrow$ for more and bigger peaks
-    - $\downarrow$ to remove false positives and decrease peak size
+    - $\downarrow$ for more and bigger peaks
+    - $\uparrow$ to remove false positives and decrease peak size
     - This is the **most important** parameter
 - `--peak-minimum-pixels`: number, units pixels
     - Peaks are discarded if they don't have at least this many pixels
