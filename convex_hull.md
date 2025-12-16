@@ -5,7 +5,7 @@ Convex hull peak integration is used in two ways in `subhkl`:
 1. Preliminary integration is performed during the `finder` subcommand to filter false positive peak detections from the peak finder.
 2. Actual peak integration is performed during the `integrator` subcommand.
 
-Both subcommands use the same CLI parameters, documented below in order of likelihood that you will need to modify them. See [Algorithm](Algorithm) below to understand better how the parameters will affect the algorithm.
+Both subcommands use the same CLI parameters, documented below in order of likelihood that you will need to modify them. See [Algorithm](#algorithm) below to understand better how the parameters will affect the algorithm.
 
 - `--region-growth-minimum-intensity`: number, units events/pixel
     - Minimum average intensity (# of events) of neighboring pixels required for a pixel to be included in a peak
