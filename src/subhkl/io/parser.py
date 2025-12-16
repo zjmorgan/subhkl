@@ -13,43 +13,45 @@ app = typer.Typer()
 
 
 def index(
-    method: str,
-    num_procs: int,
-    num_attempts: int,
-    required_success_rate: float,
     hdf5_peaks_filename: str,
     output_peaks_filename: str,
-    show_progress: bool = False,
-    seed: typing.Optional[int] = None
+    strategy_name: str,
+    population_size: int,
+    gens: int,
+    n_runs: int,
+    seed: int
 ):
     """
-    Index the given peak file and save it.
+    Index the given peak file and save it using the evosax optimizer.
 
     Params:
-        method: Indexing method to use, either "swarm", for the swarm-based
-            algorithm, or "de", for the differential evolution algorithm
-        num_procs: Number of pyswarm threads to use in optimization.
         hdf5_peaks_filename: Path to the input hdf5 file to index
         output_peaks_filename: Path to write the output hdf file.
+        strategy_name: Optimization strategy ('DE' or 'PSO').
+        population_size: Population size for each generation.
+        gens: Number of generations to run.
+        n_runs: Number of optimization runs with different seeds.
+        seed: Base seed for the first optimization run.
     """
 
     # Index the peaks
     opt = FindUB(hdf5_peaks_filename)
-    if method == "swarm":
-        num, hkl, lamda = opt.minimize(num_procs)
-    elif method == "de":
-        num, hkl, lamda = opt.minimize_de(
-            num_procs,
-            num_attempts=num_attempts,
-            required_success_rate=required_success_rate, 
-            show_progress=show_progress,
-            seed=seed
-        )
-    else:
-        raise ValueError("Invalid indexing method")
-    
-    print(f"Indexed {int(num)} peaks out of {len(hkl)} ({100*num/len(hkl):.02f}%)")
-    
+
+    print(f"Starting evosax optimization with strategy: {strategy_name}")
+    print(f"Running {n_runs} run(s)...")
+    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+
+    # Call the new evosax minimizer
+    num, hkl, lamda = opt.minimize_evosax(
+        strategy_name=strategy_name,
+        population_size=population_size,
+        num_generations=gens,
+        n_runs=n_runs,
+        seed=seed
+    )
+
+    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
+
     h = [i[0] for i in hkl]
     k = [i[1] for i in hkl]
     l_list = [i[2] for i in hkl]
@@ -82,6 +84,7 @@ def index(
             copied_data[key] = np.array(f[key])
 
     # Save output to HDF5 file
+    print(f"Saving indexed peaks to {output_peaks_filename}...")
     with h5py.File(output_peaks_filename, "w") as f:
         for key, value in copied_data.items():
             f[key] = value
@@ -92,6 +95,7 @@ def index(
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
+    print("Done.")
 
 
 @app.command()
@@ -193,10 +197,6 @@ def finder(
 
 @app.command()
 def indexer(
-    method: str,
-    num_procs: int,
-    num_attempts: int,
-    required_success_rate: float,
     peaks_h5_filename: str,
     output_peaks_filename: str,
     a: float,
@@ -209,10 +209,38 @@ def indexer(
     wavelength_max: float,
     sample_centering: str,
     goniometer_csv_filename: typing.Optional[str] = None,
-    show_progress: bool = False,
-    seed: typing.Optional[int] = None
+    # --- Updated evosax CLI arguments ---
+    strategy_name: str = typer.Option(
+        "DE", 
+        "--strategy", 
+        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+    ),
+    n_runs: int = typer.Option(
+        1, 
+        "--n-runs", "-n", 
+        help="Number of optimization runs with different seeds."
+    ),
+    population_size: int = typer.Option(
+        1000, 
+        "--population-size", "--popsize", 
+        help="Population size for each generation."
+    ),
+    gens: int = typer.Option(
+        100, 
+        "--gens", 
+        help="Number of generations to run."
+    ),
+    seed: int = typer.Option(
+        0, 
+        "--seed", 
+        help="Base seed for the first optimization run."
+    ),
 ) -> None:
+    """
+    Find peaks, prepare, and index them from command-line parameters.
+    """
     # Load peaks h5 file
+    print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename) as f:
         two_theta = np.array(f["two_theta"])
         az_phi = np.array(f["azimuthal"])
@@ -222,12 +250,15 @@ def indexer(
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
+        print(f"Loading goniometer from: {goniometer_csv_filename}")
         R = np.loadtxt(goniometer_csv_filename, delimiter=",")
     else:
+        print("Using goniometer rotation from peaks file.")
         R = goniometer_rotation
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
+    print(f"Creating temporary indexer input file: {unique_filename}")
     with h5py.File(unique_filename, "w") as f:
         f["sample/a"] = a
         f["sample/b"] = b
@@ -243,14 +274,62 @@ def indexer(
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
 
-    index(method, num_procs, num_attempts, required_success_rate, unique_filename, output_peaks_filename, show_progress=show_progress, seed=seed)
+    # Call the internal index function with the new parameters
+    index(
+        hdf5_peaks_filename=unique_filename,
+        output_peaks_filename=output_peaks_filename,
+        strategy_name=strategy_name,
+        population_size=population_size,
+        gens=gens,
+        n_runs=n_runs,
+        seed=seed
+    )
 
 
 @app.command()
 def indexer_using_file(
-    method: str, num_procs: int, hdf5_peaks_filename: str, output_peaks_filename: str
+    hdf5_peaks_filename: str, 
+    output_peaks_filename: str,
+    # --- Updated evosax CLI arguments ---
+    strategy_name: str = typer.Option(
+        "DE", 
+        "--strategy", 
+        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+    ),
+    n_runs: int = typer.Option(
+        1, 
+        "--n-runs", "-n", 
+        help="Number of optimization runs with different seeds."
+    ),
+    population_size: int = typer.Option(
+        1000, 
+        "--population-size", "--popsize", 
+        help="Population size for each generation."
+    ),
+    gens: int = typer.Option(
+        100, 
+        "--gens", 
+        help="Number of generations to run."
+    ),
+    seed: int = typer.Option(
+        0, 
+        "--seed", 
+        help="Base seed for the first optimization run."
+    ),
 ):
-    index(method, num_procs, hdf5_peaks_filename, output_peaks_filename)
+    """
+    Index a pre-prepared HDF5 file that already contains all sample/instrument info.
+    """
+    # Call the internal index function with the new parameters
+    index(
+        hdf5_peaks_filename=hdf5_peaks_filename,
+        output_peaks_filename=output_peaks_filename,
+        strategy_name=strategy_name,
+        population_size=population_size,
+        gens=gens,
+        n_runs=n_runs,
+        seed=seed
+    )
 
 
 @app.command()
