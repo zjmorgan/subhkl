@@ -1,10 +1,19 @@
 from typer.testing import CliRunner
-from subhkl.io.parser import app
+from subhkl.io.parser import app, finder
 
 
-def test_find_args():
-    runner = CliRunner()
-    test_args = ["finder", "tests/meso_2_15min_2-0_4-5_050.tif", "out.csv"]
+def test_finder_function_tiff(meso_tiff):
+    instrument = "IMAGINE"
+    result = finder(
+        filename=meso_tiff,
+        instrument=instrument,
+    )
+    assert result == 0
+
+
+def test_find_args_tiff(meso_tiff):
+    runner = CliRunner(meso_tiff)
+    test_args = ["finder", meso_tiff, "IMAGINE", "output.h5"]
     result = runner.invoke(app, test_args)
     assert result.exit_code == 0
 

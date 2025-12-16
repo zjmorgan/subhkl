@@ -4,7 +4,7 @@ This contains the tests and data for subhkl
 
 # Generating Test Data
 
-The script `generate_test_data.py` in this directory
+The script `data/generate_test_data.py` in this directory
 allows for generating the test data for the tests.
 
 Yet, this script does require `mantid-framework` to be installed.
