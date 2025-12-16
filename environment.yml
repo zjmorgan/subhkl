@@ -14,3 +14,4 @@ dependencies:
   - pydata-sphinx-theme
   - numpydoc
   - mantidworkbench
+  - opencv-python
