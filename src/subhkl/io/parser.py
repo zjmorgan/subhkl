@@ -23,7 +23,9 @@ def index(
     population_size: int,
     gens: int,
     n_runs: int,
-    seed: int
+    seed: int,
+    softness: float,
+    bootstrap_filename: str = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -45,13 +47,25 @@ def index(
     print(f"Running {n_runs} run(s)...")
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
 
+    # Load bootstrap params if file is provided
+    init_params = None
+    if bootstrap_filename:
+        print(f"Bootstrapping from solution in: {bootstrap_filename}")
+        with h5py.File(bootstrap_filename, "r") as f:
+            if "optimization/best_params" in f:
+                init_params = f["optimization/best_params"][()]
+            else:
+                print("WARNING: No optimization params found in bootstrap file. Starting random.")
+
     # Call the new evosax minimizer
-    num, hkl, lamda = opt.minimize_evosax(
+    num, hkl, lamda, U = opt.minimize_evosax(
         strategy_name=strategy_name,
         population_size=population_size,
         num_generations=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
+        softness=softness,
+        init_params=init_params,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -62,7 +76,6 @@ def index(
 
     # Get UB to save to output
     B = opt.reciprocal_lattice_B()
-    U = opt.orientation_U(*opt.x)
 
     # Copy data from temporary HDF5
     copy_keys = [
@@ -77,7 +90,7 @@ def index(
         "goniometer/R",
         "peaks/intensity",
         "peaks/sigma",
-        "peaks/scattering",
+        "peaks/two_theta",
         "peaks/azimuthal",
     ]
 
@@ -99,6 +112,7 @@ def index(
         f["peaks/k"] = k
         f["peaks/l"] = l_list
         f["peaks/lambda"] = lamda
+        f["optimization/best_params"] = opt.x
     print("Done.")
 
 
@@ -230,13 +244,6 @@ def finder_merger(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
-        f["goniometer/R"] = f["rotations"]
-        f["peaks/scattering"] = f["two_theta"]
-        f["peaks/azimuthal"] = f["azimuthal"]
-        f["peaks/intensity"] = f["intensity"]
-        f["peaks/sigma"] = f["sigma"]
-        del f["rotations"], f["two_theta"], f["azimuthal"], f["intensity"], f["sigma"]
-
 
 @app.command()
 def indexer(
@@ -278,6 +285,8 @@ def indexer(
         "--seed", 
         help="Base seed for the first optimization run."
     ),
+    softness: float = 0.1,
+    bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -285,19 +294,20 @@ def indexer(
     # Load peaks h5 file
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename) as f:
-        two_theta = np.array(f["two_theta"])
-        az_phi = np.array(f["azimuthal"])
-        intensity = np.array(f["intensity"])
-        sigma = np.array(f["sigma"])
-        rotations = np.array(f["rotations"])
+        two_theta = np.array(f["peaks/two_theta"])
+        az_phi = np.array(f["peaks/azimuthal"])
+        intensity = np.array(f["peaks/intensity"])
+        sigma = np.array(f["peaks/sigma"])
+        rotations = np.array(f["goniometer/R"])
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
         print(f"Loading goniometer from: {goniometer_csv_filename}")
         R = np.loadtxt(goniometer_csv_filename, delimiter=",")
+        rotations = np.stack([R] * len(two_theta))  # (M, 3, 3)
     else:
         print("Using goniometer rotation from peaks file.")
-        R = goniometer_rotation
+        R = rotations
 
     # Write HDF5 input file for indexer
     unique_filename = str(uuid.uuid4()) + ".h5"
@@ -312,7 +322,7 @@ def indexer(
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
         f["goniometer/R"] = rotations
-        f["peaks/scattering"] = two_theta
+        f["peaks/two_theta"] = two_theta
         f["peaks/azimuthal"] = az_phi
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
@@ -325,7 +335,9 @@ def indexer(
         population_size=population_size,
         gens=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
+        softness=softness,
+        bootstrap_filename=bootstrap_filename,
     )
 
 
@@ -384,7 +396,6 @@ def peak_predictor(
     d_min: float = 1.0,
     create_visualizations: bool = False
 ):
-    peaks = Peaks(filename, instrument, wavelength_min=1, wavelength_max=4)
 
     with h5py.File(indexed_hdf5_filename) as f_indexed:
         a = float(np.array(f_indexed["sample/a"]))
@@ -395,10 +406,15 @@ def peak_predictor(
         gamma = float(np.array(f_indexed["sample/gamma"]))
         centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
-        R = peaks.goniometer_rotation
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
+    peaks = Peaks(filename,
+                  instrument,
+                  wavelength_min=wavelength[0],
+                  wavelength_max=wavelength[1])
+
+    R = peaks.goniometer_rotation
     UB = R @ U @ B
 
     peak_dict = peaks.predict_peaks(
@@ -512,7 +528,7 @@ def integrator(
         f["peaks/lambda"] = result.wavelength
         f["peaks/intensity"] = result.intensity
         f["peaks/sigma"] = result.sigma
-        f["peaks/scattering"] = result.tt
+        f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
 
@@ -527,7 +543,7 @@ def normalizer(
 ):
     # Open the input filename
     with h5py.File(hdf5_peaks_filename, "r") as f:
-        theta = np.array(f["peaks/scattering"]) / 2.0
+        theta = np.array(f["peaks/two_theta"]) / 2.0
         lamda = np.array(f["peaks/lambda"])
         detector_efficiency = normalization.detector_efficiency(lamda)
         absorption = normalization.absorption(lamda)
@@ -565,7 +581,7 @@ def merger(
 def mtz_exporter(
     indexed_h5_filename: str,
     output_mtz_filename: str,
-    space_group: str
+    space_group: str,
 ):
     algorithm = MTZExporter(indexed_h5_filename, space_group)
     algorithm.write_mtz(output_mtz_filename)

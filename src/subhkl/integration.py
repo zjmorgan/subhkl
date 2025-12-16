@@ -505,6 +505,10 @@ class Peaks:
             mask = ((h + k) % 2 == 0) & ((h + l) % 2 == 0) & ((k + l) % 2 == 0)
         elif centering == "R":
             mask = (h + k + l) % 3 == 0
+        elif centering == "R_obv":
+            mask = (-h + k + l) % 3 == 0
+        elif centering == "R_rev":
+            mask = (h - k + l) % 3 == 0
         else:
             raise ValueError("Invalid centering")
 
@@ -1021,7 +1025,7 @@ class Peaks:
             else:
                 print("Bank had 0 peaks")
 
-        return DetectorPeaks(R, two_theta, az_phi, lamda, intensity, sigma, banks)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
 
     def integrate(
         self,
@@ -1095,7 +1099,6 @@ class Peaks:
         wl_min, wl_max = wavelength
 
         hkl = np.stack([h, k, l], axis=0)
-        print(UB.shape, hkl.shape)
 
         Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
         Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
@@ -1175,10 +1178,9 @@ class Peaks:
         with File(output_filename, "w") as f:
             f["wavelength_mins"] = wavelength_mins
             f["wavelength_maxes"] = wavelength_maxes
-            f["rotations"] = rotations
-            f["two_theta"] = two_theta
-            f["azimuthal"] = az_phi
-            f["intensity"] = intensity
-            f["sigma"] = sigma
-            f["goniometer_rotation"] = self.goniometer_rotation
+            f["goniometer/R"] = rotations
+            f["peaks/two_theta"] = two_theta
+            f["peaks/azimuthal"] = az_phi
+            f["peaks/intensity"] = intensity
+            f["peaks/sigma"] = sigma
             f["bank"] = bank

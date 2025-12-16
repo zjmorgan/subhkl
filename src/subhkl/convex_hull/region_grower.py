@@ -84,7 +84,10 @@ class RegionGrower:
                     total_neighbor_intensity += neighbor_intensity
                     neighbor_indices.append((neighbor_row, neighbor_col))
 
-            if total_neighbor_intensity >= self.min_intensity:
+            # Check if average intensity exceeds threshold
+            n_neighbors = len(neighbor_indices)
+
+            if n_neighbors > 0 and (total_neighbor_intensity / n_neighbors) >= self.min_intensity:
                 for neighbor_point in neighbor_indices:
                     if neighbor_point in visited:
                         continue
