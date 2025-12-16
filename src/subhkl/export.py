@@ -5,17 +5,23 @@ import h5py
 import gemmi
 
 
-class ConcatenateMerger:
-    def __init__(self, indexed_h5_files):
+class BaseConcatenateMerger:
+    def __init__(self, h5_files, copy_keys, merge_keys):
         """
-        Merges indexed peak datasets by concatenation
+        Merges datasets by concatenation
 
         Parameters
         ----------
-        indexed_h5_files: list[str]
-            List of file paths for indexed peak dataset .h5 files
+        h5_files : list[str]
+            List of .h5 file paths
+        copy_keys : list[str]
+            List of keys in .h5 files to copy once
+        merge_keys : list[str]
+            List of keys in .h5 files to merge by concatenation
         """
-        self.indexed_h5_files = indexed_h5_files
+        self.h5_files = h5_files
+        self.copy_keys = copy_keys
+        self.merge_keys = merge_keys
 
     def merge(self, output_filename):
         """
@@ -28,10 +34,56 @@ class ConcatenateMerger:
         """
 
         total_peaks = 0
-        for indexed_file in self.indexed_h5_files:
-            with h5py.File(indexed_file, "r") as f_in:
-                total_peaks += len(f_in["peaks/intensity"])
+        for file in self.h5_files:
+            with h5py.File(file, "r") as f_in:
+                total_peaks += len(f_in[self.merge_keys[0]])
 
+        with h5py.File(output_filename, "w") as f_out:
+            with h5py.File(self.h5_files[0], "r") as f_typical:
+                for key in self.copy_keys:
+                    f_out[key] = np.array(f_typical[key])
+
+                for merge_key in self.merge_keys:
+                    shape = (total_peaks,) + f_typical[merge_key].shape[1:]
+                    dtype = f_typical[merge_key].dtype
+                    f_out.create_dataset(merge_key, shape, dtype)
+
+            offset = 0
+            f_out["files"] = np.array(list(map(lambda s: s.encode('utf-8'), self.h5_files)))
+            f_out.create_dataset("file_offsets", (len(self.h5_files),), dtype=np.int64)
+            for i_file, indexed_file in enumerate(self.h5_files):
+                with h5py.File(indexed_file, "r") as f_in:
+                    num_items = len(f_in[self.merge_keys[0]])
+                    peak_range = slice(offset, offset + num_items)
+                    f_out["file_offsets"][i_file] = offset
+                    for merge_key in self.merge_keys:
+                        f_out[merge_key][peak_range] = np.array(f_in[merge_key])
+
+                    offset += num_items
+
+
+class FinderConcatenateMerger(BaseConcatenateMerger):
+    def __init__(self, h5_files):
+        merge_keys = [
+            "wavelength_mins",
+            "wavelength_maxes",
+            "rotations",
+            "two_theta",
+            "azimuthal",
+            "intensity",
+            "sigma"
+        ]
+        super().__init__(h5_files, [], merge_keys)
+
+
+class IndexerConcatenateMerger(BaseConcatenateMerger):
+    def __init__(self, indexed_h5_files):
+        """
+        Parameters
+        ----------
+        indexed_h5_files : list[str]
+            List of .h5 files from indexer to merge
+        """
         copy_keys = [
             "sample/a",
             "sample/b",
@@ -42,6 +94,7 @@ class ConcatenateMerger:
             "sample/centering",
             "instrument/wavelength",
         ]
+
         merge_keys = [
             "peaks/intensity",
             "peaks/sigma",
@@ -55,26 +108,7 @@ class ConcatenateMerger:
             "peaks/azimuthal",
         ]
 
-        with h5py.File(output_filename, "w") as f_out:
-            with h5py.File(self.indexed_h5_files[0], "r") as f_typical:
-                for key in copy_keys:
-                    f_out[key] = np.array(f_typical[key])
-
-            for merge_key in merge_keys:
-                f_out.create_dataset(merge_key, total_peaks)
-            f_out.create_dataset("peaks/run_index", total_peaks, dtype=np.int32)
-
-            offset = 0
-            for i_file, indexed_file in enumerate(self.indexed_h5_files):
-                with h5py.File(indexed_file, "r") as f_in:
-                    num_peaks = len(f_in["peaks/intensity"])
-                    peak_range = slice(offset, offset + num_peaks)
-                    f_out["peaks/run_index"][peak_range] = i_file
-                    for merge_key in merge_keys:
-                        f_out[merge_key][peak_range] = np.array(f_in[merge_key])
-
-                    offset += num_peaks
-
+        super().__init__(indexed_h5_files, copy_keys, merge_keys)
 
 
 class MTZExporter:

@@ -276,7 +276,8 @@ class FindUB:
             [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
         )  # (3, M)
 
-        return np.einsum("ji,jm->im", self.R, kf_ki_dir)
+        # self.R.shape == (M, 3, 3)
+        return np.einsum("mji,jm->im", self.R, kf_ki_dir)
         # (3, M)
 
     def metric_G_tensor(self):
