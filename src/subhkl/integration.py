@@ -762,9 +762,9 @@ class Peaks:
 
         """
 
-        quantity_I = A * 2 * np.pi * sigma1 * sigma2 - B
+        intensity = A * 2 * np.pi * sigma1 * sigma2 - B
 
-        dI = np.array(
+        intensity_error = np.array(
             [
                 2 * np.pi * sigma1 * sigma2,
                 -1,
@@ -773,9 +773,9 @@ class Peaks:
             ]
         )
 
-        sigma = np.sqrt(dI @ cov_matrix @ dI.T)
+        sigma = np.sqrt(intensity_error @ cov_matrix @ intensity_error.T)
 
-        return quantity_I, sigma
+        return intensity, sigma
 
     def fit(self, xp, yp, im, roi_pixels=50):
         """
@@ -872,9 +872,9 @@ class Peaks:
 
                     cov = np.linalg.inv(inv_cov)[inds][:, inds]
 
-                    quantity_I, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
+                    intensity, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
 
-                    if quantity_I < 10 * sig:
+                    if intensity < 10 * sig:
                         mu_1, mu_2 = x_val, y_val
                         sigma_1, sigma_2, theta = 0.0, 0.0, 0.0
 
