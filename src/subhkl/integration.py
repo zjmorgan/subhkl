@@ -550,7 +550,8 @@ class Peaks:
         hkl = [h.flatten(), k.flatten(), l.flatten()]
         h, k, l = hkl
 
-        d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+        with np.errstate(divide="ignore"):
+            d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
 
         mask = (d > d_min) & (d < np.inf)
 
