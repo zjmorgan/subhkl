@@ -465,6 +465,7 @@ def integrator(
     instrument: str,
     integration_peaks_filename: str,
     output_filename: str,
+    integration_method: str,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_maximum_pixel_radius: float = 17.0,
@@ -506,6 +507,7 @@ def integrator(
         integration_params,
         create_visualizations=create_visualizations,
         show_progress=show_progress,
+        integration_method=integration_method,
         file_prefix=filename
     )
 

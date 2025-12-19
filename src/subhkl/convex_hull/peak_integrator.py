@@ -4,6 +4,7 @@ from scipy.signal import convolve2d
 from scipy.spatial import ConvexHull
 from scipy.spatial import Delaunay
 from scipy.stats import zscore
+from scipy.optimize import minimize
 
 from subhkl.convex_hull.offset_mask import OffsetMask
 from subhkl.convex_hull.region_grower import RegionGrower
@@ -76,6 +77,7 @@ class PeakIntegrator:
             bank_id,
             intensity,
             peak_centers,
+            integration_method="free_fit",
             return_hulls=False,
             return_headers=False
     ):
@@ -92,6 +94,10 @@ class PeakIntegrator:
             (N, 2)-shaped array of coordinates of estimated peak centers to
             compute intensity statistics for. First coordinate is y (row),
             second coordinate is x (column).
+        integration_method:
+            Which method to use for peak integration; either "free_fit" to fit
+            a Poisson process with arbitrary rate function or "gaussian_fit" to
+            fit a Poisson process with Gaussian rate function
         return_hulls:
             Whether to return convex hulls of peak regions for visualization
         return_headers:
@@ -119,21 +125,30 @@ class PeakIntegrator:
         # Use masks to compute intensity statistics
         for i_peak in range(len(peak_centers)):
             if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()) > 0:
-                stats = self._calculate_statistics(
-                    intensity,
-                    peak_masks[i_peak],
-                    bg_masks[i_peak]
-                )
-                bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
+                if integration_method == "free_fit":
+                    stats = self._calculate_statistics(
+                        intensity,
+                        peak_masks[i_peak],
+                        bg_masks[i_peak]
+                    )
+                    bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
+                elif integration_method == "gaussian_fit":
+                    stats = self._fit_gaussian_mle(
+                        intensity,
+                        peak_masks[i_peak],
+                        bg_masks[i_peak]
+                    )
+                    bg_density, peak_intensity, peak_bg_intensity, sigma = stats 
 
                 # Discard peak if SNR is too low
-                snr = peak_intensity / sigma
-                if snr < self.min_peak_snr:
-                    bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
-                    is_peak[i_peak] = False
-                    peak_masks[i_peak] = None
-                    bg_masks[i_peak] = None
-                    peak_hulls[i_peak] = (None,) * len(peak_hulls[i_peak])
+                if peak_intensity is not None:
+                    snr = peak_intensity / sigma
+                    if snr < self.min_peak_snr:
+                        bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
+                        is_peak[i_peak] = False
+                        peak_masks[i_peak] = None
+                        bg_masks[i_peak] = None
+                        peak_hulls[i_peak] = (None,) * len(peak_hulls[i_peak])
             else:
                 bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
 
@@ -369,6 +384,159 @@ class PeakIntegrator:
         bg_density = total_bg_intensity / bg_vol
 
         return bg_density, peak_intensity, peak_bg_intensity, sigma
+
+    @staticmethod
+    def _fit_gaussian_mle(intensity, peak_mask, bg_mask):
+        """
+        Calculates peak intensity statistics by fitting a 2D Gaussian + constant
+        background using Maximum Likelihood Estimation (assuming Poisson noise).
+
+        Parameters
+        ----------
+        intensity:
+            (H, W) array of intensity
+        peak_mask:
+            OffsetMask indicating which pixels belong to the peak
+        bg_mask:
+            OffsetMask indicating which pixels are background near the peak
+
+        Return
+        ------
+        outputs:
+            4-tuple of the following:
+
+            bg_level:
+                Fitted background level
+            peak_integral:
+                Total intensity of the Gaussian (Amplitude * 2 * pi * sx * sy * sqrt(1-rho**2))
+            peak_bg_integral:
+                Fitted background level * number of pixels in peak mask
+            peak_integral_error:
+                Estimated error (sigma) of the peak integral
+        """
+
+        # --- 1. Define Model and Objective Function ---
+
+        def gaussian_2d_model(y, x, amplitude, y0, x0, sigma_y, sigma_x, rho, background):
+            """2D Gaussian model on a constant background."""
+            xy = np.stack([x - x0, y - y0], axis=-1)
+            covariance = np.array([
+                [sigma_x**2, sigma_x*sigma_y*rho],
+                [sigma_x*sigma_y*rho, sigma_y**2]
+            ])
+            u = np.einsum("...i,ij,...j->...", xy, np.linalg.inv(covariance), xy)
+            model = background + amplitude * np.exp(-u/2)
+            return model
+
+        def negative_log_likelihood(params, y_coords, x_coords, data):
+            """Poisson negative log-likelihood."""
+            model = gaussian_2d_model(y_coords, x_coords, *params)
+
+            # Add a small epsilon to model to avoid log(0)
+            model[model <= 0] = 1e-9
+
+            # NLL = sum(model - data * log(model))
+            nll = np.sum(model - data * np.log(model))
+            return nll
+
+        # --- 2. Get Pixel Data ---
+        peak_indices = peak_mask.nonzero()
+        bg_indices = bg_mask.nonzero()
+
+        if len(peak_indices[0]) == 0:  # No peak pixels
+            return None, None, None, None
+
+        y_peak, x_peak = peak_indices[0], peak_indices[1]
+        I_peak = intensity[y_peak, x_peak]
+
+        peak_vol = len(y_peak)
+
+        # --- 3. Set Initial Guesses and Bounds ---
+
+        # Background guess: mean of background pixels, ensure non-negative
+        if len(bg_indices[0]) > 0:
+            bg_est = np.mean(intensity[bg_indices[0], bg_indices[1]])
+        else:
+            bg_est = np.min(I_peak) # Fallback if bg_mask is empty
+        bg_est = max(bg_est, 1e-6) # Ensure background is positive
+
+        # Center guess: centroid of the peak mask
+        y0_est = np.mean(y_peak)
+        x0_est = np.mean(x_peak)
+
+        # Amplitude guess: max peak intensity minus background
+        amp_est = np.max(I_peak) - bg_est
+        amp_est = max(amp_est, 1e-6) # Ensure amplitude is positive
+
+        # Initial parameters
+        p0 = [amp_est, y0_est, x0_est, 1.0, 1.0, 0.0, bg_est]
+
+        # Parameter bounds: (amp, y0, x0, sy, sx, rho, bg)
+        # Force amplitude, sigmas, and background to be positive
+        bounds = [
+            (1e-9, None),     # amplitude
+            (np.min(y_peak), np.max(y_peak)), # y0
+            (np.min(x_peak), np.max(x_peak)), # x0
+            (0.1, 10.0),     # sigma_y (setting a reasonable range)
+            (0.1, 10.0),     # sigma_x (setting a reasonable range)
+            (-1.0, 1.0),
+            (1e-9, None)      # background
+        ]
+
+        # --- 4. Run Minimization ---
+        try:
+            result = minimize(
+                negative_log_likelihood,
+                p0,
+                args=(y_peak, x_peak, I_peak),
+                method='L-BFGS-B',
+                bounds=bounds
+            )
+
+            if not result.success:
+                return None, None, None, None
+
+            # --- 5. Extract Results ---
+            amplitude, y0, x0, sigma_y, sigma_x, rho, bg_level = result.x
+
+            # Calculate the total integral of the Gaussian
+            peak_integral = 2 * np.pi * amplitude * sigma_y * sigma_x * (1-rho**2)**.5
+
+            # Background contribution under the peak mask
+            peak_bg_integral = bg_level * peak_vol
+
+            # --- 6. Estimate Error ---
+            # Get covariance matrix (inverse of the Hessian)
+            # This provides errors on the fitted parameters
+            try:
+                inv_hessian = result.hess_inv.todense()
+                param_errors = np.sqrt(np.diag(inv_hessian))
+
+                # Propagate error for the integral: I = 2*pi * A * sy * sx * (1-rho**2)**.5
+                # (dI/dA)^2 * err_A^2 + (dI/dsy)^2 * err_sy^2 + (dI/dsx)^2 * err_sx^2 + (dI/drho) * err_rho^2
+
+                err_A = param_errors[0]
+                err_sy = param_errors[3]
+                err_sx = param_errors[4]
+                err_rho = param_errors[5]
+
+                term_A = (2 * np.pi * sigma_y * sigma_x * err_A) ** 2
+                term_sy = (2 * np.pi * amplitude * sigma_x * err_sy) ** 2
+                term_sx = (2 * np.pi * amplitude * sigma_y * err_sx) ** 2
+                term_rho = (2 * np.pi * amplitude * sigma_x * sigma_y * rho / (1-rho**2)**.5) ** 2
+
+                peak_integral_error = np.sqrt(term_A + term_sy + term_sx + term_rho)
+
+            except Exception:
+                # Fallback if Hessian inversion fails
+                peak_integral_error = np.sqrt(peak_integral + peak_bg_integral)
+
+
+            return bg_level, peak_integral, peak_bg_integral, peak_integral_error
+
+        except (ValueError, np.linalg.LinAlgError):
+            # Handle optimization or numerical errors
+            return None, None, None, None
 
     def _smooth(self, input_tensor):
         """
