@@ -27,6 +27,10 @@ Both subcommands use the same CLI parameters, documented below in order of likel
     - Setting depends on quality of data
     - $\uparrow$ to filter out false positives not filtered by `peak-minimum-pixels`
     - $\downarrow$ to avoid false negatives in noisy data
+- `--integration-method`: string enum, either `"free_fit"` or `"gaussian_fit"`
+    - **Only available for `integrator`**, this controls what method is used to calculate final intensities and uncertainties after the convex hull fitting is complete
+    - `"free_fit"` assumes a Poisson process with an arbitrary rate function and estimates the intensity and uncertainty by simply summing intensities in the peak and outer annular regions
+    - `"gaussian_fit"` assumes a Poisson process with Gaussian-plus-offset--shaped underlying rate function, resulting in higher uncertainties (and higher variance) due to introduced model uncertainty. May also fail to fit peaks, causing some peaks to be dropped.
 - `--peak-center-box-size`: odd positive integer, units pixels
     - Size of box in which to search for (smoothed) local max pixel from which to start peak clustering
     - Set this around the size of a typical peak
@@ -59,3 +63,15 @@ Following is a description of the convex hull peak fitting algorithm, including 
 8. Expand the core peak hull by scaling by a factor $s$ about its centroid to produce convex hulls $H_\text{peak}$ (the true peak hull, $s=1.1$), $H_\text{inner}$ (noise estimation inner boundary, $s=1.6$) and $H_\text{outer}$ (noise estimation outer boundary, $s=2.6$)
 9. Integrate over the true peak hull $H_\text{peak}$ to obtain the peak intensity $I_\text{peak}$ and uncertainty $\sigma_\text{peak}$. Background noise is subtracted by estimating the average background noise per pixel by integrating over the annulus-like region $H_\text{outer} \setminus H_\text{inner}$.
 10. If $I_\text{peak} / \sigma_\text{peak} <{}$`peak-minimum-signal-to-noise`, then discard this peak
+
+## Gaussian Fit Integration
+
+Assume the measured intensity image $I(x,y)$ is a Poisson process with rate function
+$$
+\lambda(x, y) = B + I_0\exp\left[-\frac{1}{2(1-\rho^2)}\left(\frac{(x-x^*)^2}{\sigma_x^2} - 2\frac{\rho(x-x^*)(y-y^*)}{\sigma_x\sigma_y} + \frac{(y-y^*)^2}{\sigma_y^2}\right)\right].
+$$
+Here, $B$ is the background noise average intensity per pixel, and $I_0$ is the maximum peak intensity per pixel (not equal to the integrated intensity), and $\rho, \sigma_x, \sigma_y, x^*, y^*$ are shape parameters describing the shape of the peak. We want to know the average integrated intensity of the peak minus the background noise. Assuming the noise $N(x,y)$ is also a Poisson process with constant rate function, the peak intensity $I(x,y) - N(x,y)$ is a Poisson process with rate $\lambda(x,y) - B$, so
+$$
+I_\text{final} = \mathbb{E}\left[\int (I(x,y) - N(x,y))\;\text{d}x\;\text{d}y\right] = \int (\lambda(x,y) - B)\;\text{d}x\;\text{d}y = 2\pi I_0\sigma_x\sigma_y\sqrt{1-\rho^2}.
+$$
+Hence, we can calculate the final intensity $I_\text{final}$ by fitting the shape parameters and $B$ and $I_0$ using maximum likelihood estimation. The final uncertainty in the integrated intensity can likewise be estimated using these fitted parameters.
