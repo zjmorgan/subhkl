@@ -15,6 +15,8 @@ import jax.scipy.linalg as jscipy_linalg
 
 from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
+from subhkl.detector import scattering_vector_from_angles
+
 # Try to import tqdm for a progress bar
 try:
     from tqdm import trange
@@ -22,22 +24,123 @@ except ImportError:
     trange = None
 
 
+def get_lattice_system(a, b, c, alpha, beta, gamma, centering, atol_len=0.05, atol_ang=0.5):
+    """
+    Detect crystal system constraints based on initial unit cell parameters and centering.
+    
+    Returns
+    -------
+    system_name : str
+        'Cubic', 'Hexagonal', 'Tetragonal', 'Rhombohedral', 'Orthorhombic', 'Monoclinic', 'Triclinic'
+    num_params : int
+        Number of free lattice parameters.
+    """
+    # Check angles
+    is_90 = lambda x: np.isclose(x, 90.0, atol=atol_ang)
+    is_120 = lambda x: np.isclose(x, 120.0, atol=atol_ang)
+    
+    # Check lengths
+    eq = lambda x, y: np.isclose(x, y, atol=atol_len)
+    
+    # Explicitly handle Centering-based hints
+    if centering == 'R':
+        # Rhombohedral lattice
+        # Case 1: Hexagonal settings (a=b, alpha=beta=90, gamma=120)
+        if is_90(alpha) and is_90(beta) and is_120(gamma) and eq(a, b):
+            return 'Hexagonal', 2 # Treated as hexagonal parameters a, c
+        # Case 2: Primitive Rhombohedral settings (a=b=c, alpha=beta=gamma)
+        elif eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma):
+            return 'Rhombohedral', 2 # a, alpha
+            
+    if centering == 'H':
+        return 'Hexagonal', 2
+
+    # Geometric detection for P, I, F, C, A, B
+    if is_90(alpha) and is_90(beta) and is_90(gamma):
+        if eq(a, b) and eq(b, c):
+            return 'Cubic', 1  # a
+        elif eq(a, b):
+            return 'Tetragonal', 2  # a, c
+        elif eq(a, c) or eq(b, c):
+            # Non-standard tetragonal setting or just Orthorhombic
+            return 'Orthorhombic', 3 # a, b, c
+        else:
+            return 'Orthorhombic', 3 # a, b, c
+
+    elif is_90(alpha) and is_90(beta) and is_120(gamma):
+        if eq(a, b):
+            return 'Hexagonal', 2 # a, c
+        
+    elif eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma):
+        return 'Rhombohedral', 2 # a, alpha
+
+    # Monoclinic Check (standard setting: b unique axis -> alpha=gamma=90)
+    if is_90(alpha) and is_90(gamma) and not is_90(beta):
+        return 'Monoclinic', 4 # a, b, c, beta
+    
+    # Fallback to Triclinic
+    return 'Triclinic', 6
+
+
+def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
+    """
+    Compute rotation matrix from axis and angle using JAX.
+    
+    Parameters
+    ----------
+    axis : array (3,)
+    angle_rad : array (S, M) or scalar
+    
+    Returns
+    -------
+    R : array (S, M, 3, 3)
+    """
+    # Normalize axis
+    u = axis / jnp.linalg.norm(axis)
+    ux, uy, uz = u
+
+    # Cross product matrix K
+    K = jnp.array([
+        [0.0, -uz, uy],
+        [uz, 0.0, -ux],
+        [-uy, ux, 0.0]
+    ]) # (3, 3)
+
+    # I + sin(theta) K + (1-cos(theta)) K^2
+    # Handle broadcasting for angle_rad which might be (S, M)
+    c = jnp.cos(angle_rad)
+    s = jnp.sin(angle_rad)
+    t = 1.0 - c
+
+    # Broadcast shapes
+    # K: (1, 1, 3, 3)
+    # s, t: (S, M, 1, 1)
+    
+    eye = jnp.eye(3)
+    
+    R = eye + s[..., None, None] * K + t[..., None, None] * (K @ K)
+    return R
+
+
 class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
-    (Replaces the numpy-based VectorizedObjective)
     """
-    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.15):
+    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.15,
+                 cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
+                 goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0):
         """
         Parameters
         ----------
         B : array (3, 3)
-            B matrix (from reciprocal_lattice_B)
-        centering : stsr
+            B matrix (from reciprocal_lattice_B). Used if refine_lattice=False.
+        centering : str
             Bravais lattice centering
         kf_ki_dir : array (3, M)
             difference between incident and scattering directions for M
-            reflections
+            reflections. 
+            If refine_goniometer=True, this must be in the LAB frame.
+            If refine_goniometer=False, this is in the CRYSTAL frame (pre-rotated by fixed R).
         wavelength : array (2,)
             wavelength lower and upper bounds [min, max]
         angle_cdf : array
@@ -46,6 +149,23 @@ class VectorizedObjectiveJAX:
             Angle values for interpolation (from FindUB._angle_t)
         softness : float
             Shape parameter for rounding hkls
+        cell_params : array (6,)
+            Initial unit cell parameters [a, b, c, alpha, beta, gamma].
+            Required if refine_lattice=True.
+        refine_lattice : bool
+            If True, refine unit cell parameters.
+        lattice_bound_frac : float
+            Fractional bound for lattice parameter refinement (e.g. 0.05 = +/- 5%).
+        lattice_system : str
+            Detected crystal system for parameter constraints.
+        goniometer_axes : list or array
+            List of goniometer axes specifications (as in config).
+        goniometer_angles : array (N_axes, M)
+            Base angles for each axis for each peak.
+        refine_goniometer : bool
+            If True, refine goniometer angle offsets.
+        goniometer_bound_deg : float
+            Bound for goniometer angle optimization in degrees.
         """
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
@@ -53,6 +173,56 @@ class VectorizedObjectiveJAX:
         self.centering = centering
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
+        
+        self.refine_lattice = refine_lattice
+        self.lattice_system = lattice_system
+        
+        self.refine_goniometer = refine_goniometer
+        self.goniometer_bound_deg = goniometer_bound_deg
+
+        # --- Lattice Refinement Setup ---
+        if self.refine_lattice:
+            if cell_params is None:
+                raise ValueError("cell_params must be provided if refine_lattice is True")
+            self.cell_init = jnp.array(cell_params) # Full 6 params [a, b, c, alpha, beta, gamma]
+            
+            # Determine free parameters based on system
+            if self.lattice_system == 'Cubic': # (a)
+                self.free_params_init = self.cell_init[0:1]
+            elif self.lattice_system == 'Hexagonal': # (a, c)
+                self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
+            elif self.lattice_system == 'Tetragonal': # (a, c)
+                self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
+            elif self.lattice_system == 'Rhombohedral': # (a, alpha)
+                self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[3]])
+            elif self.lattice_system == 'Orthorhombic': # (a, b, c)
+                self.free_params_init = self.cell_init[0:3]
+            elif self.lattice_system == 'Monoclinic': # (a, b, c, beta)
+                self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[1], self.cell_init[2], self.cell_init[4]])
+            else: # Triclinic (a, b, c, alpha, beta, gamma)
+                self.free_params_init = self.cell_init
+
+            # Define bounds for free params
+            delta = jnp.abs(self.free_params_init) * lattice_bound_frac
+            self.lat_min = self.free_params_init - delta
+            self.lat_max = self.free_params_init + delta
+
+        # --- Goniometer Refinement Setup ---
+        if self.refine_goniometer:
+            if goniometer_axes is None or goniometer_angles is None:
+                raise ValueError("goniometer_axes and goniometer_angles must be provided for refinement")
+            
+            self.gonio_axes = jnp.array(goniometer_axes) # (N_axes, 4)
+            self.gonio_angles = jnp.array(goniometer_angles) # (N_axes, M)
+            
+            # We optimize one offset per axis (assuming offset is constant for the dataset)
+            # Or should it be per peak? Usually goniometer zero-point error is constant.
+            self.num_gonio_axes = self.gonio_axes.shape[0]
+            
+            # Bounds for offsets (centered at 0)
+            self.gonio_min = jnp.full(self.num_gonio_axes, -goniometer_bound_deg)
+            self.gonio_max = jnp.full(self.num_gonio_axes, goniometer_bound_deg)
+
 
         # Ensure wavelength is a JAX array
         wavelength = jnp.array(wavelength)
@@ -71,28 +241,158 @@ class VectorizedObjectiveJAX:
             self.weights = jnp.array(weights)
 
         # Pre-calculate the maximum possible score (sum of all weights)
-        # This is the score if every peak is perfectly indexed.
         self.max_score = jnp.sum(self.weights)
+
+    def reconstruct_cell_params(self, params_norm):
+        """
+        Expand normalized free parameters back to full 6 unit cell parameters.
+        Returns full parameters in real units (Angstroms/Degrees).
+        """
+        # Map [0, 1] to physical range for free params
+        p_free = self.lat_min + params_norm * (self.lat_max - self.lat_min)
+        
+        # Helper for creating full array (Batch size S)
+        S = params_norm.shape[0]
+        
+        # Default angles
+        deg90 = jnp.full((S,), 90.0)
+        deg120 = jnp.full((S,), 120.0)
+        
+        if self.lattice_system == 'Cubic':
+            # p_free: [a]
+            a = p_free[:, 0]
+            return jnp.stack([a, a, a, deg90, deg90, deg90], axis=1)
+            
+        elif self.lattice_system == 'Hexagonal':
+            # p_free: [a, c]
+            a = p_free[:, 0]
+            c = p_free[:, 1]
+            return jnp.stack([a, a, c, deg90, deg90, deg120], axis=1)
+            
+        elif self.lattice_system == 'Tetragonal':
+            # p_free: [a, c]
+            a = p_free[:, 0]
+            c = p_free[:, 1]
+            return jnp.stack([a, a, c, deg90, deg90, deg90], axis=1)
+            
+        elif self.lattice_system == 'Rhombohedral':
+            # p_free: [a, alpha]
+            a = p_free[:, 0]
+            alpha = p_free[:, 1]
+            return jnp.stack([a, a, a, alpha, alpha, alpha], axis=1)
+            
+        elif self.lattice_system == 'Orthorhombic':
+            # p_free: [a, b, c]
+            a, b, c = p_free[:, 0], p_free[:, 1], p_free[:, 2]
+            return jnp.stack([a, b, c, deg90, deg90, deg90], axis=1)
+            
+        elif self.lattice_system == 'Monoclinic':
+            # p_free: [a, b, c, beta]
+            a, b, c, beta = p_free[:, 0], p_free[:, 1], p_free[:, 2], p_free[:, 3]
+            return jnp.stack([a, b, c, deg90, beta, deg90], axis=1)
+            
+        else: # Triclinic
+            return p_free
+
+    def compute_B_jax(self, cell_params_norm):
+        """
+        Compute B matrices from normalized free lattice parameters.
+        """
+        # Reconstruct full 6 params
+        p = self.reconstruct_cell_params(cell_params_norm)
+        
+        a, b, c = p[:, 0], p[:, 1], p[:, 2]
+        # Angles provided in degrees, convert to radians
+        deg2rad = jnp.pi / 180.0
+        alpha = p[:, 3] * deg2rad
+        beta  = p[:, 4] * deg2rad
+        gamma = p[:, 5] * deg2rad
+
+        # Construct Metric Tensor G
+        g11 = a**2
+        g22 = b**2
+        g33 = c**2
+        g12 = a * b * jnp.cos(gamma)
+        g13 = a * c * jnp.cos(beta)
+        g23 = b * c * jnp.cos(alpha)
+
+        # G shape: (S, 3, 3)
+        row1 = jnp.stack([g11, g12, g13], axis=-1)
+        row2 = jnp.stack([g12, g22, g23], axis=-1)
+        row3 = jnp.stack([g13, g23, g33], axis=-1)
+        G = jnp.stack([row1, row2, row3], axis=-2)
+
+        # Reciprocal Metric Tensor G* = inv(G)
+        G_star = jnp.linalg.inv(G)
+
+        # B is Cholesky of G* (Upper triangular, B^T B = G*)
+        B = jscipy_linalg.cholesky(G_star, lower=False)
+        
+        return B
+    
+    def compute_goniometer_R_jax(self, gonio_offsets_norm):
+        """
+        Compute goniometer rotation matrices for each peak and particle.
+        
+        Parameters
+        ----------
+        gonio_offsets_norm : array (S, N_axes)
+            Normalized offsets [0, 1]
+            
+        Returns
+        -------
+        R : array (S, M, 3, 3)
+            Goniometer rotation matrices.
+        """
+        # Map normalized parameters to physical offsets
+        offsets = self.gonio_min + gonio_offsets_norm * (self.gonio_max - self.gonio_min) # (S, N_axes)
+        
+        # Base angles: (N_axes, M)
+        # Add offsets: (S, N_axes, 1) + (N_axes, M) -> (S, N_axes, M)
+        angles_deg = offsets[:, :, None] + self.gonio_angles[None, :, :]
+        
+        S = offsets.shape[0]
+        M = self.gonio_angles.shape[1]
+        
+        # Initialize R as Identity (S, M, 3, 3)
+        R = jnp.eye(3)[None, None, ...].repeat(S, axis=0).repeat(M, axis=1)
+        
+        # Compose rotations: R = R_0 @ R_1 @ ... @ R_k (or in reverse depending on stack)
+        # Mantid SetGoniometer applies matrices in order pushed: R = R0 * R1 * ...
+        # My goniometer.py: matrix = matrix @ axis_matrix
+        
+        deg2rad = jnp.pi / 180.0
+        
+        for i in range(self.num_gonio_axes):
+            axis_spec = self.gonio_axes[i]
+            direction = axis_spec[:3]
+            sign = axis_spec[3]
+            
+            # (S, M)
+            theta = sign * angles_deg[:, i, :] * deg2rad
+            
+            # Compute R_i for this axis
+            # (S, M, 3, 3)
+            Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
+            
+            # R_new = R_old @ Ri
+            R = jnp.einsum('smij,smjk->smik', R, Ri)
+            
+        return R
 
     def orientation_U_jax(self, param):
         """
         Compute orientation matrices (U) from angles using JAX.
-        Implements Rodrigues' rotation formula.
-
+        
         Parameters
         ----------
-        param : array, (S, 3)
-            Rotation parameters. S = population size.
-            param[:, 0] = u0
-            param[:, 1] = u1
-            param[:, 2] = u2
-
-        Returns
-        -------
-        U : array (S, 3, 3)
-            Sample orientation matrices for each set of input parameters.
+        param : array, (S, N)
+            Optimization parameters. First 3 are rotation params.
         """
-        u0, u1, u2 = param.T # (S,) each
+        # Unpack explicitly by column index to handle S > 3 (lattice refinement)
+        u0 = param[:, 0]
+        u1 = param[:, 1]
+        u2 = param[:, 2]
 
         theta = jnp.arccos(1 - 2 * u0)
         phi = 2 * jnp.pi * u1
@@ -109,7 +409,7 @@ class VectorizedObjectiveJAX:
         # Rotation angle (omega)
         omega = jnp.interp(u2, self.angle_cdf, self.angle_t) # (S,)
 
-        # JAX implementation of axis-angle to rotation matrix (Rodrigues' formula)
+        # JAX implementation of axis-angle to rotation matrix
         wx, wy, wz = w.T # (S,) each
         c = jnp.cos(omega) # (S,)
         s = jnp.sin(omega) # (S,)
@@ -131,31 +431,39 @@ class VectorizedObjectiveJAX:
         # K^2
         K2 = jnp.einsum('sij,sjk->sik', K, K) # (S, 3, 3)
 
-        # Rodrigues' formula
         U = I + s[:, None, None] * K + t[:, None, None] * K2 # (S, 3, 3)
 
         return U
 
-    def indexer_soft_jax(self, UB, softness=0.001):
+    def indexer_soft_jax(self, UB, kf_ki_vec, softness=0.001):
         """
         Weighted soft-indexing objective.
+        
+        Parameters
+        ----------
+        UB: (S, 3, 3) or (S, M, 3, 3) if R varies per peak?
+           Actually UB is Crystal->Lab (if R is fixed and incorporated?)
+           No, UB is HKL -> Cartesian (Crystal Frame).
+        kf_ki_vec: (S, 3, M) or (3, M)
+           Scattering vectors in the Crystal Frame.
         """
 
+        # UB_inv converts Crystal Frame -> HKL Frame
         UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
 
         # map to HKL space
-        hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
+        # UB_inv: (S, 3, 3). kf_ki_vec: (S, 3, M)
+        hkl_lamda = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_vec)
         hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
         # (S, 3, M, 100)
 
-        # Smooth periodic distance: instead of `hkl - round(hkl)`, use Sine.
+        # Smooth periodic distance
         diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
 
-        # map error back to Cartesian q-space
-        # (S, 3, 3) @ (S, 3, M, 100) -> (S, 3, M, 100)
+        # map error back to Cartesian q-space (Crystal Frame)
         dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
 
-        # Squared Euclidean distance for every wavelength candidate
+        # Squared Euclidean distance
         dist_sq = jnp.sum(dist_vec**2, axis=1) # (S, M, 100)
 
         valid = jnp.full_like(hkl[:, 0], True, dtype=bool)
@@ -181,19 +489,15 @@ class VectorizedObjectiveJAX:
 
         dist_sq = jnp.where(valid, dist_sq, jnp.inf)
 
-        # dist_sq shape: (S, M, 100)
-
         # soft Wavelength Selection
         min_dist_sq = jnp.min(dist_sq, axis=2) # (S, M)
 
-        # calculate probability of fit (0 to 1) for each peak
+        # calculate probability of fit
         peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2)) # (S, M)
 
-        # apply weights: Strong peaks contribute more to the score
+        # apply weights
         weighted_scores = peak_probs * self.weights[None, :] # (S, M)
 
-        # If weights are normalized so mean(w)=1, this value is intuitively
-        # "How many average-quality peaks did we index?"
         total_score = jnp.sum(weighted_scores, axis=1) # (S,)
 
         # for reporting
@@ -211,21 +515,59 @@ class VectorizedObjectiveJAX:
 
         Parameters
         ----------
-        x : array (S, 3)
-            Refineable parameters. S = population size
+        x : array (S, num_dims)
+            Refineable parameters. 
+            [rot(3), lat(N_lat)?, gonio(N_gonio)?]
 
         Returns
         -------
         error : array (S,)
             Indexing error for each particle.
         """
+        # Pointer to current position in x
+        idx = 0
+        
+        # 1. Orientation (3 params)
+        rot_params = x[:, idx:idx+3]
+        U = self.orientation_U_jax(rot_params) # (S, 3, 3)
+        idx += 3
 
-        U = self.orientation_U_jax(x) # (S, 3, 3)
-        UB = jnp.einsum("sij,jk->sik", U, self.B)
-        # (S, 3, 3)
+        # 2. Lattice (optional)
+        if self.refine_lattice:
+            n_lat = self.free_params_init.size
+            cell_params_norm = x[:, idx:idx+n_lat]
+            B = self.compute_B_jax(cell_params_norm) # (S, 3, 3)
+            idx += n_lat
+            # UB = U @ B (per particle)
+            UB = jnp.einsum("sij,sjk->sik", U, B)
+        else:
+            # Fixed B
+            UB = jnp.einsum("sij,jk->sik", U, self.B)
 
-#        error, num, hkl, lamda = self.indexer_jax(UB)
-        error, _, _, _ = self.indexer_soft_jax(UB, softness=self.softness)
+        # 3. Goniometer (optional)
+        if self.refine_goniometer:
+            n_gon = self.num_gonio_axes
+            gonio_params_norm = x[:, idx:idx+n_gon]
+            idx += n_gon
+            
+            # Compute R (S, M, 3, 3)
+            R = self.compute_goniometer_R_jax(gonio_params_norm)
+            
+            # Transform Lab Vectors to Crystal Frame
+            # q_lab is (3, M) [self.kf_ki_dir]
+            # q_cryst = R^T @ q_lab
+            # einsum: s m j i (R), k m (q_lab) -> s i m
+            # We want sum over j. R_ji * q_j
+            # R is (S, M, 3, 3). q_lab is (3, M).
+            # We want (S, 3, M).
+            kf_ki_vec = jnp.einsum("smji,jm->sim", R, self.kf_ki_dir)
+            
+        else:
+            # Fixed R already applied in self.kf_ki_dir (if passed appropriately)
+            # Expand (3, M) to (S, 3, M)
+            kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
+
+        error, _, _, _ = self.indexer_soft_jax(UB, kf_ki_vec, softness=self.softness)
 
         return error
 
@@ -233,7 +575,6 @@ class VectorizedObjectiveJAX:
 class FindUB:
     """
     Optimizer of crystal orientation from peaks and known lattice parameters.
-    ... (rest of class attributes) ...
     """
 
     def __init__(self, filename=None):
@@ -246,6 +587,8 @@ class FindUB:
             Filename of found peaks. The default is None.
 
         """
+        self.goniometer_axes = None
+        self.goniometer_angles = None
 
         if filename is not None:
             self.load_peaks(filename)
@@ -259,8 +602,6 @@ class FindUB:
 
         # Keep scipy interpolator for non-JAX methods
         self._angle = scipy.interpolate.interp1d(cdf, t, kind="linear")
-
-        # create a gemmi spacegroup object
 
     def load_peaks(self, filename):
         """
@@ -287,25 +628,17 @@ class FindUB:
             self.intensity = f["peaks/intensity"][()]
             self.sigma_intensity = f["peaks/sigma"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
+            
+            # Load goniometer raw data if available
+            if "goniometer/axes" in f:
+                 self.goniometer_axes = f["goniometer/axes"][()]
+            if "goniometer/angles" in f:
+                 self.goniometer_angles = f["goniometer/angles"][()]
 
     def get_consistent_U_for_symmetry(self, U_mat, B_mat):
         """
         Return the proper rotations for this spacegroup and pick
         a consistent U matrix among all symmetry-related possibilities.
-
-        Parameters:
-        ----------
-        U_mat: array, (3, 3)
-            rotation matrix
-
-        B_mat: array, (3, 3)
-            B (instrument) matrix
-
-        Returns:
-            (U_unique, T)
-
-            where U_unique is a symmetry-equivalent (3, 3) matrix, and T is used to transform
-            the input U to the unique one
         """
 
         uc = gemmi.UnitCell(
@@ -341,12 +674,7 @@ class FindUB:
 
         """
 
-        tt = np.deg2rad(self.two_theta)  # (M)
-        az = np.deg2rad(self.az_phi)  # (M)
-
-        kf_ki_dir = np.array(
-            [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
-        )  # (3, M)
+        kf_ki_dir = scattering_vector_from_angles(self.two_theta, self.az_phi)
 
         # self.R.shape == (M, 3, 3)
         return np.einsum("mji,jm->im", self.R, kf_ki_dir)
@@ -355,14 +683,7 @@ class FindUB:
     def metric_G_tensor(self):
         """
         Calculate the metric tensor :math:`G`.
-
-        Returns
-        -------
-        G : 2d-array
-            3x3 matrix of lattice parameter info for Cartesian transforms.
-
         """
-
         alpha = np.deg2rad(self.alpha)
         beta = np.deg2rad(self.beta)
         gamma = np.deg2rad(self.gamma)
@@ -381,64 +702,15 @@ class FindUB:
     def metric_G_star_tensor(self):
         """
         Calculate the reciprocal metric tensor :math:`G^*`.
-
-        Returns
-        -------
-        Gstar : 2d-array
-            3x3 matrix of reciprocal lattice info for Cartesian transforms.
-
         """
-
         return np.linalg.inv(self.metric_G_tensor())
 
     def reciprocal_lattice_B(self):
         """
         The reciprocal lattice :math:`B`-matrix.
-
-        Returns
-        -------
-        B : 2d-array
-            3x3 matrix of reciprocal lattice in Cartesian coordinates.
-
         """
-
         Gstar = self.metric_G_star_tensor()
-
         return scipy.linalg.cholesky(Gstar, lower=False)
-
-    def orientation_U(self, u0, u1, u2):
-        """
-        The sample orientation matrix :math:`U`. (Scipy/Numpy version)
-
-        Parameters
-        ----------
-        u0, u1, u2 : float
-            Rotation parameters.
-
-        Returns
-        -------
-        U : 2d-array
-            3x3 sample orientation matrix.
-
-        """
-
-        theta = np.arccos(1 - 2 * u0)
-        phi = 2 * np.pi * u1
-        w = np.array(
-            [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
-        )
-
-        ax = self._angle(u2)
-
-        return scipy.spatial.transform.Rotation.from_rotvec(ax * w).as_matrix()
-
-    def UB_matrix(self, U, B):
-        """
-        Calculate :math:`UB`-matrix.
-        ... (rest of method) ...
-        """
-
-        return U @ B
 
     def minimize_evosax(
         self,
@@ -449,114 +721,126 @@ class FindUB:
         seed: int = 0,
         softness: float = 1e-3,
         init_params: np.ndarray = None,
+        refine_lattice: bool = False,
+        lattice_bound_frac: float = 0.05,
+        goniometer_axes: list = None,
+        goniometer_angles: np.ndarray = None,
+        refine_goniometer: bool = False,
+        goniometer_bound_deg: float = 5.0
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
-        This replaces both the pyswarms (minimize) and scipy.DE (minimize_de) methods.
-
-        It runs the optimization `n_runs` times with different seeds and
-        selects the best solution.
-
-        Parameters
-        ----------
-        strategy_name : str
-            Name of the evosax strategy to use (e.g., 'DE' or 'PSO').
-        population_size : int
-            Population size for the strategy.
-        num_generations : int
-            Number of generations to run the optimization.
-        n_runs : int
-            Number of times to run the minimization with different seeds.
-        seed : int
-            Base seed for the random number generator.
-        softness : float
-            Softness parameter (the smaller, the more stringent the peak finding criteria)
-
-        Returns
-        -------
-        (num, hkl, lamda)
-            Tuple containing results from index_de().
         """
 
-        kf_ki_dir = self.uncertainty_line_segements()
+        # Auto-detect goniometer info from loaded file if not provided
+        if goniometer_axes is None and self.goniometer_axes is not None:
+             goniometer_axes = self.goniometer_axes
+        
+        # Need to handle angles carefully. 
+        # self.goniometer_angles should be (M, N) or (N, M) depending on how saved.
+        # parser/integration saves it as list of arrays/lists per peak. 
+        # integration: gonio_angles_out.extend([raw] * num_peaks). 
+        # So shape is (Total_Peaks, N_axes).
+        # Optimization expects (N_axes, M) for easy broadcasting? Or (M, N_axes)?
+        # Let's check `compute_goniometer_R_jax`.
+        # It expects `gonio_angles` as (N_axes, M).
+        # So if loaded from file (M, N), we transpose.
+        
+        if goniometer_angles is None and self.goniometer_angles is not None:
+             # Transpose to (N_axes, M)
+             goniometer_angles = self.goniometer_angles.T
 
-        # 1. Use Signal-to-Noise (I / sigma)
-        # Add a small epsilon to sigma to prevent division by zero
+        # 1. Prepare vectors
+        # If refining goniometer, we need UNROTATED (Lab) vectors.
+        # If NOT refining, we use the ROTATED (Crystal) vectors stored in self.R
+        
+        kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
+        
+        if refine_goniometer:
+            if goniometer_axes is None or goniometer_angles is None:
+                raise ValueError("If refine_goniometer=True, axes and angles must be provided.")
+            # Input to objective is Lab frame
+            kf_ki_input = kf_ki_dir_lab
+        else:
+            # Input to objective is Crystal frame (using fixed R)
+            kf_ki_input = np.einsum("mji,jm->im", self.R, kf_ki_dir_lab)
+
+        # 2. Use Signal-to-Noise (I / sigma)
         weights = self.intensity / (self.sigma_intensity + 1e-6)
-
-        # 2. Normalize weights so mean is 1.0
-        # This keeps the loss function scale intuitive.
         weights = weights / np.mean(weights)
-
-        # Optional: Clip extremely high weights to prevent one single peak
-        # from dominating the entire solution (e.g., max weight = 10x average)
         weights = np.clip(weights, 0, 10.0)
 
-        # 1. Instantiate the JAX-compatible objective function
+        # Prepare cell parameters
+        cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
+
+        # Detect crystal system for constraints
+        lattice_system, num_lattice_params = get_lattice_system(
+            self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.centering
+        )
+        
+        if refine_lattice:
+            print(f"Lattice Refinement Enabled.")
+            print(f"Detected System: {lattice_system} ({num_lattice_params} free parameters).")
+            
+        if refine_goniometer:
+            print(f"Goniometer Refinement Enabled (Bounds: +/- {goniometer_bound_deg} deg).")
+        
+        # 3. Instantiate the JAX-compatible objective function
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             self.centering,
-            kf_ki_dir,
-            np.array(self.wavelength), # Pass wavelength bounds
-            self._angle_cdf,           # Pass interpolation data
-            self._angle_t,             # Pass interpolation data
+            kf_ki_input,
+            np.array(self.wavelength), 
+            self._angle_cdf,           
+            self._angle_t,             
             weights=weights,
             softness=softness,
+            cell_params=cell_params_init,
+            refine_lattice=refine_lattice,
+            lattice_bound_frac=lattice_bound_frac,
+            lattice_system=lattice_system,
+            goniometer_axes=goniometer_axes,
+            goniometer_angles=goniometer_angles,
+            refine_goniometer=refine_goniometer,
+            goniometer_bound_deg=goniometer_bound_deg
         )
 
-        # Define the sample solution (shape (3,)) to infer num_dims
-        sample_solution = jnp.zeros(3)
+        # Determine dimensions
+        # 3 dimensions for rotation (u0, u1, u2)
+        # + num_lattice_params (if refined)
+        # + num_goniometer_axes (if refined)
+        num_dims = 3
+        if refine_lattice:
+            num_dims += num_lattice_params
+        if refine_goniometer:
+            num_dims += len(goniometer_axes)
+            
+        sample_solution = jnp.zeros(num_dims)
 
-        # 2. Initialize strategy
-        # clip_min/clip_max removed from constructor
+        # 4. Initialize strategy
         if strategy_name.lower() == "de":
-            strategy = DifferentialEvolution(
-                solution=sample_solution,
-                population_size=population_size
-            )
+            strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
             strategy_type = 'population_based'
-            print("Using Differential Evolution (DE) strategy.")
         elif strategy_name.lower() == "pso":
-            strategy = PSO(
-                solution=sample_solution,
-                population_size=population_size
-            )
+            strategy = PSO(solution=sample_solution, population_size=population_size)
             strategy_type = 'population_based'
-            print("Using Particle Swarm Optimization (PSO) strategy.")
         elif strategy_name.lower() == "cma_es":
-            strategy = CMA_ES(
-                solution=sample_solution,
-                population_size=population_size
-            )
+            strategy = CMA_ES(solution=sample_solution, population_size=population_size)
             strategy_type = 'distribution_based'
-            print("Using Covariance matrix adaptation evolution strategy (CMA-ES).")
         else:
-            raise ValueError(f"Unknown strategy: {strategy_name}. Choose 'DE' or 'PSO'.")
+            raise ValueError(f"Unknown strategy: {strategy_name}")
 
-        # 3. Get default strategy parameters
         params = strategy.default_params
 
-        # 4. Define the JIT-compiled step function
         @jax.jit
         def es_step(rng, state, params):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
-
-            # Ask for new population
             population, state = strategy.ask(rng_ask, state, params)
-
-            # --- Manually clip the population to [0, 1] ---
             population_clipped = jnp.clip(population, 0.0, 1.0)
-
-            # Evaluate the *clipped* population
             fitness = objective(population_clipped)
-
-            # Tell strategy the results using the *clipped* population
-            state, metrics = strategy.tell(
-                rng_tell, population_clipped, fitness, state, params
-            )
+            state, metrics = strategy.tell(rng_tell, population_clipped, fitness, state, params)
             return rng, state, metrics
 
-        # 5. Run the optimization loop N times
         best_overall_fitness = jnp.inf
         best_overall_member = None
 
@@ -564,79 +848,119 @@ class FindUB:
             run_seed = seed + i
             print(f"\n--- Starting Run {i+1}/{n_runs} (Seed: {run_seed}) ---")
 
-            # 6. Initialize strategy state for this run
             rng = jax.random.PRNGKey(run_seed)
-
-            # Create initial population and fitness.
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
 
             if init_params is None:
-                # Initialize random state
                 if strategy_type == 'population_based':
-                    # Population is (popsize, 3) random numbers [0, 1]
-                    population_init = jax.random.uniform(rng_pop, (population_size, 3))
-
-                    # Evaluate the initial population
+                    population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
                     fitness_init = objective(population_init)
-
                     state = strategy.init(rng_init, population_init, fitness_init, params)
                 elif strategy_type == 'distribution_based':
-                    # solution is (3, ) random numbers [0, 1]
-                    solution_init = jax.random.uniform(rng_pop, (3, ))
-
+                    solution_init = jax.random.uniform(rng_pop, (num_dims, ))
                     state = strategy.init(rng_init, solution_init, params)
-                else:
-                    raise ValueError
-
             else:
-                # resume using save parameters
+                # Handle restart logic
                 start_sol = jnp.array(init_params)
-                if strategy_type == 'population_based':
-                    # Initialize population as a tight Gaussian ball around the guess
-                    # Sigma = 0.05 ensures we stay local but have some diversity
-                    noise = jax.random.normal(rng_pop, (population_size, 3)) * 0.05
-                    population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
-                    fitness_init = objective(population_init)
-                    state = strategy.init(rng_init, population_init, fitness_init, params)
-                elif strategy_type == 'distribution_based': # e.g. CMA-ES
-                    # Initialize the mean of the distribution at our guess
-                    state = strategy.init(rng_init, start_sol, params)
+                
+                # If loading from a file with a DIFFERENT dimension (e.g. older file), warn and reset
+                if start_sol.shape[0] != num_dims:
+                    print(f"Warning: init_params shape {start_sol.shape} mismatch with required {num_dims}. Restarting random.")
+                    if strategy_type == 'population_based':
+                         population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                         fitness_init = objective(population_init)
+                         state = strategy.init(rng_init, population_init, fitness_init, params)
+                    else:
+                         state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
+                else:
+                    if strategy_type == 'population_based':
+                        noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                        population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                        fitness_init = objective(population_init)
+                        state = strategy.init(rng_init, population_init, fitness_init, params)
+                    elif strategy_type == 'distribution_based':
+                        state = strategy.init(rng_init, start_sol, params)
 
             pbar = range(num_generations)
             if trange is not None:
                 pbar = trange(num_generations, desc=f"Run {i+1}/{n_runs}")
 
             for gen in pbar:
-                # Run one step
                 rng, state, metrics = es_step(rng, state, params)
-
-                # Update progress bar description
                 if trange is not None:
                     pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best Fitness: {metrics['best_fitness']:.4f}")
 
-            # --- Correctly get best member and fitness ---
-            # Access the attributes from the *final state*
             current_run_fitness = state.best_fitness
             current_run_member = state.best_solution
             print(f"Run {i+1} finished. Best fitness: {current_run_fitness:.4f}")
 
-            # 8. Check if this run is the best so far
             if current_run_fitness < best_overall_fitness:
                 best_overall_fitness = current_run_fitness
-                best_overall_member = current_run_member # This is now the jax array
+                best_overall_member = current_run_member
                 print(f"!!! New best solution found in Run {i+1} !!!")
 
-        # 9. Get the best parameters from all runs
         print(f"\n--- All {n_runs} runs complete ---")
         print(f"Best overall fitness: {best_overall_fitness:.4f}")
-        print(f"Best parameters (u0, u1, u2): {best_overall_member}")
-
-        # Store the best parameters (converting back to numpy)
+        
         self.x = np.array(best_overall_member)
 
-        U = objective.orientation_U_jax(self.x[None])[0]
-        B = self.reciprocal_lattice_B()
+        # 5. Process results
+        idx = 0
+        rot_params = self.x[idx:idx+3]
+        idx += 3
+        
+        # Calculate final U (orientation)
+        U = objective.orientation_U_jax(rot_params[None])[0] # (3, 3)
+
+        # Calculate final B (reciprocal lattice)
+        if refine_lattice:
+            # Extract normalized lattice params
+            cell_norm = self.x[None, idx:idx+num_lattice_params] 
+            idx += num_lattice_params
+            
+            p_full_real = objective.reconstruct_cell_params(cell_norm)
+            p = np.array(p_full_real[0])
+            
+            B_new = objective.compute_B_jax(cell_norm)[0] # (3, 3)
+            
+            print("--- Refined Lattice Parameters ---")
+            print(f"a: {p[0]:.4f}, b: {p[1]:.4f}, c: {p[2]:.4f}")
+            print(f"alpha: {p[3]:.4f}, beta: {p[4]:.4f}, gamma: {p[5]:.4f}")
+            
+            self.a, self.b, self.c = p[0], p[1], p[2]
+            self.alpha, self.beta, self.gamma = p[3], p[4], p[5]
+            B = B_new
+        else:
+            B = self.reciprocal_lattice_B()
+            
+        # Refined Goniometer
+        kf_ki_vec = np.array(kf_ki_input)
+        if refine_goniometer:
+            gonio_norm = self.x[None, idx:idx+len(goniometer_axes)]
+            # Recompute R (S=1, M, 3, 3)
+            R_refined = objective.compute_goniometer_R_jax(gonio_norm)[0] # (M, 3, 3)
+            
+            # Update self.R
+            self.R = np.array(R_refined)
+            
+            # Print offsets
+            offsets_val = objective.gonio_min + gonio_norm * (objective.gonio_max - objective.gonio_min)
+            print("--- Refined Goniometer Offsets (deg) ---")
+            print(offsets_val[0])
+            
+            # Transform vectors to Crystal Frame for indexing report
+            # R is (M, 3, 3), kf_ki_vec (Lab) is (3, M)
+            # R^T @ kf_ki_vec
+            kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
+        else:
+            # Vectors already in crystal frame
+            kf_ki_vec = kf_ki_input
+
+        # Enforce Symmetry consistency
         U_new, _ = self.get_consistent_U_for_symmetry(U, B)
-        _, score, hkl, lamb = objective.indexer_soft_jax((U_new @ B)[None], softness=softness)
+        
+        # Recalculate score with final U and B
+        UB_final = U_new @ B
+        _, score, hkl, lamb = objective.indexer_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
 
         return score[0], hkl[0], lamb[0], U_new

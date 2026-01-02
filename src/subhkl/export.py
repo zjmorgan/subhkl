@@ -41,7 +41,8 @@ class BaseConcatenateMerger:
         with h5py.File(output_filename, "w") as f_out:
             with h5py.File(self.h5_files[0], "r") as f_typical:
                 for key in self.copy_keys:
-                    f_out[key] = np.array(f_typical[key])
+                    if key in f_typical:
+                        f_out[key] = np.array(f_typical[key])
 
                 for merge_key in self.merge_keys:
                     shape = (total_peaks,) + f_typical[merge_key].shape[1:]
@@ -57,7 +58,8 @@ class BaseConcatenateMerger:
                     peak_range = slice(offset, offset + num_items)
                     f_out["file_offsets"][i_file] = offset
                     for merge_key in self.merge_keys:
-                        f_out[merge_key][peak_range] = np.array(f_in[merge_key])
+                        if merge_key in f_in:
+                            f_out[merge_key][peak_range] = np.array(f_in[merge_key])
 
                     offset += num_items
 
@@ -68,12 +70,16 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "wavelength_mins",
             "wavelength_maxes",
             "goniometer/R",
+            "goniometer/angles",
             "peaks/two_theta",
             "peaks/azimuthal",
             "peaks/intensity",
             "peaks/sigma"
         ]
-        super().__init__(h5_files, [], merge_keys)
+        copy_keys = [
+            "goniometer/axes"
+        ]
+        super().__init__(h5_files, copy_keys, merge_keys)
 
 
 class IndexerConcatenateMerger(BaseConcatenateMerger):
@@ -93,6 +99,7 @@ class IndexerConcatenateMerger(BaseConcatenateMerger):
             "sample/gamma",
             "sample/centering",
             "instrument/wavelength",
+            "goniometer/axes"
         ]
 
         merge_keys = [
@@ -106,6 +113,8 @@ class IndexerConcatenateMerger(BaseConcatenateMerger):
             "peaks/lambda",
             "peaks/two_theta",
             "peaks/azimuthal",
+            "goniometer/angles",
+            "goniometer/R"
         ]
 
         super().__init__(indexed_h5_files, copy_keys, merge_keys)

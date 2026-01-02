@@ -3,6 +3,7 @@ import h5py
 import numpy as np
 import typer
 import uuid
+import os
 
 from subhkl import normalization
 from subhkl.export import (
@@ -12,6 +13,7 @@ from subhkl.export import (
 )
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
+from subhkl.config.goniometer import get_rotation_data_from_nexus
 
 app = typer.Typer()
 
@@ -25,19 +27,14 @@ def index(
     n_runs: int,
     seed: int,
     softness: float,
+    refine_lattice: bool = False,
+    lattice_bound_frac: float = 0.05,
     bootstrap_filename: str = None,
+    refine_goniometer: bool = False,
+    goniometer_bound_deg: float = 5.0,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
-
-    Params:
-        hdf5_peaks_filename: Path to the input hdf5 file to index
-        output_peaks_filename: Path to write the output hdf file.
-        strategy_name: Optimization strategy ('DE' or 'PSO').
-        population_size: Population size for each generation.
-        gens: Number of generations to run.
-        n_runs: Number of optimization runs with different seeds.
-        seed: Base seed for the first optimization run.
     """
 
     # Index the peaks
@@ -46,6 +43,8 @@ def index(
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+    if refine_lattice:
+        print(f"Refining lattice parameters with {lattice_bound_frac*100}% bounds.")
 
     # Load bootstrap params if file is provided
     init_params = None
@@ -66,6 +65,10 @@ def index(
         seed=seed,
         softness=softness,
         init_params=init_params,
+        refine_lattice=refine_lattice,
+        lattice_bound_frac=lattice_bound_frac,
+        refine_goniometer=refine_goniometer,
+        goniometer_bound_deg=goniometer_bound_deg
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -75,36 +78,48 @@ def index(
     l_list = [i[2] for i in hkl]
 
     # Get UB to save to output
+    # If lattice was refined, opt.reciprocal_lattice_B() returns the refined B
     B = opt.reciprocal_lattice_B()
+    
+    # Get refined R if applicable
+    refined_R = opt.R
 
     # Copy data from temporary HDF5
     copy_keys = [
-        "sample/a",
-        "sample/b",
-        "sample/c",
-        "sample/alpha",
-        "sample/beta",
-        "sample/gamma",
         "sample/centering",
         "instrument/wavelength",
-        "goniometer/R",
+        # "goniometer/R", # We will write the potentially refined R separately
         "peaks/intensity",
         "peaks/sigma",
         "peaks/two_theta",
         "peaks/azimuthal",
+        "goniometer/axes", 
+        "goniometer/angles"
     ]
 
     copied_data = {}
 
     with h5py.File(hdf5_peaks_filename) as f:
         for key in copy_keys:
-            copied_data[key] = np.array(f[key])
+            if key in f:
+                copied_data[key] = np.array(f[key])
 
     # Save output to HDF5 file
     print(f"Saving indexed peaks to {output_peaks_filename}...")
     with h5py.File(output_peaks_filename, "w") as f:
         for key, value in copied_data.items():
             f[key] = value
+
+        # Write refined R
+        f["goniometer/R"] = refined_R
+
+        # Write lattice parameters (from opt, which may be refined)
+        f["sample/a"] = opt.a
+        f["sample/b"] = opt.b
+        f["sample/c"] = opt.c
+        f["sample/alpha"] = opt.alpha
+        f["sample/beta"] = opt.beta
+        f["sample/gamma"] = opt.gamma
 
         f["sample/B"] = B
         f["sample/U"] = U
@@ -210,7 +225,9 @@ def finder(
         wavelength_maxes=detector_peaks.wavelength_maxes,
         intensity=detector_peaks.intensity,
         sigma=detector_peaks.sigma,
-        bank=detector_peaks.bank
+        bank=detector_peaks.bank,
+        gonio_axes=detector_peaks.gonio_axes,
+        gonio_angles=detector_peaks.gonio_angles
     )
 
 
@@ -259,7 +276,6 @@ def indexer(
     wavelength_max: float,
     sample_centering: str,
     goniometer_csv_filename: typing.Optional[str] = None,
-    # --- Updated evosax CLI arguments ---
     strategy_name: str = typer.Option(
         "DE", 
         "--strategy", 
@@ -286,6 +302,26 @@ def indexer(
         help="Base seed for the first optimization run."
     ),
     softness: float = 0.1,
+    refine_lattice: bool = typer.Option(
+        False, 
+        "--refine-lattice", 
+        help="Refine unit cell parameters during optimization."
+    ),
+    lattice_bound_frac: float = typer.Option(
+        0.05,
+        "--lattice-bound-frac",
+        help="Fractional bound for lattice parameter refinement (default 0.05 = 5%)."
+    ),
+    refine_goniometer: bool = typer.Option(
+        False, 
+        "--refine-goniometer", 
+        help="Refine goniometer angles during optimization."
+    ),
+    goniometer_bound_deg: float = typer.Option(
+        5.0,
+        "--goniometer-bound-deg",
+        help="Bound for goniometer angle refinement in degrees (default +/- 5)."
+    ),
     bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
 ) -> None:
     """
@@ -299,6 +335,14 @@ def indexer(
         intensity = np.array(f["peaks/intensity"])
         sigma = np.array(f["peaks/sigma"])
         rotations = np.array(f["goniometer/R"])
+        
+        # Load goniometer raw data if available
+        gonio_axes = None
+        gonio_angles = None
+        if "goniometer/axes" in f:
+            gonio_axes = np.array(f["goniometer/axes"])
+        if "goniometer/angles" in f:
+            gonio_angles = np.array(f["goniometer/angles"])
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
@@ -326,6 +370,11 @@ def indexer(
         f["peaks/azimuthal"] = az_phi
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
+        
+        if gonio_axes is not None:
+            f["goniometer/axes"] = gonio_axes
+        if gonio_angles is not None:
+            f["goniometer/angles"] = gonio_angles
 
     # Call the internal index function with the new parameters
     index(
@@ -337,7 +386,11 @@ def indexer(
         n_runs=n_runs,
         seed=seed,
         softness=softness,
+        refine_lattice=refine_lattice,
+        lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
+        refine_goniometer=refine_goniometer,
+        goniometer_bound_deg=goniometer_bound_deg,
     )
 
 
@@ -345,7 +398,6 @@ def indexer(
 def indexer_using_file(
     hdf5_peaks_filename: str, 
     output_peaks_filename: str,
-    # --- Updated evosax CLI arguments ---
     strategy_name: str = typer.Option(
         "DE", 
         "--strategy", 
@@ -371,6 +423,27 @@ def indexer_using_file(
         "--seed", 
         help="Base seed for the first optimization run."
     ),
+    refine_lattice: bool = typer.Option(
+        False, 
+        "--refine-lattice", 
+        help="Refine unit cell parameters during optimization."
+    ),
+    lattice_bound_frac: float = typer.Option(
+        0.05,
+        "--lattice-bound-frac",
+        help="Fractional bound for lattice parameter refinement (default 0.05 = 5%)."
+    ),
+    refine_goniometer: bool = typer.Option(
+        False, 
+        "--refine-goniometer", 
+        help="Refine goniometer angles during optimization."
+    ),
+    goniometer_bound_deg: float = typer.Option(
+        5.0,
+        "--goniometer-bound-deg",
+        help="Bound for goniometer angle refinement in degrees (default +/- 5)."
+    ),
+    softness: float = 0.1,
 ):
     """
     Index a pre-prepared HDF5 file that already contains all sample/instrument info.
@@ -383,7 +456,12 @@ def indexer_using_file(
         population_size=population_size,
         gens=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
+        softness=softness,
+        refine_lattice=refine_lattice,
+        lattice_bound_frac=lattice_bound_frac,
+        refine_goniometer=refine_goniometer,
+        goniometer_bound_deg=goniometer_bound_deg
     )
 
 
@@ -408,14 +486,31 @@ def peak_predictor(
         wavelength = np.array(f_indexed["instrument/wavelength"])
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
+        # Check if optimized goniometer exists
+        if "goniometer/R" in f_indexed:
+            R_array = np.array(f_indexed["goniometer/R"])
+            # Assuming all R are the same for the dataset (single crystal snapshot)
+            # Taking the first one. If R varies per peak (e.g. scan), this needs handling.
+            # But here we are predicting for a whole image/scan.
+            # Peaks class usually calculates one R. 
+            # If we refined it, we should use the refined one.
+            R = R_array[0]
+        else:
+             R = None # Will calculate from instrument
 
     peaks = Peaks(filename,
                   instrument,
                   wavelength_min=wavelength[0],
                   wavelength_max=wavelength[1])
 
-    R = peaks.goniometer_rotation
-    UB = R @ U @ B
+    if R is not None:
+        # Override the calculated R with the refined one
+        peaks.goniometer_rotation = R
+    
+    R_used = peaks.goniometer_rotation
+    
+    # UB = R * U * B (Prediction uses the full transform)
+    UB = R_used @ U @ B
 
     peak_dict = peaks.predict_peaks(
         a,
@@ -447,8 +542,10 @@ def peak_predictor(
         f["sample/beta"] = beta
         f["sample/gamma"] = gamma
         f["sample/centering"] = centering
+        f["sample/U"] = U  # Added: Propagate U
+        f["sample/B"] = B  # Added: Propagate B
         f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = R
+        f["goniometer/R"] = R_used # Write the used R
 
         for bank, (i, j, h, k, l, wl) in peak_dict.items():
             f[f"banks/{bank}/i"] = i
@@ -517,6 +614,8 @@ def integrator(
         "sample/beta",
         "sample/gamma",
         "sample/centering",
+        "sample/U",  # Added: Copy U to final output
+        "sample/B",  # Added: Copy B to final output
         "instrument/wavelength",
         "goniometer/R",
     ]
@@ -534,7 +633,8 @@ def integrator(
 
         with h5py.File(integration_peaks_filename) as f_in:
             for key in copy_keys:
-                f_in.copy(f_in[key], f, key)
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
 
 
 @app.command()
