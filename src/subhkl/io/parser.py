@@ -32,6 +32,8 @@ def index(
     bootstrap_filename: str = None,
     refine_goniometer: bool = False,
     goniometer_bound_deg: float = 5.0,
+    nexus_filename: str = None, 
+    instrument_name: str = None
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -45,6 +47,30 @@ def index(
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
     if refine_lattice:
         print(f"Refining lattice parameters with {lattice_bound_frac*100}% bounds.")
+
+    goniometer_names = None
+    if refine_goniometer:
+        if nexus_filename and instrument_name:
+             print(f"Refining goniometer angles with {goniometer_bound_deg} deg bounds.")
+             # Load goniometer axes/angles from Nexus file
+             axes, angles, names = get_rotation_data_from_nexus(nexus_filename, instrument_name)
+             # Update opt to use these for refinement
+             opt.goniometer_axes = np.array(axes)
+             # Angles need to be shaped (N_axes, M_peaks)
+             num_peaks = len(opt.two_theta)
+             # Transpose logic is inside optimization.py if passed as (M, N) or (N, M).
+             # But here we are setting it directly. 
+             # optimization.py expects self.goniometer_angles to be (M, N) usually from file, and transposes it.
+             # If we set it manually, let's match the file structure (M, N).
+             opt.goniometer_angles = np.array(angles)[np.newaxis, :].repeat(num_peaks, axis=0)
+             goniometer_names = names
+        elif opt.goniometer_axes is not None:
+             print(f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds.")
+             # If available in the file (populated by integration/merging), names might not be there.
+             pass
+        else:
+            print("WARNING: refine_goniometer requested but goniometer data not found. Skipping goniometer refinement.")
+            refine_goniometer = False
 
     # Load bootstrap params if file is provided
     init_params = None
@@ -68,7 +94,8 @@ def index(
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
-        goniometer_bound_deg=goniometer_bound_deg
+        goniometer_bound_deg=goniometer_bound_deg,
+        goniometer_names=goniometer_names
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -94,7 +121,8 @@ def index(
         "peaks/two_theta",
         "peaks/azimuthal",
         "goniometer/axes", 
-        "goniometer/angles"
+        "goniometer/angles",
+        "goniometer/names"
     ]
 
     copied_data = {}
@@ -231,7 +259,8 @@ def finder(
         sigma=detector_peaks.sigma,
         bank=detector_peaks.bank,
         gonio_axes=detector_peaks.gonio_axes,
-        gonio_angles=detector_peaks.gonio_angles
+        gonio_angles=detector_peaks.gonio_angles,
+        gonio_names=detector_peaks.gonio_names
     )
 
 
@@ -280,6 +309,8 @@ def indexer(
     wavelength_max: float,
     sample_centering: str,
     goniometer_csv_filename: typing.Optional[str] = None,
+    original_nexus_filename: typing.Optional[str] = None,
+    instrument_name: typing.Optional[str] = None,
     strategy_name: str = typer.Option(
         "DE", 
         "--strategy", 
@@ -343,10 +374,14 @@ def indexer(
         # Load goniometer raw data if available
         gonio_axes = None
         gonio_angles = None
+        gonio_names = None
         if "goniometer/axes" in f:
             gonio_axes = np.array(f["goniometer/axes"])
         if "goniometer/angles" in f:
             gonio_angles = np.array(f["goniometer/angles"])
+        if "goniometer/names" in f:
+            # Need to decode names
+            gonio_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
 
     # Read in goniometer from CSV filename, if given
     if goniometer_csv_filename is not None:
@@ -379,6 +414,9 @@ def indexer(
             f["goniometer/axes"] = gonio_axes
         if gonio_angles is not None:
             f["goniometer/angles"] = gonio_angles
+        if gonio_names is not None:
+            dt = h5py.string_dtype(encoding='utf-8')
+            f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
 
     # Call the internal index function with the new parameters
     index(
@@ -395,6 +433,8 @@ def indexer(
         bootstrap_filename=bootstrap_filename,
         refine_goniometer=refine_goniometer,
         goniometer_bound_deg=goniometer_bound_deg,
+        nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name
     )
 
 
@@ -402,6 +442,8 @@ def indexer(
 def indexer_using_file(
     hdf5_peaks_filename: str, 
     output_peaks_filename: str,
+    original_nexus_filename: typing.Optional[str] = None,
+    instrument_name: typing.Optional[str] = None,
     strategy_name: str = typer.Option(
         "DE", 
         "--strategy", 
@@ -465,7 +507,9 @@ def indexer_using_file(
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
-        goniometer_bound_deg=goniometer_bound_deg
+        goniometer_bound_deg=goniometer_bound_deg,
+        nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name
     )
 
 

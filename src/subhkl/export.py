@@ -77,7 +77,8 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "peaks/sigma"
         ]
         copy_keys = [
-            "goniometer/axes"
+            "goniometer/axes",
+            "goniometer/names"
         ]
         super().__init__(h5_files, copy_keys, merge_keys)
 
@@ -99,7 +100,8 @@ class IndexerConcatenateMerger(BaseConcatenateMerger):
             "sample/gamma",
             "sample/centering",
             "instrument/wavelength",
-            "goniometer/axes"
+            "goniometer/axes",
+            "goniometer/names"
         ]
 
         merge_keys = [

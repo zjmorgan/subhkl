@@ -59,9 +59,11 @@ def get_rotation_data_from_nexus(filename, instrument):
         List of axes in format used by Mantid `SetGoniometer`
     angles : list[float]
         List of angles in degrees about the axes
+    names : list[str]
+        List of axis names
     """
     settings = reduction_settings[instrument]
-    axes, angles = [], []
+    axes, angles, names = [], [], []
     with h5py.File(filename) as f:
         das_logs = f["entry/DASlogs"]
 
@@ -75,8 +77,9 @@ def get_rotation_data_from_nexus(filename, instrument):
             axis = np.array(axis_spec, dtype=float)
             angles.append(angle_deg)
             axes.append(axis)
+            names.append(axis_name)
 
-    return axes, angles
+    return axes, angles, names
 
 
 def calc_goniometer_rotation_matrix(axes, angles):

@@ -6,6 +6,7 @@ from collections import namedtuple
 import numpy as np
 import numpy.typing as npt
 
+import h5py
 from h5py import File
 from PIL import Image
 
@@ -36,7 +37,8 @@ DetectorPeaks = namedtuple(
         "sigma",
         "bank",
         "gonio_axes",
-        "gonio_angles"
+        "gonio_angles",
+        "gonio_names"
     ]
 )
 
@@ -90,6 +92,7 @@ class Peaks:
         # Initialize goniometer data
         self.goniometer_axes_raw = None
         self.goniometer_angles_raw = None
+        self.goniometer_names_raw = None
 
         if goniometer_axes is not None and goniometer_angles is not None:
             self.goniometer_rotation = calc_goniometer_rotation_matrix(
@@ -115,9 +118,10 @@ class Peaks:
                 self.goniometer_rotation = self.get_goniometer_from_nexus(filename)
                 # get_goniometer_from_nexus calls get_rotation_data_from_nexus internally but only returns matrix
                 # Let's call it directly to get raw data
-                axes, angles = get_rotation_data_from_nexus(filename, self.instrument)
+                axes, angles, names = get_rotation_data_from_nexus(filename, self.instrument)
                 self.goniometer_axes_raw = axes
                 self.goniometer_angles_raw = angles
+                self.goniometer_names_raw = names
                 
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
@@ -156,7 +160,7 @@ class Peaks:
             The goniometer rotation matrix calculated from the angles in the
             nexus file
         """
-        axes, angles = get_rotation_data_from_nexus(filename, self.instrument)
+        axes, angles, _ = get_rotation_data_from_nexus(filename, self.instrument)
         return calc_goniometer_rotation_matrix(axes, angles)
 
     def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
@@ -845,7 +849,7 @@ class Peaks:
                 print("Bank had 0 peaks")
                 
         # Return axes (global) and angles (per peak)
-        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks, self.goniometer_axes_raw, gonio_angles_out)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
     def integrate(
         self,
@@ -974,7 +978,8 @@ class Peaks:
         sigma: list[float],
         bank: list[int],
         gonio_axes: list[list[float]] = None,
-        gonio_angles: list[list[float]] = None
+        gonio_angles: list[list[float]] = None,
+        gonio_names: list[str] = None
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1003,6 +1008,8 @@ class Peaks:
             Goniometer axes specifications
         gonio_angles : array or list
             Goniometer angles per peak (M, N_axes)
+        gonio_names : list[str]
+            Names of the goniometer axes
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
@@ -1021,3 +1028,8 @@ class Peaks:
             
             if gonio_angles is not None:
                 f["goniometer/angles"] = gonio_angles
+                
+            if gonio_names is not None:
+                # Save as fixed-length strings (numpy S-type) or variable length
+                dt = h5py.string_dtype(encoding='utf-8')
+                f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)

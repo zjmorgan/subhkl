@@ -590,6 +590,7 @@ class FindUB:
         self.goniometer_axes = None
         self.goniometer_angles = None
         self.goniometer_offsets = None # To store refined offsets
+        self.goniometer_names = None # To store axis names
 
         if filename is not None:
             self.load_peaks(filename)
@@ -635,6 +636,8 @@ class FindUB:
                  self.goniometer_axes = f["goniometer/axes"][()]
             if "goniometer/angles" in f:
                  self.goniometer_angles = f["goniometer/angles"][()]
+            if "goniometer/names" in f:
+                 self.goniometer_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
 
     def get_consistent_U_for_symmetry(self, U_mat, B_mat):
         """
@@ -727,7 +730,8 @@ class FindUB:
         goniometer_axes: list = None,
         goniometer_angles: np.ndarray = None,
         refine_goniometer: bool = False,
-        goniometer_bound_deg: float = 5.0
+        goniometer_bound_deg: float = 5.0,
+        goniometer_names: list = None
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -750,6 +754,10 @@ class FindUB:
         if goniometer_angles is None and self.goniometer_angles is not None:
              # Transpose to (N_axes, M)
              goniometer_angles = self.goniometer_angles.T
+             
+        # Also auto-detect names
+        if goniometer_names is None and self.goniometer_names is not None:
+             goniometer_names = self.goniometer_names
 
         # 1. Prepare vectors
         # If refining goniometer, we need UNROTATED (Lab) vectors.
@@ -947,7 +955,11 @@ class FindUB:
             # Print and Store offsets
             offsets_val = objective.gonio_min + gonio_norm * (objective.gonio_max - objective.gonio_min)
             print("--- Refined Goniometer Offsets (deg) ---")
-            print(offsets_val[0])
+            if goniometer_names is not None:
+                for name, val in zip(goniometer_names, offsets_val[0]):
+                    print(f"{name}: {val:.4f}")
+            else:
+                print(offsets_val[0])
             self.goniometer_offsets = offsets_val[0]
             
             # Transform vectors to Crystal Frame for indexing report
