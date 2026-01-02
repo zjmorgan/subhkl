@@ -13,7 +13,7 @@ from subhkl.export import (
 )
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
-from subhkl.config.goniometer import get_rotation_data_from_nexus
+from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
 
 app = typer.Typer()
 
@@ -112,6 +112,10 @@ def index(
 
         # Write refined R
         f["goniometer/R"] = refined_R
+        
+        # Write refined goniometer offsets if available
+        if opt.goniometer_offsets is not None:
+            f["optimization/goniometer_offsets"] = opt.goniometer_offsets
 
         # Write lattice parameters (from opt, which may be refined)
         f["sample/a"] = opt.a
@@ -486,26 +490,36 @@ def peak_predictor(
         wavelength = np.array(f_indexed["instrument/wavelength"])
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
-        # Check if optimized goniometer exists
-        if "goniometer/R" in f_indexed:
-            R_array = np.array(f_indexed["goniometer/R"])
-            # Assuming all R are the same for the dataset (single crystal snapshot)
-            # Taking the first one. If R varies per peak (e.g. scan), this needs handling.
-            # But here we are predicting for a whole image/scan.
-            # Peaks class usually calculates one R. 
-            # If we refined it, we should use the refined one.
-            R = R_array[0]
-        else:
-             R = None # Will calculate from instrument
+        
+        # Check for refined offsets
+        refined_offsets = None
+        if "optimization/goniometer_offsets" in f_indexed:
+            refined_offsets = np.array(f_indexed["optimization/goniometer_offsets"])
 
     peaks = Peaks(filename,
                   instrument,
                   wavelength_min=wavelength[0],
                   wavelength_max=wavelength[1])
 
-    if R is not None:
-        # Override the calculated R with the refined one
-        peaks.goniometer_rotation = R
+    if refined_offsets is not None:
+        # Re-calculate R for THIS specific run using refined offsets + raw angles
+        # peaks.goniometer_axes_raw and angles_raw should be available from init if config is correct
+        # But we need to make sure Peaks loaded them.
+        # Peaks init loads them if they exist in file or we pass them.
+        
+        # If we have refined offsets, we assume we want to apply them to the raw angles of this run.
+        if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
+            # Angles raw is list of floats (one per axis)
+            # Offsets is array of floats (one per axis)
+            new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
+            new_R = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
+            peaks.goniometer_rotation = new_R
+            print("Applied refined goniometer offsets to peak prediction.")
+        else:
+            print("Warning: Refined offsets found but raw goniometer data not available in Peaks. Using default R.")
+    
+    # If no refined offsets, we use the default R calculated by Peaks class (from raw file).
+    # We DO NOT copy "goniometer/R" from indexed file because that might be from a different run.
     
     R_used = peaks.goniometer_rotation
     

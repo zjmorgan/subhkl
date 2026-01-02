@@ -589,6 +589,7 @@ class FindUB:
         """
         self.goniometer_axes = None
         self.goniometer_angles = None
+        self.goniometer_offsets = None # To store refined offsets
 
         if filename is not None:
             self.load_peaks(filename)
@@ -943,10 +944,11 @@ class FindUB:
             # Update self.R
             self.R = np.array(R_refined)
             
-            # Print offsets
+            # Print and Store offsets
             offsets_val = objective.gonio_min + gonio_norm * (objective.gonio_max - objective.gonio_min)
             print("--- Refined Goniometer Offsets (deg) ---")
             print(offsets_val[0])
+            self.goniometer_offsets = offsets_val[0]
             
             # Transform vectors to Crystal Frame for indexing report
             # R is (M, 3, 3), kf_ki_vec (Lab) is (3, M)
