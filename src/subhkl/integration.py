@@ -183,6 +183,9 @@ class Peaks:
 
         ims = {}
 
+        self.min_intensity = np.inf
+        self.max_intensity = -np.inf
+
         with File(filename, "r") as f:
             keys = []
             banks = []
@@ -205,6 +208,9 @@ class Peaks:
                     bc = np.bincount(array - offset, minlength=m * n)
 
                     ims[bank] = bc.reshape(m, n)
+
+                    self.min_intensity = min(self.min_intensity, 1 + np.min(bc)) # regularize events on logarithmic scale
+                    self.max_intensity = max(self.max_intensity, np.max(bc))
 
         return ims
 
@@ -779,7 +785,8 @@ class Peaks:
 
             if visualize:
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im.set_clim(self.min_intensity, self.max_intensity)
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
             else:
@@ -800,6 +807,7 @@ class Peaks:
 
             if visualize:
                 plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im.set_clim(self.min_intensity, self.max_intensity)
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                         print(f'SNR: {peak_in / peak_sigma}')
