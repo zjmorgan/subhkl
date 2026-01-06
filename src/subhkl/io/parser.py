@@ -4,116 +4,11 @@ import numpy as np
 import typer
 import uuid
 
-from subhkl import normalization
-from subhkl.export import (
-    FinderConcatenateMerger,
-    IndexerConcatenateMerger,
-    MTZExporter
-)
+from subhkl.export import FinderConcatenateMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 
 app = typer.Typer()
-
-
-def index(
-    hdf5_peaks_filename: str,
-    output_peaks_filename: str,
-    strategy_name: str,
-    population_size: int,
-    gens: int,
-    n_runs: int,
-    seed: int,
-    softness: float,
-    bootstrap_filename: str = None,
-):
-    """
-    Index the given peak file and save it using the evosax optimizer.
-
-    Params:
-        hdf5_peaks_filename: Path to the input hdf5 file to index
-        output_peaks_filename: Path to write the output hdf file.
-        strategy_name: Optimization strategy ('DE' or 'PSO').
-        population_size: Population size for each generation.
-        gens: Number of generations to run.
-        n_runs: Number of optimization runs with different seeds.
-        seed: Base seed for the first optimization run.
-    """
-
-    # Index the peaks
-    opt = FindUB(hdf5_peaks_filename)
-
-    print(f"Starting evosax optimization with strategy: {strategy_name}")
-    print(f"Running {n_runs} run(s)...")
-    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
-
-    # Load bootstrap params if file is provided
-    init_params = None
-    if bootstrap_filename:
-        print(f"Bootstrapping from solution in: {bootstrap_filename}")
-        with h5py.File(bootstrap_filename, "r") as f:
-            if "optimization/best_params" in f:
-                init_params = f["optimization/best_params"][()]
-            else:
-                print("WARNING: No optimization params found in bootstrap file. Starting random.")
-
-    # Call the new evosax minimizer
-    num, hkl, lamda, U = opt.minimize_evosax(
-        strategy_name=strategy_name,
-        population_size=population_size,
-        num_generations=gens,
-        n_runs=n_runs,
-        seed=seed,
-        softness=softness,
-        init_params=init_params,
-    )
-
-    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
-
-    h = [i[0] for i in hkl]
-    k = [i[1] for i in hkl]
-    l_list = [i[2] for i in hkl]
-
-    # Get UB to save to output
-    B = opt.reciprocal_lattice_B()
-
-    # Copy data from temporary HDF5
-    copy_keys = [
-        "sample/a",
-        "sample/b",
-        "sample/c",
-        "sample/alpha",
-        "sample/beta",
-        "sample/gamma",
-        "sample/centering",
-        "instrument/wavelength",
-        "goniometer/R",
-        "peaks/intensity",
-        "peaks/sigma",
-        "peaks/two_theta",
-        "peaks/azimuthal",
-    ]
-
-    copied_data = {}
-
-    with h5py.File(hdf5_peaks_filename) as f:
-        for key in copy_keys:
-            copied_data[key] = np.array(f[key])
-
-    # Save output to HDF5 file
-    print(f"Saving indexed peaks to {output_peaks_filename}...")
-    with h5py.File(output_peaks_filename, "w") as f:
-        for key, value in copied_data.items():
-            f[key] = value
-
-        f["sample/B"] = B
-        f["sample/U"] = U
-        f["peaks/h"] = h
-        f["peaks/k"] = k
-        f["peaks/l"] = l_list
-        f["peaks/lambda"] = lamda
-        f["optimization/best_params"] = opt.x
-    print("Done.")
 
 
 @app.command()
@@ -245,6 +140,7 @@ def finder_merger(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
 
 @app.command()
 def indexer(
@@ -386,6 +282,106 @@ def indexer_using_file(
         n_runs=n_runs,
         seed=seed
     )
+
+
+def index(
+    hdf5_peaks_filename: str,
+    output_peaks_filename: str,
+    strategy_name: str,
+    population_size: int,
+    gens: int,
+    n_runs: int,
+    seed: int,
+    softness: float,
+    bootstrap_filename: str = None,
+):
+    """
+    Index the given peak file and save it using the evosax optimizer.
+
+    Params:
+        hdf5_peaks_filename: Path to the input hdf5 file to index
+        output_peaks_filename: Path to write the output hdf file.
+        strategy_name: Optimization strategy ('DE' or 'PSO').
+        population_size: Population size for each generation.
+        gens: Number of generations to run.
+        n_runs: Number of optimization runs with different seeds.
+        seed: Base seed for the first optimization run.
+    """
+
+    # Index the peaks
+    opt = FindUB(hdf5_peaks_filename)
+
+    print(f"Starting evosax optimization with strategy: {strategy_name}")
+    print(f"Running {n_runs} run(s)...")
+    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+
+    # Load bootstrap params if file is provided
+    init_params = None
+    if bootstrap_filename:
+        print(f"Bootstrapping from solution in: {bootstrap_filename}")
+        with h5py.File(bootstrap_filename, "r") as f:
+            if "optimization/best_params" in f:
+                init_params = f["optimization/best_params"][()]
+            else:
+                print("WARNING: No optimization params found in bootstrap file. Starting random.")
+
+    # Call the new evosax minimizer
+    num, hkl, lamda, U = opt.minimize_evosax(
+        strategy_name=strategy_name,
+        population_size=population_size,
+        num_generations=gens,
+        n_runs=n_runs,
+        seed=seed,
+        softness=softness,
+        init_params=init_params,
+    )
+
+    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
+
+    h = [i[0] for i in hkl]
+    k = [i[1] for i in hkl]
+    l_list = [i[2] for i in hkl]
+
+    # Get UB to save to output
+    B = opt.reciprocal_lattice_B()
+
+    # Copy data from temporary HDF5
+    copy_keys = [
+        "sample/a",
+        "sample/b",
+        "sample/c",
+        "sample/alpha",
+        "sample/beta",
+        "sample/gamma",
+        "sample/centering",
+        "instrument/wavelength",
+        "goniometer/R",
+        "peaks/intensity",
+        "peaks/sigma",
+        "peaks/two_theta",
+        "peaks/azimuthal",
+    ]
+
+    copied_data = {}
+
+    with h5py.File(hdf5_peaks_filename) as f:
+        for key in copy_keys:
+            copied_data[key] = np.array(f[key])
+
+    # Save output to HDF5 file
+    print(f"Saving indexed peaks to {output_peaks_filename}...")
+    with h5py.File(output_peaks_filename, "w") as f:
+        for key, value in copied_data.items():
+            f[key] = value
+
+        f["sample/B"] = B
+        f["sample/U"] = U
+        f["peaks/h"] = h
+        f["peaks/k"] = k
+        f["peaks/l"] = l_list
+        f["peaks/lambda"] = lamda
+        f["optimization/best_params"] = opt.x
+    print("Done.")
 
 
 @app.command()
@@ -536,46 +532,6 @@ def integrator(
         with h5py.File(integration_peaks_filename) as f_in:
             for key in copy_keys:
                 f_in.copy(f_in[key], f, key)
-
-
-@app.command()
-def normalizer(
-    hdf5_peaks_filename: str, output_peaks_filename: str
-):
-    # Open the input filename
-    with h5py.File(hdf5_peaks_filename, "r") as f:
-        theta = np.array(f["peaks/two_theta"]) / 2.0
-        lamda = np.array(f["peaks/lambda"])
-        detector_efficiency = normalization.detector_efficiency(lamda)
-        absorption = normalization.absorption(lamda)
-        extinction = normalization.extinction(lamda)
-        lorentz = normalization.lorentz_correction(lamda, theta)
-        full = detector_efficiency * extinction * absorption * lorentz
-
-        # Save the result
-        with h5py.File(output_peaks_filename, "w") as o:
-            for key in f.keys():
-                f.copy(f[key], o, key)
-
-            o["peaks/intensity"] = f["peaks/intensity"] / full
-            o["peaks/sigma"] = f["peaks/sigma"] / full
-
-
-@app.command()
-def merger(
-    indexed_h5_txt_list_filename: str,
-    output_filename: str,
-    method: str = "concatenate"
-):
-    with open(indexed_h5_txt_list_filename) as f:
-        indexed_h5_files = f.read().splitlines()
-
-    if method.lower() == "concatenate":
-        merging_algorithm = IndexerConcatenateMerger(indexed_h5_files)
-    else:
-        raise ValueError("Invalid merging method")
-
-    merging_algorithm.merge(output_filename)
 
 
 @app.command()

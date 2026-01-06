@@ -551,7 +551,8 @@ class Peaks:
         hkl = [h.flatten(), k.flatten(), l.flatten()]
         h, k, l = hkl
 
-        d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+        with np.errstate(divide="ignore"):
+            d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
 
         mask = (d > d_min) & (d < np.inf)
 
@@ -764,9 +765,9 @@ class Peaks:
 
         """
 
-        quantity_I = A * 2 * np.pi * sigma1 * sigma2 - B
+        intensity = A * 2 * np.pi * sigma1 * sigma2 - B
 
-        dI = np.array(
+        intensity_error = np.array(
             [
                 2 * np.pi * sigma1 * sigma2,
                 -1,
@@ -775,9 +776,9 @@ class Peaks:
             ]
         )
 
-        sigma = np.sqrt(dI @ cov_matrix @ dI.T)
+        sigma = np.sqrt(intensity_error @ cov_matrix @ intensity_error.T)
 
-        return quantity_I, sigma
+        return intensity, sigma
 
     def fit(self, xp, yp, im, roi_pixels=50):
         """
@@ -874,9 +875,9 @@ class Peaks:
 
                     cov = np.linalg.inv(inv_cov)[inds][:, inds]
 
-                    quantity_I, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
+                    intensity, sig = self.intensity(A, B, sigma_1, sigma_2, cov)
 
-                    if quantity_I < 10 * sig:
+                    if intensity < 10 * sig:
                         mu_1, mu_2 = x_val, y_val
                         sigma_1, sigma_2, theta = 0.0, 0.0, 0.0
 
@@ -953,14 +954,39 @@ class Peaks:
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
 
-            try:
-                # Find candidate peaks
-                if finder_algorithm == "peak_local_max":
-                    i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
-                elif finder_algorithm == "thresholding":
-                    i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
-                else:
-                    raise ValueError("Invalid finder algorithm")
+            # Find candidate peaks
+            if finder_algorithm == "peak_local_max":
+                i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
+            elif finder_algorithm == "thresholding":
+                i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
+            else:
+                raise ValueError("Invalid finder algorithm")
+            if show_progress:
+                print(f"Found {len(i)} candidate peaks")
+
+            if visualize:
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+                axes[0].scatter(j, i, marker="1", c="blue")
+                axes[0].set_title("Candidate peaks")
+            else:
+                fig, axes = None, None
+
+            centers = np.stack([i, j], axis=-1)
+
+            # Integrate peaks
+            if visualize:
+                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+            else:
+                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+                hulls = None
+
+            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
+            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            keep = [peak_in is not None for peak_in in bank_intensity]
+
+            if visualize:
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 if show_progress:
                     print(f"Found {len(i)} candidate peaks")
 
@@ -1068,13 +1094,13 @@ class Peaks:
                 import matplotlib.pyplot as plt
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[0].set_title("Predicted peaks")
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
             	
-                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
                 cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))

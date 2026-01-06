@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+*.egg-info
 build/
 develop-eggs/
 dist/
@@ -161,3 +162,4 @@ cython_debug/
 #
 
 .pdm-python
+*.h5

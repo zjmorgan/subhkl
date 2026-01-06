@@ -76,41 +76,6 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
         super().__init__(h5_files, [], merge_keys)
 
 
-class IndexerConcatenateMerger(BaseConcatenateMerger):
-    def __init__(self, indexed_h5_files):
-        """
-        Parameters
-        ----------
-        indexed_h5_files : list[str]
-            List of .h5 files from indexer to merge
-        """
-        copy_keys = [
-            "sample/a",
-            "sample/b",
-            "sample/c",
-            "sample/alpha",
-            "sample/beta",
-            "sample/gamma",
-            "sample/centering",
-            "instrument/wavelength",
-        ]
-
-        merge_keys = [
-            "peaks/intensity",
-            "peaks/sigma",
-            "peaks/structure_factors",
-            "peaks/structure_factors_sigma",
-            "peaks/h",
-            "peaks/k",
-            "peaks/l",
-            "peaks/lambda",
-            "peaks/two_theta",
-            "peaks/azimuthal",
-        ]
-
-        super().__init__(indexed_h5_files, copy_keys, merge_keys)
-
-
 class MTZExporter:
     def __init__(self, peaks_file, space_group="P 1"):
         with h5py.File(peaks_file) as f:
