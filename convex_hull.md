@@ -67,11 +67,11 @@ Following is a description of the convex hull peak fitting algorithm, including 
 ## Gaussian Fit Integration
 
 Assume the measured intensity image $I(x,y)$ is a Poisson process with rate function
-$$
-\lambda(x, y) = B + I_0\exp\left[-\frac{1}{2(1-\rho^2)}\left(\frac{(x-x^*)^2}{\sigma_x^2} - 2\frac{\rho(x-x^*)(y-y^*)}{\sigma_x\sigma_y} + \frac{(y-y^*)^2}{\sigma_y^2}\right)\right].
-$$
-Here, $B$ is the background noise average intensity per pixel, and $I_0$ is the maximum peak intensity per pixel (not equal to the integrated intensity), and $\rho, \sigma_x, \sigma_y, x^*, y^*$ are shape parameters describing the shape of the peak. We want to know the average integrated intensity of the peak minus the background noise. Assuming the noise $N(x,y)$ is also a Poisson process with constant rate function, the peak intensity $I(x,y) - N(x,y)$ is a Poisson process with rate $\lambda(x,y) - B$, so
-$$
+```math
+\lambda(x, y) = B + I_0\exp\left[-\frac{1}{2(1-\rho^2)}\left(\frac{(x-x')^2}{\sigma_x^2} - 2\frac{\rho(x-x')(y-y')}{\sigma_x\sigma_y} + \frac{(y-y')^2}{\sigma_y^2}\right)\right].
+```
+Here, $B$ is the background noise average intensity per pixel, and $I_0$ is the maximum peak intensity per pixel (not equal to the integrated intensity), and $\rho, \sigma_x, \sigma_y, x', y'$ are shape parameters describing the shape of the peak. We want to know the average integrated intensity of the peak minus the background noise. Assuming the noise $N(x,y)$ is also a Poisson process with constant rate function, the peak intensity $I(x,y) - N(x,y)$ is a Poisson process with rate $\lambda(x,y) - B$, so
+```math
 I_\text{final} = \mathbb{E}\left[\int (I(x,y) - N(x,y))\;\text{d}x\;\text{d}y\right] = \int (\lambda(x,y) - B)\;\text{d}x\;\text{d}y = 2\pi I_0\sigma_x\sigma_y\sqrt{1-\rho^2}.
-$$
+```
 Hence, we can calculate the final intensity $I_\text{final}$ by fitting the shape parameters and $B$ and $I_0$ using maximum likelihood estimation. The final uncertainty in the integrated intensity can likewise be estimated using these fitted parameters.
