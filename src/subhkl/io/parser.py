@@ -19,6 +19,7 @@ def finder(
     finder_algorithm: str = "peak_local_max",
     show_progress: bool = False,
     create_visualizations: bool = False,
+    show_steps: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -67,7 +68,7 @@ def finder(
             "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
             "blur_kernel_sigma": thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-            #"show_steps": True,
+            "show_steps": show_steps,
             "show_scale": "log"
         })
     else:
