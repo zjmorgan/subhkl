@@ -1033,6 +1033,7 @@ class Peaks:
         self,
         peak_dict,
         integration_params,
+        integration_method="free_fit",
         create_visualizations=False,
         show_progress=False,
         file_prefix=None
@@ -1050,7 +1051,13 @@ class Peaks:
             centers = np.stack([bank_i, bank_j], axis=-1)
             bank_tt, bank_az = self.detector_trajectories(bank, bank_i, bank_j)
 
-            int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+            int_result, hulls = integrator.integrate_peaks(
+                bank,
+                self.ims[bank],
+                centers,
+                integration_method=integration_method,
+                return_hulls=True
+            )
 
             bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
             bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
