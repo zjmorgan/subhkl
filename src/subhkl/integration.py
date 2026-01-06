@@ -183,7 +183,8 @@ class Peaks:
 
                     bc = np.bincount(array - offset, minlength=m * n)
 
-                    ims[bank] = bc.reshape(m, n)
+                    if np.sum(bc) > 0:
+                        ims[bank] = bc.reshape(m, n)
 
         return ims
 
@@ -549,7 +550,8 @@ class Peaks:
         hkl = [h.flatten(), k.flatten(), l.flatten()]
         h, k, l = hkl
 
-        d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+        with np.errstate(divide="ignore"):
+            d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
 
         mask = (d > d_min) & (d < np.inf)
 
@@ -963,7 +965,7 @@ class Peaks:
 
             if visualize:
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
             else:
@@ -983,7 +985,7 @@ class Peaks:
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
-                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                         print(f'SNR: {peak_in / peak_sigma}')
@@ -1067,13 +1069,13 @@ class Peaks:
                 import matplotlib.pyplot as plt
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[0].set_title("Predicted peaks")
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
             	
-                plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
                 cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
