@@ -718,12 +718,18 @@ class FindUB:
 
         # extract the proper rotations from the point group
         gops = gemmi.find_lattice_symmetry(uc, self.centering, max_obliq=3.0)
+
+        # gemmi stores rotation matrices as integers scaled by 24 to handle
+        # denominators like 2, 3, 4, 6 exactly.
         transforms = [ np.array(g.rot) // 24 for g in gops.sym_ops ]
+
+        # Filter for determinant approx +1
+        transforms = [M for M in transforms if np.isclose(np.linalg.det(M), 1.0)]
 
         # select a rotation that maximes the trace of UB
         cost, T = -np.inf, np.eye(3)
         for M in transforms:
-            UBp = U_mat @ B_mat @ np.linalg.inv(M)
+            UBp = U_mat @ B_mat @ np.linalg.inv(M) @ np.linalg.inv(B_mat)
             trace = np.trace(UBp)
             if trace > cost:
                 cost = trace
