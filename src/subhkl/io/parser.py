@@ -120,6 +120,7 @@ def index(
         "peaks/sigma",
         "peaks/two_theta",
         "peaks/azimuthal",
+        "peaks/radius", # Added: copy radius to output
         "goniometer/axes", 
         "goniometer/angles",
         "goniometer/names"
@@ -257,6 +258,7 @@ def finder(
         wavelength_maxes=detector_peaks.wavelength_maxes,
         intensity=detector_peaks.intensity,
         sigma=detector_peaks.sigma,
+        radii=detector_peaks.radii, # Added radii
         bank=detector_peaks.bank,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
@@ -371,6 +373,12 @@ def indexer(
         sigma = np.array(f["peaks/sigma"])
         rotations = np.array(f["goniometer/R"])
         
+        # Added: Load radii
+        if "peaks/radius" in f:
+            radii = np.array(f["peaks/radius"])
+        else:
+            radii = None
+        
         # Load goniometer raw data if available
         gonio_axes = None
         gonio_angles = None
@@ -409,6 +417,10 @@ def indexer(
         f["peaks/azimuthal"] = az_phi
         f["peaks/intensity"] = intensity
         f["peaks/sigma"] = sigma
+        
+        # Added: write radii
+        if radii is not None:
+            f["peaks/radius"] = radii
         
         if gonio_axes is not None:
             f["goniometer/axes"] = gonio_axes

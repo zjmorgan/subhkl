@@ -35,6 +35,7 @@ DetectorPeaks = namedtuple(
         "wavelength_maxes",
         "intensity",
         "sigma",
+        "radii",  # Added field for peak angular radius
         "bank",
         "gonio_axes",
         "gonio_angles",
@@ -183,9 +184,6 @@ class Peaks:
 
         ims = {}
 
-        self.min_intensity = np.inf
-        self.max_intensity = -np.inf
-
         with File(filename, "r") as f:
             keys = []
             banks = []
@@ -208,9 +206,6 @@ class Peaks:
                     bc = np.bincount(array - offset, minlength=m * n)
 
                     ims[bank] = bc.reshape(m, n)
-
-                    self.min_intensity = min(self.min_intensity, 1 + np.min(bc)) # regularize events on logarithmic scale
-                    self.max_intensity = max(self.max_intensity, np.max(bc))
 
         return ims
 
@@ -761,6 +756,7 @@ class Peaks:
         lamda_max: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
+        radii: list[float] = [] # Added list for radii
         banks: list[int] = []
         
         # New: Goniometer raw data
@@ -785,8 +781,7 @@ class Peaks:
 
             if visualize:
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                plt_im = axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
-                plt_im.set_clim(self.min_intensity, self.max_intensity)
+                axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
             else:
@@ -795,11 +790,8 @@ class Peaks:
             centers = np.stack([i, j], axis=-1)
 
             # Integrate peaks
-            if visualize:
-                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
-            else:
-                int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
-                hulls = None
+            # ALWAYS return hulls to calculate slack/radii
+            int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
 
             bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
             bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
@@ -807,7 +799,6 @@ class Peaks:
 
             if visualize:
                 plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
-                plt_im.set_clim(self.min_intensity, self.max_intensity)
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                         print(f'SNR: {peak_in / peak_sigma}')
@@ -837,7 +828,53 @@ class Peaks:
                 tt, az = det.pixel_to_angles(i, j)
                 
                 num_new_peaks = len(tt)
+                
+                # --- Calculate peak angular radii ---
+                kept_indices = np.where(keep)[0]
+                bank_radii = []
 
+                # Convert all kept centers to unit vectors
+                # Reuse the already computed tt, az to get vectors
+                tt_rad, az_rad = np.deg2rad(tt), np.deg2rad(az)
+
+                # Unit vectors for centers (N, 3)
+                v_centers = np.stack([
+                    np.sin(tt_rad) * np.cos(az_rad),
+                    np.sin(tt_rad) * np.sin(az_rad),
+                    np.cos(tt_rad)
+                ], axis=1)
+
+                for k, idx in enumerate(kept_indices):
+                    # Original index in 'centers' and 'hulls' is idx
+                    # Current center vector is v_centers[k]
+                    _, hull, _, _ = hulls[idx]
+
+                    if hull is None:
+                        bank_radii.append(0.0)
+                        continue
+
+                    # Hull points are (row, col) = (i, j)
+                    verts = hull.points[hull.vertices]
+                    v_i, v_j = verts[:, 0], verts[:, 1]
+
+                    # Convert vertices to unit vectors
+                    # Use the same det logic as centers
+                    v_tt, v_az = det.pixel_to_angles(v_i, v_j)
+                    v_tt_rad, v_az_rad = np.deg2rad(v_tt), np.deg2rad(v_az)
+                    
+                    # Vertices unit vectors
+                    v_vecs = np.stack([
+                        np.sin(v_tt_rad) * np.cos(v_az_rad),
+                        np.sin(v_tt_rad) * np.sin(v_az_rad),
+                        np.cos(v_tt_rad)
+                    ], axis=1)
+
+                    # dot product with center vector
+                    dots = np.clip(v_vecs @ v_centers[k], -1.0, 1.0)
+                    angles = np.arccos(dots) # radians
+
+                    bank_radii.append(np.max(angles))
+                
                 # Add peak data to output
                 two_theta += tt.tolist()
                 az_phi += az.tolist()
@@ -846,6 +883,7 @@ class Peaks:
                 lamda_max += [self.wavelength_max] * num_new_peaks
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
+                radii += bank_radii
                 banks += [bank] * sum(keep)
                 
                 if self.goniometer_angles_raw is not None:
@@ -857,7 +895,7 @@ class Peaks:
                 print("Bank had 0 peaks")
                 
         # Return axes (global) and angles (per peak)
-        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
     def integrate(
         self,
@@ -984,6 +1022,7 @@ class Peaks:
         wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float],
+        radii: list[float], # Added radii argument
         bank: list[int],
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
@@ -1010,6 +1049,8 @@ class Peaks:
             Integrated intensity of each peak
         sigma: array, float
             Uncertainty in integrated intensity of each peak
+        radii: array, float
+            Angular radius of each peak
         bank: array, int
             Detector id for each peak
         gonio_axes : array or list
@@ -1028,6 +1069,7 @@ class Peaks:
             f["peaks/azimuthal"] = az_phi
             f["peaks/intensity"] = intensity
             f["peaks/sigma"] = sigma
+            f["peaks/radius"] = radii # Write radii
             f["bank"] = bank
             
             if gonio_axes is not None:
