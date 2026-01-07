@@ -172,6 +172,10 @@ class VectorizedObjectiveJAX:
         """
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
+
+        # Pre-calculate k_sq from the invariant input vector (q_lab equivalent)
+        self.k_sq_invariant = jnp.sum(self.kf_ki_dir**2, axis=0) # Shape (M,)
+
         self.softness = softness
         self.centering = centering
         self.angle_cdf = jnp.array(angle_cdf)
@@ -468,8 +472,7 @@ class VectorizedObjectiveJAX:
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start) # (S, M)
 
-        # Pre-compute k_sq for analytic refinement (constant across scan)
-        k_sq = jnp.sum(kf_ki_sample**2, axis=1) # (S, M)
+        k_sq = self.k_sq_invariant[None, :]
 
         # --- Scan Body Function ---
         # Carry state: (min_dist_sq, best_lambda, best_hkl)
