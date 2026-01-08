@@ -947,16 +947,35 @@ class FindUB:
             else:
                 # Handle restart logic
                 start_sol = jnp.array(init_params)
-                
-                # If loading from a file with a DIFFERENT dimension (e.g. older file), warn and reset
+
+                # MODIFIED: Allow extending the solution if dimensions increased
                 if start_sol.shape[0] != num_dims:
-                    print(f"Warning: init_params shape {start_sol.shape} mismatch with required {num_dims}. Restarting random.")
-                    if strategy_type == 'population_based':
-                         population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
-                         fitness_init = objective(population_init)
-                         state = strategy.init(rng_init, population_init, fitness_init, params)
+                    if start_sol.shape[0] < num_dims:
+                        print(f"Bootstrapping: extending solution from {start_sol.shape[0]} to {num_dims} dims.")
+                        # Calculate how many new parameters we need (e.g. goniometer offsets)
+                        n_new = num_dims - start_sol.shape[0]
+                        # Append zeros (assuming 0.5 is 'neutral')
+                        padding = jnp.full((n_new,), 0.5)
+
+                        start_sol = jnp.concatenate([start_sol, padding])
+
+                        if strategy_type == 'population_based':
+                            # Create a population around the padded solution
+                            noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                            population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                            fitness_init = objective(population_init)
+                            state = strategy.init(rng_init, population_init, fitness_init, params)
+                        elif strategy_type == 'distribution_based':
+                            # Initialize distribution at the padded solution
+                            state = strategy.init(rng_init, start_sol, params)
                     else:
-                         state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
+                        print(f"Warning: init_params shape {start_sol.shape} mismatch with required {num_dims}. Restarting random.")
+                        if strategy_type == 'population_based':
+                             population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                             fitness_init = objective(population_init)
+                             state = strategy.init(rng_init, population_init, fitness_init, params)
+                        else:
+                             state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
                 else:
                     if strategy_type == 'population_based':
                         noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
