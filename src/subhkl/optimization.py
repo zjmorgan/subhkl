@@ -238,7 +238,7 @@ class VectorizedObjectiveJAX:
         self.wl_min_val = wavelength[0]
         self.wl_max_val = wavelength[1]
 
-        # Scan parameters for indexer_dynamic_jax
+        # Scan parameters for indexer_dynamic_soft_jax
         self.num_candidates = 64
 
         # Handle weights: if None, default to 1.0 for everyone
@@ -448,86 +448,105 @@ class VectorizedObjectiveJAX:
 
         return U
 
-    def indexer_dynamic_jax(self, UB, kf_ki_sample, softness=0.001):
+    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, softness=0.1):
         """
-        Indexing with Dynamic Miller Sampling using lax.scan.
-        
-        Iterates over integer candidates sequentially to avoid exploding memory usage.
+        Smoothed indexing objective using a Sum-of-Gaussians approach.
 
-        UB: (S, 3, 3)
-        kf_ki_sample: (S, 3, M) - Scattering vectors in Sample Frame
+        Instead of finding the single nearest integer (hard indexing), this assumes
+        the lattice is a probability density field. It sums the probability of
+        the ray belonging to *any* valid integer hkl.
+
+        Returns
+        -------
+        nll : array (S,)
+            Negative Log Likelihood (the error to minimize).
+        total_probs : array (S, M)
+            Total probability density for each peak.
+        best_hkl : array (S, M, 3)
+            The HKL integer candidate that contributed the highest probability.
+        best_lambda : array (S, M)
+            The wavelength of the best candidate.
         """
         UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
 
         # 1. Project ray into HKL space
-        # v = UB_inv @ k_sample. 
+        # v = UB_inv @ k_sample.
         # v shape: (S, 3, M)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
 
-        # 2. Determine Dominant Axis & Integer Start
+        # 2. Determine Scan Range
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1) # (S, M)
 
-        # We start searching from the integer corresponding to max wavelength
+        # Start searching from the integer corresponding to max wavelength
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start) # (S, M)
 
         k_sq = self.k_sq_invariant[None, :]
+        k_norm = jnp.sqrt(k_sq)
 
         # --- Scan Body Function ---
-        # Carry state: (min_dist_sq, best_lambda, best_hkl)
-        # All shapes (S, M) or (S, 3, M)
+        # Carry state: (accum_probs, max_prob_val, best_hkl, best_lambda)
+        # accum_probs: Sum of probabilities (for the smooth landscape)
+        # max_prob_val: The highest probability seen so far (for retrieving the best solution)
 
         initial_carry = (
-            jnp.full(max_v_val.shape, jnp.inf), # min_dist_sq
-            jnp.zeros(max_v_val.shape),         # best_lambda
-            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32) # best_hkl
+            jnp.zeros(max_v_val.shape),         # accum_probs
+            jnp.zeros(max_v_val.shape),         # max_prob_val
+            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), # best_hkl
+            jnp.zeros(max_v_val.shape)          # best_lambda
         )
 
         def scan_body(carry, i):
-            curr_min_dist, curr_best_lamb, curr_best_hkl = carry
+            curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
 
             # Current Integer Candidate: n = start_int + i
             n = start_int + i
-
-            # Avoid division by zero
             n_safe = jnp.where(n == 0, 1e-9, n)
 
+            # --- A. Predict Parameters ---
             # Initial Lambda Guess
             lamda_cand = max_v_val / n_safe
 
-            # Validity Mask (range check)
-            valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
-
             # Map to HKL (using candidate lambda)
-            # hkl = v / lambda
+            # hkl_float = v / lambda
             hkl_float = v / lamda_cand[:, None, :] # (S, 3, M)
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
 
             # Predict Q back in Sample Frame: Q = UB @ hkl
             q_int = jnp.einsum("sij,sjm->sim", UB, hkl_int)
 
-            # Analytic Refinement of Lambda
-            # k . Q
+            # Analytic Refinement of Lambda: lambda_opt = k^2 / (k . Q)
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1) # (S, M)
-
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            lambda_opt = k_sq / safe_dot 
+            lambda_opt = k_sq / safe_dot
 
             # Clamp to range
             lambda_clamped = jnp.clip(lambda_opt, self.wl_min_val, self.wl_max_val)
 
-            # Calculate Residuals in Q-space
+            # --- B. Calculate Residuals & Probability ---
             # Q_obs = k / lambda
             q_obs = kf_ki_sample / lambda_clamped[:, None, :]
             diff_vec = q_obs - q_int
             dist_sq = jnp.sum(diff_vec**2, axis=1) # (S, M)
 
-            # Apply Validity Masks
-            # 1. Lambda Range (dist -> inf if invalid)
-            dist_sq = jnp.where(valid_cand, dist_sq, jnp.inf)
+            # Calculate effective sigma (Base softness + Peak Radius expansion)
+            # Variable sigma prevents over-penalizing large peaks
+            safe_lamb = jnp.where(lambda_clamped == 0, 1.0, lambda_clamped)
+            radius_q = (k_norm / safe_lamb) * self.peak_radii[None, :]
+            effective_sigma = softness + radius_q
 
-            # 2. Symmetry / Centering
+            # Gaussian Probability
+            # P = exp( -dist^2 / 2sigma^2 )
+            prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
+
+            # --- C. Apply Masks ---
+
+            # 1. Wavelength Validity Mask
+            valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
+            prob = jnp.where(valid_cand, prob, 0.0)
+
+            # 2. Symmetry / Centering Mask
             h = hkl_int[:, 0, :]
             k = hkl_int[:, 1, :]
             l = hkl_int[:, 2, :]
@@ -542,39 +561,42 @@ class VectorizedObjectiveJAX:
             elif self.centering == "R_obv": valid_sym = (-h + k + l) % 3 == 0
             elif self.centering == "R_rev": valid_sym = (h - k + l) % 3 == 0
 
-            dist_sq = jnp.where(valid_sym, dist_sq, jnp.inf)
+            # Zero out probability if symmetry forbids it
+            prob = jnp.where(valid_sym, prob, 0.0)
 
-            # Update Best
-            update_mask = dist_sq < curr_min_dist
+            # --- D. Update State ---
 
-            new_min_dist = jnp.where(update_mask, dist_sq, curr_min_dist)
+            # Accumulate Total Probability (for smoothing)
+            new_sum = curr_sum + prob
+
+            # Track Best Candidate (for final reporting)
+            update_mask = prob > curr_max
+            new_max = jnp.where(update_mask, prob, curr_max)
+
+            # Broadcast mask for HKL (S, M) -> (S, 3, M)
+            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_clamped, curr_best_lamb)
 
-            # Update HKL (broadcast mask to 3 components)
-            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-
-            return (new_min_dist, new_best_lamb, new_best_hkl), None
+            return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
         # Execute Scan
         scan_indices = jnp.arange(self.num_candidates)
         final_carry, _ = jax.lax.scan(scan_body, initial_carry, scan_indices)
 
-        min_dist_sq, min_lamb, int_hkl = final_carry
+        accum_probs, max_probs, best_hkl, best_lamb = final_carry
 
         # --- Scoring ---
-        # Variable Sigma (Radius in Q space)
-        k_norm = jnp.sqrt(k_sq)
+        # Negative Log Likelihood
+        # Add epsilon to prevent log(0)
+        safe_probs = jnp.where(accum_probs < 1e-12, 1e-12, accum_probs)
 
-        # Avoid division by zero if min_lamb is 0 (unindexed peaks)
-        safe_min_lamb = jnp.where(min_lamb == 0, 1.0, min_lamb)
-        radius_q = (k_norm / safe_min_lamb) * self.peak_radii[None, :]
-        effective_sigma = softness + radius_q
+        # Weighted sum of log-probabilities
+        # We maximize Prob, so we minimize -Sum(w * log(P))
+        peak_scores = jnp.log(safe_probs)
+        nll = -jnp.sum(self.weights * peak_scores, axis=1)
 
-        peak_probs = self.weights[None, :] * jnp.exp(-min_dist_sq / (2 * effective_sigma**2))
-        total_score = jnp.sum(peak_probs, axis=1)
-
-        # HKL comes out as (S, 3, M). Transpose to (S, M, 3) for compatibility
-        return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
+        # Transpose HKL to (S, M, 3) to match original return shape
+        return nll, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
     # Use partial to make 'self' a static argument for JIT
     @partial(jax.jit, static_argnames='self')
@@ -637,7 +659,7 @@ class VectorizedObjectiveJAX:
             kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
 
         # Use the dynamic indexer instead of the soft one
-        error, _, _, _ = self.indexer_dynamic_jax(UB, kf_ki_vec, softness=self.softness)
+        error, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, softness=self.softness)
 
         return error
 
@@ -1070,6 +1092,6 @@ class FindUB:
         
         # Recalculate score with final U and B
         UB_final = U_new @ B
-        _, score, hkl, lamb = objective.indexer_dynamic_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+        _, score, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
 
         return score[0], hkl[0], lamb[0], U_new
