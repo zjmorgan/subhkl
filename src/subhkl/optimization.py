@@ -64,7 +64,7 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, centering, atol_len=0.05, at
     elif eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma):
         return 'Rhombohedral', 2 
 
-    # Monoclinic Check (standard setting: b unique axis -> alpha=gamma=90)
+    # Monoclinic Check 
     if is_90(alpha) and is_90(gamma) and not is_90(beta):
         return 'Monoclinic', 4 
     
@@ -101,24 +101,26 @@ class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
     """
-    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.02,
+    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
-                 peak_radii=None):
+                 peak_radii=None, loss_method='gaussian'):
         """
         Parameters
         ----------
         softness : float
-            Width of the Gaussian lattice points in Reciprocal Angstroms.
-            Default 0.02 is recommended.
+            Width of the lattice points in Reciprocal Angstroms.
+        loss_method : str
+            'gaussian' (Jacobi Theta) or 'cosine' (Anisotropic Von Mises).
         """
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
 
         # Pre-calculate k_sq from the invariant input vector (q_lab equivalent)
-        self.k_sq_invariant = jnp.sum(self.kf_ki_dir**2, axis=0) 
+        self.k_sq_invariant = jnp.sum(self.kf_ki_dir**2, axis=0) # Shape (M,)
 
         self.softness = softness
+        self.loss_method = loss_method
         self.centering = centering
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
@@ -278,17 +280,23 @@ class VectorizedObjectiveJAX:
         U = I + s[:, None, None] * K + t[:, None, None] * K2
         return U
 
-    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, softness=0.1):
+    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, softness=0.01):
         """
-        Soft Indexing: Sums Gaussian probabilities for each peak.
-        Returns 'Negative Effective Peaks' for minimization.
+        Jacobi-Theta (Sum of Gaussians) Indexing.
+        Sums Gaussian probabilities for each peak in Q-space.
+        
+        Returns
+        -------
+        score : array (S,)
+            Negative Weighted Soft Count.
+        accum_probs : array (S, M)
+            Total soft probability per peak.
         """
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         
-        # Start search
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
         k_sq = self.k_sq_invariant[None, :]
@@ -307,33 +315,110 @@ class VectorizedObjectiveJAX:
             n = start_int + i
             n_safe = jnp.where(n == 0, 1e-9, n)
 
-            # Candidate
             lamda_cand = max_v_val / n_safe
             hkl_float = v / lamda_cand[:, None, :]
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             
-            # Predict
             q_int = jnp.einsum("sij,sjm->sim", UB, hkl_int)
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
 
-            # Residual
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int)**2, axis=1)
             
-            # Variable Sigma
             safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
             effective_sigma = softness + (k_norm / safe_lamb) * self.peak_radii[None, :]
             
-            # Gaussian Probability
             prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
             
-            # Masks
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
             
-            # Symmetry Masks
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
+            valid_sym = jnp.full_like(h, True, dtype=bool)
+            if self.centering == "A": valid_sym = (k + l) % 2 == 0
+            elif self.centering == "B": valid_sym = (h + l) % 2 == 0
+            elif self.centering == "C": valid_sym = (h + k) % 2 == 0
+            elif self.centering == "I": valid_sym = (h + k + l) % 2 == 0
+            elif self.centering == "F": valid_sym = ((h + k)%2==0) & ((l+h)%2==0) & ((k+l)%2==0)
+            elif self.centering == "R": valid_sym = (-h + k + l) % 3 == 0 
+            
+            prob = jnp.where(valid_cand & valid_sym, prob, 0.0)
+
+            new_sum = curr_sum + prob
+            update_mask = prob > curr_max
+            new_max = jnp.where(update_mask, prob, curr_max)
+            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
+            new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
+
+            return (new_sum, new_max, new_best_hkl, new_best_lamb), None
+
+        final_carry, _ = jax.lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
+        accum_probs, _, best_hkl, best_lamb = final_carry
+
+        score = -jnp.sum(self.weights * accum_probs, axis=1)
+        return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
+
+    def indexer_dynamic_cosine_aniso_jax(self, UB, kf_ki_sample, softness=0.01):
+        """
+        Anisotropic Cosine (Von Mises) Indexing.
+        Scales the concentration (kappa) per axis based on unit cell dimensions.
+        """
+        UB_inv = jnp.linalg.inv(UB)
+        v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
+        abs_v = jnp.abs(v)
+        max_v_val = jnp.max(abs_v, axis=1)
+        
+        n_start = max_v_val / self.wl_max_val
+        start_int = jnp.ceil(n_start)
+        
+        # --- Anisotropy Calculation ---
+        # Calculate squared lengths of reciprocal lattice vectors (columns of UB)
+        # UB shape (S, 3, 3). Columns j are reciprocal vectors b_j.
+        # recip_len_sq shape (S, 3)
+        recip_len_sq = jnp.sum(UB**2, axis=1)
+        
+        # Calculate kappa per axis: kappa_j = |b_j|^2 / (softness^2 * 4*pi^2)
+        # This approximates Gaussian decay with width `softness` in Q-space
+        # for a deviation along axis j.
+        # Added epsilon to softness to avoid division by zero
+        kappa = recip_len_sq / ((softness + 1e-9)**2 * 4 * jnp.pi**2)
+        
+        # Reshape kappa for broadcasting: (S, 3, 1) to multiply against hkl components (S, 3, M)
+        kappa = kappa[:, :, None]
+
+        initial_carry = (
+            jnp.zeros(max_v_val.shape),         
+            jnp.full(max_v_val.shape, -1e9),    
+            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), 
+            jnp.zeros(max_v_val.shape)          
+        )
+
+        def scan_body(carry, i):
+            curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
+            n = start_int + i
+            n_safe = jnp.where(n == 0, 1e-9, n)
+
+            # Predict HKL and Lambda
+            ratio = n / max_v_val
+            hkl_float = v * ratio[:, None, :] # (S, 3, M)
+            lamda_cand = 1.0 / ratio
+
+            # --- Anisotropic Cosine Score ---
+            # Sum over axes j=0,1,2: kappa_j * (cos(2pi * h_j) - 1)
+            # This penalizes deviations from integer values proportional to axis sensitivity.
+            # term shape: (S, 3, M) -> sum -> (S, M)
+            cos_terms = kappa * (jnp.cos(2 * jnp.pi * hkl_float) - 1.0)
+            log_prob = jnp.sum(cos_terms, axis=1) 
+            
+            # Convert to probability space (0 to 1)
+            prob = jnp.exp(log_prob)
+
+            # Masks
+            valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
+            hkl_int = jnp.round(hkl_float).astype(jnp.int32)
+            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
+            
             valid_sym = jnp.full_like(h, True, dtype=bool)
             if self.centering == "A": valid_sym = (k + l) % 2 == 0
             elif self.centering == "B": valid_sym = (h + l) % 2 == 0
@@ -347,22 +432,18 @@ class VectorizedObjectiveJAX:
             # Update
             new_sum = curr_sum + prob
             
-            update_mask = prob > curr_max
-            new_max = jnp.where(update_mask, prob, curr_max)
+            score_tracked = jnp.where(valid_cand & valid_sym, log_prob, -1e9)
+            update_mask = score_tracked > curr_max
+            new_max = jnp.where(update_mask, score_tracked, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-            new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
+            new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
 
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
-        # Execute Scan
         final_carry, _ = jax.lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
-        
-        # Unpack Results
         accum_probs, _, best_hkl, best_lamb = final_carry
 
-        # Objective: Minimize "Negative Weighted Count"
         score = -jnp.sum(self.weights * accum_probs, axis=1)
-
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
     @partial(jax.jit, static_argnames='self')
@@ -393,8 +474,11 @@ class VectorizedObjectiveJAX:
         else:
             kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
 
-        # Call the soft indexer
-        score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, softness=self.softness)
+        # Dispatch based on loss method
+        if self.loss_method == 'cosine':
+            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, softness=self.softness)
+        else:
+            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, softness=self.softness)
 
         return score
 
@@ -480,7 +564,8 @@ class FindUB:
         num_generations: int = 100, 
         n_runs: int = 1, 
         seed: int = 0,
-        softness: float = 0.02,
+        softness: float = 0.01,
+        loss_method: str = 'gaussian',
         init_params: np.ndarray = None,
         refine_lattice: bool = False,
         lattice_bound_frac: float = 0.05,
@@ -522,16 +607,17 @@ class FindUB:
             print(f"Lattice Refinement Enabled.")
             print(f"Detected System: {lattice_system} ({num_lattice_params} free parameters).")
         
-        print(f"Objective initialized with softness: {softness}")
+        print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             self.centering,
             kf_ki_input,
-            np.array(self.wavelength), 
-            self._angle_cdf,           
-            self._angle_t,             
+            np.array(self.wavelength),
+            self._angle_cdf,
+            self._angle_t,
             weights=weights,
             softness=softness,
+            loss_method=loss_method,
             cell_params=cell_params_init,
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
@@ -592,10 +678,8 @@ class FindUB:
                     solution_init = jax.random.uniform(rng_pop, (num_dims, ))
                     state = strategy.init(rng_init, solution_init, params)
             else:
-                # Handle restart logic
                 start_sol = jnp.array(init_params)
 
-                # Allow extending the solution if dimensions increased
                 if start_sol.shape[0] != num_dims:
                     if start_sol.shape[0] < num_dims:
                         print(f"Bootstrapping: extending solution from {start_sol.shape[0]} to {num_dims} dims.")
@@ -634,7 +718,6 @@ class FindUB:
             for gen in pbar:
                 rng, state, metrics = es_step(rng, state, params)
                 if trange is not None:
-                    # Convert negative score back to positive count
                     current_peaks = -metrics['best_fitness']
                     pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best: {current_peaks:.2f} peaks")
 
@@ -692,8 +775,11 @@ class FindUB:
         U_new, _ = self.get_consistent_U_for_symmetry(U, B)
         UB_final = U_new @ B
         
-        # Calculate final results
-        score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+        # Calculate final results using the chosen loss method
+        if loss_method == 'cosine':
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+        else:
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
 
         num_peaks_soft = float(jnp.sum(accum_probs[0]))
         print(f"Final Solution indexed {num_peaks_soft:.2f} peaks (Effective Count).")

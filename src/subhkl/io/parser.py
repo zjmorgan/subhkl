@@ -32,8 +32,9 @@ def index(
     bootstrap_filename: str = None,
     refine_goniometer: bool = False,
     goniometer_bound_deg: float = 5.0,
-    nexus_filename: str = None, 
-    instrument_name: str = None
+    nexus_filename: str = None,
+    instrument_name: str = None,
+    loss_method: str = 'cosine',
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -95,7 +96,8 @@ def index(
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
         goniometer_bound_deg=goniometer_bound_deg,
-        goniometer_names=goniometer_names
+        goniometer_names=goniometer_names,
+        loss_method=loss_method,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -360,6 +362,11 @@ def indexer(
         help="Bound for goniometer angle refinement in degrees (default +/- 5)."
     ),
     bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
+    loss_method: str = typer.Option(
+        'cosine',
+        "--loss-method",
+        help="Loss to use for optimization. Possible values are 'gaussian' or 'cosine' (default)."
+    ),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -446,7 +453,8 @@ def indexer(
         refine_goniometer=refine_goniometer,
         goniometer_bound_deg=goniometer_bound_deg,
         nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name
+        instrument_name=instrument_name,
+        loss_method=loss_method,
     )
 
 
