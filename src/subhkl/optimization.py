@@ -507,7 +507,7 @@ class FindUB:
 
         return U @ B
 
-    def minimize_evosax(
+    def minimize(
         self,
         strategy_name: str,
         population_size: int = 1000,
@@ -703,10 +703,10 @@ class FindUB:
         # Store the best parameters (converting back to numpy)
         self.x = np.array(best_overall_member)
 
-        U = objective.orientation_U_jax(self.x[None])[0]
+        U = objective.orientation_U(self.x[None])[0]
         B = self.reciprocal_lattice_B()
         U_new, _ = self.get_consistent_U_for_symmetry(U, B)
-        _, score, hkl, lamb = objective.indexer_soft_jax(
+        _, score, hkl, lamb = objective.indexer_soft(
             (U_new @ B)[None], softness=softness
         )
 
