@@ -5,12 +5,7 @@ import typer
 import uuid
 import os
 
-from subhkl import normalization
-from subhkl.export import (
-    FinderConcatenateMerger,
-    IndexerConcatenateMerger,
-    MTZExporter
-)
+from subhkl.export import FinderConcatenateMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
@@ -174,6 +169,7 @@ def finder(
     finder_algorithm: str = "peak_local_max",
     show_progress: bool = False,
     create_visualizations: bool = False,
+    show_steps: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -186,6 +182,7 @@ def finder(
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
     region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_sigma: typing.Optional[float] = None,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
@@ -222,7 +219,7 @@ def finder(
             "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
             "blur_kernel_sigma": thresholding_blur_kernel_sigma,
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-            #"show_steps": True,
+            "show_steps": show_steps,
             "show_scale": "log"
         })
     else:
@@ -232,6 +229,7 @@ def finder(
     # Setup parameters for integration with convex hull algorithm
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
+        "region_growth_minimum_sigma": region_growth_minimum_sigma,
         "region_growth_minimum_intensity": region_growth_minimum_intensity,
         "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
         "peak_center_box_size": peak_center_box_size,
@@ -298,6 +296,7 @@ def finder_merger(
         f["sample/gamma"] = gamma
         f["sample/centering"] = sample_centering
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
 
 @app.command()
 def indexer(
@@ -649,8 +648,11 @@ def integrator(
     instrument: str,
     integration_peaks_filename: str,
     output_filename: str,
+    integration_method: str,
+    integration_mask_file: typing.Optional[str] = None,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 4500.0,
+    region_growth_minimum_sigma: typing.Optional[float] = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,
@@ -676,12 +678,14 @@ def integrator(
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
         "region_growth_minimum_intensity": region_growth_minimum_intensity,
+        "region_growth_minimum_sigma": region_growth_minimum_sigma,
         "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
         "peak_center_box_size": peak_center_box_size,
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
+        "integration_mask_file": integration_mask_file
     }
 
     peaks = Peaks(filename, instrument)
@@ -690,6 +694,7 @@ def integrator(
         integration_params,
         create_visualizations=create_visualizations,
         show_progress=show_progress,
+        integration_method=integration_method,
         file_prefix=filename
     )
 
@@ -722,46 +727,6 @@ def integrator(
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
-
-
-@app.command()
-def normalizer(
-    hdf5_peaks_filename: str, output_peaks_filename: str
-):
-    # Open the input filename
-    with h5py.File(hdf5_peaks_filename, "r") as f:
-        theta = np.array(f["peaks/two_theta"]) / 2.0
-        lamda = np.array(f["peaks/lambda"])
-        detector_efficiency = normalization.detector_efficiency(lamda)
-        absorption = normalization.absorption(lamda)
-        extinction = normalization.extinction(lamda)
-        lorentz = normalization.lorentz_correction(lamda, theta)
-        full = detector_efficiency * extinction * absorption * lorentz
-
-        # Save the result
-        with h5py.File(output_peaks_filename, "w") as o:
-            for key in f.keys():
-                f.copy(f[key], o, key)
-
-            o["peaks/intensity"] = f["peaks/intensity"] / full
-            o["peaks/sigma"] = f["peaks/sigma"] / full
-
-
-@app.command()
-def merger(
-    indexed_h5_txt_list_filename: str,
-    output_filename: str,
-    method: str = "concatenate"
-):
-    with open(indexed_h5_txt_list_filename) as f:
-        indexed_h5_files = f.read().splitlines()
-
-    if method.lower() == "concatenate":
-        merging_algorithm = IndexerConcatenateMerger(indexed_h5_files)
-    else:
-        raise ValueError("Invalid merging method")
-
-    merging_algorithm.merge(output_filename)
 
 
 @app.command()

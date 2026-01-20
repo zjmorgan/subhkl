@@ -28,6 +28,31 @@
         "DeltaTheta": 0.0420,
         "Processes": 8
     },
+    "IMAGINEX": {
+        "Facility": "HFIR",
+        "Name": "IMAGINE-X",
+        "InstrumentName": "IMAGINE-X",
+        "FancyName": "IMAGINE-X",
+        "Wavelength": [2, 4],
+        "Goniometer": {
+            "CG4D:Mot:DGONRa": [0, 1, 0, 1]
+        },
+        "GoniometerAxisNames": [
+            "CG4D:Mot:DGONRa"
+        ],
+        "GoniometerEntry": "metadata.entry.daslogs",
+        "Scale": "metadata.entry.proton_charge",
+        "Title": "metadata.entry.title",
+        "RunNumber": "metadata.entry.run_number",
+        "Extension": ".nxs.h5",
+        "DetectorCalibration": true,
+        "TubeCalibration": false,
+        "Groupings": ["1x1"],
+        "RawFile": "nexus/IMAGINE_{}.nxs.h5",
+        "BankPixels": [512, 512],
+        "DeltaTheta": 0.0420,
+        "Processes": 8
+    },
     "SNAP": {
         "Facility": "SNS",
         "Name": "SNAP",

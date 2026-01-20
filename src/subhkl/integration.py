@@ -205,7 +205,9 @@ class Peaks:
 
                     bc = np.bincount(array - offset, minlength=m * n)
 
-                    ims[bank] = bc.reshape(m, n)
+                    # skip "empty" detector data
+                    if np.sum(bc) > 0:
+                        ims[bank] = bc.reshape(m, n)
 
         return ims
 
@@ -450,7 +452,8 @@ class Peaks:
         hkl = [h.flatten(), k.flatten(), l.flatten()]
         h, k, l = hkl
 
-        d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+        with np.errstate(divide="ignore"):
+            d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
 
         mask = (d > d_min) & (d < np.inf)
 
@@ -789,6 +792,18 @@ class Peaks:
 
             centers = np.stack([i, j], axis=-1)
 
+            if integration_params.get("region_growth_minimum_sigma") is not None:
+                if harvest_peaks_kwargs.get("mask_file") is not None:
+                    mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"])).astype(bool)
+                else:
+                    mask = np.full(self.ims[bank].shape, True)
+                
+                mean = np.mean(self.ims[bank][mask])
+                std = np.std(self.ims[bank][mask])
+                n_sigma = integration_params["region_growth_minimum_sigma"]
+                integrator.region_grower.min_intensity = mean + n_sigma * std
+                print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
+
             # Integrate peaks
             # ALWAYS return hulls to calculate slack/radii
             int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
@@ -901,6 +916,7 @@ class Peaks:
         self,
         peak_dict,
         integration_params,
+        integration_method="free_fit",
         create_visualizations=False,
         show_progress=False,
         file_prefix=None
@@ -920,7 +936,25 @@ class Peaks:
             det = self.get_detector(bank)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
 
-            int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+            if integration_params.get("region_growth_minimum_sigma") is not None:
+                if integration_params.get("integration_mask_file") is not None:
+                    mask = np.array(Image.open(integration_params["integration_mask_file"])).astype(bool)
+                else:
+                    mask = np.full(self.ims[bank].shape, True)
+                
+                mean = np.mean(self.ims[bank][mask])
+                std = np.std(self.ims[bank][mask])
+                n_sigma = integration_params["region_growth_minimum_sigma"]
+                integrator.region_grower.min_intensity = mean + n_sigma * std
+                print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
+
+            int_result, hulls = integrator.integrate_peaks(
+                bank,
+                self.ims[bank],
+                centers,
+                integration_method=integration_method,
+                return_hulls=True
+            )
 
             bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
             bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])

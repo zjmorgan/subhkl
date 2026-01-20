@@ -127,6 +127,7 @@ class ThresholdingPeakFinder:
             )
             plt.title("Masked image")
             plt.show()
+            plt.savefig('masked_image.png')
 
         # 1.6 as per Marr and Hildreth, "Theory of Edge Detection"
         big_sigma = 1.6 * self.blur_kernel_sigma
@@ -143,6 +144,7 @@ class ThresholdingPeakFinder:
             plt.imshow(im_dog * mask.astype(float), cmap="seismic", norm=self.show_scale)
             plt.title("DoG")
             plt.show()
+            plt.savefig('difference_of_gaussians.png')
 
         noise_est = np.quantile(im_dog[mask], self.noise_cutoff_quantile)
         im_thresh = (im_dog > noise_est)
@@ -151,6 +153,7 @@ class ThresholdingPeakFinder:
             plt.imshow(im_thresh * mask.astype(float), cmap="binary", vmax=1.0)
             plt.title("Threshold")
             plt.show()
+            plt.savefig('threshold.png')
 
         open_kernel = _open_kernel3 if self.open_kernel_size == 3 else _open_kernel5
         im_opened = cv2.morphologyEx(((im_thresh > 0) * mask).astype(np.uint8), cv2.MORPH_OPEN, open_kernel)
@@ -162,6 +165,7 @@ class ThresholdingPeakFinder:
             axes[1].imshow(im_opened)
             axes[1].set_title("Opened")
             plt.show()
+            plt.savefig('noise_subtracted.png')
 
         contours, _ = cv2.findContours(im_opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -182,6 +186,7 @@ class ThresholdingPeakFinder:
             plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
             plt.title("Initial contours")
             plt.show()
+            plt.savefig('initial_contours.png')
 
         did_split = True
         split_counter = 1
@@ -214,6 +219,7 @@ class ThresholdingPeakFinder:
                 plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
                 plt.title(f"Split step {split_counter}")
                 plt.show()
+                plt.savefig(f'split_{split_counter}.png')
 
             split_counter += 1
 
@@ -227,6 +233,7 @@ class ThresholdingPeakFinder:
             plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
             plt.title("Final contours")
             plt.show()
+            plt.savefig('final_contours.png')
 
         if len(contours) > 0:
             contour_centers = np.stack([np.mean(c[:, 0, :], axis=0) for c in contours])
@@ -238,6 +245,7 @@ class ThresholdingPeakFinder:
             plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
             plt.title("Peaks")
             plt.show()
+            plt.savefig('peaks.png')
 
         if len(contours) > 0:
             return np.stack([contour_centers[:, 1], contour_centers[:, 0]], axis=1)

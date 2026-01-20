@@ -1,3 +1,6 @@
+# Mac OS
+*.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -8,6 +11,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+*.egg-info
 build/
 develop-eggs/
 dist/
