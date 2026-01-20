@@ -983,61 +983,35 @@ class Peaks:
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
-                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
-                if show_progress:
-                    print(f"Found {len(i)} candidate peaks")
-
-                centers = np.stack([i, j], axis=-1)
-
-                # Integrate peaks
-                if visualize:
-                    int_result, hulls = integrator.integrate_peaks(
-                        bank, self.ims[bank], centers, return_hulls=True
+                try:
+                    plt_im = axes[1].imshow(
+                        1 + self.ims[bank], norm="log", cmap="binary"
                     )
-                else:
-                    int_result = integrator.integrate_peaks(
-                        bank, self.ims[bank], centers
-                    )
-                    hulls = None
+                    if show_progress:
+                        for peak_in, peak_sigma in zip(
+                            bank_intensity[keep], bank_sigma[keep]
+                        ):
+                            print(f"SNR: {peak_in / peak_sigma}")
 
-                bank_intensity = np.array(
-                    [peak_in for _, _, _, peak_in, _, _ in int_result]
-                )
-                bank_sigma = np.array(
-                    [peak_sigma for _, _, _, _, _, peak_sigma in int_result]
-                )
-                keep = [peak_in is not None for peak_in in bank_intensity]
-
-                if visualize:
-                    try:
-                        plt_im = axes[1].imshow(
-                            self.ims[bank], norm="log", cmap="binary"
-                        )
-                        if show_progress:
-                            for peak_in, peak_sigma in zip(
-                                bank_intensity[keep], bank_sigma[keep]
-                            ):
-                                print(f"SNR: {peak_in / peak_sigma}")
-
-                        for _, hull, _, _ in hulls:
-                            if hull is not None:
-                                for simplex in hull.simplices:
-                                    axes[1].plot(
-                                        hull.points[simplex, 1],
-                                        hull.points[simplex, 0],
-                                        c="red",
-                                    )
-                        axes[1].set_title("Convex hulls")
-                        fig.subplots_adjust(right=0.8)
-                        cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
-                        fig.colorbar(plt_im, cbar_ax)
-                        output_file = str(bank) + ".png"
-                        if file_prefix is not None:
-                            output_file = file_prefix + "_" + output_file
-                        fig.savefig(output_file)
-                        plt.show()
-                    except Exception as e:
-                        print(f"Unable to create image for bank {bank}: {e}")
+                    for _, hull, _, _ in hulls:
+                        if hull is not None:
+                            for simplex in hull.simplices:
+                                axes[1].plot(
+                                    hull.points[simplex, 1],
+                                    hull.points[simplex, 0],
+                                    c="red",
+                                )
+                    axes[1].set_title("Convex hulls")
+                    fig.subplots_adjust(right=0.8)
+                    cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
+                    fig.colorbar(plt_im, cbar_ax)
+                    output_file = str(bank) + ".png"
+                    if file_prefix is not None:
+                        output_file = file_prefix + "_" + output_file
+                    fig.savefig(output_file)
+                    plt.close()
+                except Exception as e:
+                    print(f"Unable to create image for bank {bank}: {e}")
 
                 # Only add integrated peaks to data
                 if sum(keep) > 0:
