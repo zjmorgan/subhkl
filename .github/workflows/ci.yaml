@@ -19,18 +19,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PDM
-        uses: pdm-project/setup-pdm@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: true
       - name: Install dependencies
+        run: uv pip install -e ".[lint]" --system
+      - name: Run linting
         run: |
-          pdm venv create --with-pip --force $PYTHON
-          pdm sync --dev -G:all
-      - run: |
-          pdm run ruff format --check
-          pdm run ruff check
+          ruff format --check
+          ruff check
 
   test-unit:
     name: Unit tests
@@ -42,13 +44,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PDM
-        uses: pdm-project/setup-pdm@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: true
       - name: Install dependencies
-        run: |
-          pdm venv create --with-pip --force $PYTHON
-          pdm sync --dev -G:all
-      - run: pdm run pytest 
+        run: uv pip install -e ".[test]" --system
+      - name: Run tests
+        run: pytest -v 
