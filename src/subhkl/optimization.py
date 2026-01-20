@@ -874,14 +874,58 @@ class FindUB:
                 
                 # If loading from a file with a DIFFERENT dimension (e.g. older file), warn and reset
                 if start_sol.shape[0] != num_dims:
-                    print(f"Warning: init_params shape {start_sol.shape} mismatch with required {num_dims}. Restarting random.")
-                    if strategy_type == 'population_based':
-                         population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
-                         fitness_init = objective(population_init)
-                         state = strategy.init(rng_init, population_init, fitness_init, params)
+                    # CASE 1: Solution is too small (Padding)
+                    if start_sol.shape[0] < num_dims:
+                        print(f"Bootstrapping: extending solution from {start_sol.shape[0]} to {num_dims} dims.")
+                        n_new = num_dims - start_sol.shape[0]
+                        padding = jnp.full((n_new,), 0.5)
+                        start_sol = jnp.concatenate([start_sol, padding])
+
+                        # Initialize state with padded solution
+                        if strategy_type == 'population_based':
+                            noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                            population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                            fitness_init = objective(population_init)
+                            state = strategy.init(rng_init, population_init, fitness_init, params)
+                        elif strategy_type == 'distribution_based':
+                            state = strategy.init(rng_init, start_sol, params)
+
+                    # CASE 2: Solution is too large (Slicing) - THIS FIXES YOUR BUG
                     else:
-                         state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
+                        # Attempt to slice: Keep first 3 (Orientation) and last N (Goniometer)
+                        # This drops the middle parameters (Lattice), which matches your workflow.
+                        n_gonio = len(goniometer_axes) if refine_goniometer else 0
+                        n_keep_end = n_gonio
+                        
+                        # If we have goniometer params, we take the last n_gonio params.
+                        # If not, we only take the first 3 (Orientation).
+                        if n_keep_end > 0:
+                            sliced_sol = jnp.concatenate([start_sol[:3], start_sol[-n_keep_end:]])
+                        else:
+                            sliced_sol = start_sol[:3]
+
+                        if sliced_sol.shape[0] == num_dims:
+                            print(f"Bootstrapping: reducing solution from {start_sol.shape[0]} to {num_dims} dims (dropping intermediate lattice params).")
+                            start_sol = sliced_sol
+                            
+                            # Initialize state with sliced solution
+                            if strategy_type == 'population_based':
+                                noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                                population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                                fitness_init = objective(population_init)
+                                state = strategy.init(rng_init, population_init, fitness_init, params)
+                            elif strategy_type == 'distribution_based':
+                                state = strategy.init(rng_init, start_sol, params)
+                        else:
+                            print(f"Warning: init_params shape {start_sol.shape} mismatch. Restarting random.")
+                            if strategy_type == 'population_based':
+                                 population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                                 fitness_init = objective(population_init)
+                                 state = strategy.init(rng_init, population_init, fitness_init, params)
+                            else:
+                                 state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
                 else:
+                    # Exact match case
                     if strategy_type == 'population_based':
                         noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
                         population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
