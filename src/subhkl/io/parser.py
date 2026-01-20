@@ -542,6 +542,8 @@ def peak_predictor(
     d_min: float = 1.0,
     create_visualizations: bool = False,
     centering: str = None,
+    wavel_min: float = None,
+    wavel_max: float = None,
 ):
 
     with h5py.File(indexed_hdf5_filename) as f_indexed:
@@ -555,6 +557,10 @@ def peak_predictor(
         if centering is None:
             centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
+        if wavel_min is not None:
+            wavelength[0] = wavel_min
+        if wavel_max is not None:
+            wavelength[1] = wavel_max
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
