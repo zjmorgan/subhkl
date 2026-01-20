@@ -32,6 +32,7 @@ def finder(
     wavelength_min: typing.Optional[float] = None,
     wavelength_max: typing.Optional[float] = None,
     region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_sigma: typing.Optional[float] = None,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
@@ -78,6 +79,7 @@ def finder(
     # Setup parameters for integration with convex hull algorithm
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
+        "region_growth_minimum_sigma": region_growth_minimum_sigma,
         "region_growth_minimum_intensity": region_growth_minimum_intensity,
         "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
         "peak_center_box_size": peak_center_box_size,

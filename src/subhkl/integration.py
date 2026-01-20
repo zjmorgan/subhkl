@@ -974,6 +974,18 @@ class Peaks:
 
             centers = np.stack([i, j], axis=-1)
 
+            if integration_params.get("region_growth_minimum_sigma") is not None:
+                if "thresholding_mask_file" in harvest_peaks_kwargs:
+                    mask = np.array(Image.open(harvest_peaks_kwargs["thresholding_mask_file"])).astype(bool)
+                else:
+                    mask = np.full(self.ims[bank].shape, True)
+                
+                mean = np.mean(self.ims[bank][mask])
+                std = np.std(self.ims[bank][mask])
+                n_sigma = integration_params["region_growth_minimum_sigma"]
+                integrator.region_grower.min_intensity = mean + n_sigma * std
+                print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
+
             # Integrate peaks
             if visualize:
                 int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
