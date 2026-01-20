@@ -17,14 +17,30 @@ try:
     from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
     HAS_JAX = True
+    OPTIMIZATION_BACKEND = "jax"
 except ImportError:
-    HAS_JAX = False
-    jax = None
-    jnp = None
+    # Fallback: use NumPy with JAX shim
+    import numpy as jnp
+
+    class _JaxShim:
+        """Minimal JAX shim for when JAX is not installed."""
+
+        @staticmethod
+        def jit(f=None, *, static_argnames=None, **kwargs):
+            """Mock jit decorator - just returns the function unchanged."""
+            if f is None:
+                # Called with arguments: @jax.jit(static_argnames="self")
+                return lambda fn: fn
+            # Called without arguments: @jax.jit
+            return f
+
+    jax = _JaxShim()
     jscipy_linalg = None
     DifferentialEvolution = None
     PSO = None
     CMA_ES = None
+    HAS_JAX = False
+    OPTIMIZATION_BACKEND = "numpy"
 
 # Try to import tqdm for a progress bar
 try:
@@ -49,237 +65,214 @@ def require_jax():
         )
 
 
-if HAS_JAX:
+class VectorizedObjective:
+    """
+    Vectorized objective function for crystal orientation optimization.
 
-    class VectorizedObjectiveJAX:
+    Uses JAX (with JIT compilation) when available, falls back to NumPy otherwise.
+    The backend is automatically selected based on whether JAX is installed.
+    """
+
+    def __init__(
+        self,
+        B,
+        centering,
+        kf_ki_dir,
+        wavelength,
+        angle_cdf,
+        angle_t,
+        weights=None,
+        softness=0.15,
+    ):
         """
-        JAX-compatible vectorized objective function for evosax.
-        (Replaces the numpy-based VectorizedObjective)
-
-        Note: Requires jax to be installed. Install with: pip install -e ".[jax]"
+        Parameters
+        ----------
+        B : array (3, 3)
+            B matrix (from reciprocal_lattice_B)
+        centering : str
+            Bravais lattice centering
+        kf_ki_dir : array (3, M)
+            difference between incident and scattering directions for M
+            reflections
+        wavelength : array (2,)
+            wavelength lower and upper bounds [min, max]
+        angle_cdf : array
+            CDF values for angle interpolation (from FindUB._angle_cdf)
+        angle_t : array
+            Angle values for interpolation (from FindUB._angle_t)
+        weights : array, optional
+            Weights for each peak
+        softness : float
+            Shape parameter for rounding hkls
         """
+        self.B = jnp.array(B)
+        self.kf_ki_dir = jnp.array(kf_ki_dir)
+        self.softness = softness
+        self.centering = centering
+        self.angle_cdf = jnp.array(angle_cdf)
+        self.angle_t = jnp.array(angle_t)
 
-        def __init__(
-            self,
-            B,
-            centering,
-            kf_ki_dir,
-            wavelength,
-            angle_cdf,
-            angle_t,
-            weights=None,
-            softness=0.15,
-        ):
-            """
-            Parameters
-            ----------
-            B : array (3, 3)
-                B matrix (from reciprocal_lattice_B)
-            centering : stsr
-                Bravais lattice centering
-            kf_ki_dir : array (3, M)
-                difference between incident and scattering directions for M
-                reflections
-            wavelength : array (2,)
-                wavelength lower and upper bounds [min, max]
-            angle_cdf : array
-                CDF values for angle interpolation (from FindUB._angle_cdf)
-            angle_t : array
-                Angle values for interpolation (from FindUB._angle_t)
-            softness : float
-                Shape parameter for rounding hkls
-            """
-            require_jax()
-            self.B = jnp.array(B)
-            self.kf_ki_dir = jnp.array(kf_ki_dir)
-            self.softness = softness
-            self.centering = centering
-            self.angle_cdf = jnp.array(angle_cdf)
-            self.angle_t = jnp.array(angle_t)
+        wavelength = jnp.array(wavelength)
+        wl_min = jnp.full(self.kf_ki_dir.shape[1], wavelength[0])  # (M)
+        wl_max = jnp.full(self.kf_ki_dir.shape[1], wavelength[1])  # (M)
 
-            # Ensure wavelength is a JAX array
-            wavelength = jnp.array(wavelength)
+        # Create 100 linearly spaced wavelengths for each reflection
+        self.lamda = jnp.linspace(wl_min, wl_max, 100).T  # (M, 100)
 
-            wl_min = jnp.full(self.kf_ki_dir.shape[1], wavelength[0])  # (M)
-            wl_max = jnp.full(self.kf_ki_dir.shape[1], wavelength[1])  # (M)
+        if weights is None:
+            self.weights = jnp.ones(self.kf_ki_dir.shape[1])
+        else:
+            self.weights = jnp.array(weights)
 
-            # Create 100 linearly spaced wavelengths for each reflection
-            self.lamda = jnp.linspace(wl_min, wl_max, 100).T
-            # (M, 100)
+        self.max_score = jnp.sum(self.weights)
 
-            # Handle weights: if None, default to 1.0 for everyone
-            if weights is None:
-                self.weights = jnp.ones(self.kf_ki_dir.shape[1])
-            else:
-                self.weights = jnp.array(weights)
+    def orientation_U(self, param):
+        """
+        Compute orientation matrices (U) from angles.
+        Implements Rodrigues' rotation formula.
 
-            # Pre-calculate the maximum possible score (sum of all weights)
-            # This is the score if every peak is perfectly indexed.
-            self.max_score = jnp.sum(self.weights)
+        Parameters
+        ----------
+        param : array, (S, 3)
+            Rotation parameters. S = population size.
 
-        def orientation_U_jax(self, param):
-            """
-            Compute orientation matrices (U) from angles using JAX.
-            Implements Rodrigues' rotation formula.
+        Returns
+        -------
+        U : array (S, 3, 3)
+            Sample orientation matrices for each set of input parameters.
+        """
+        u0, u1, u2 = param.T  # (S,) each
 
-            Parameters
-            ----------
-            param : array, (S, 3)
-                Rotation parameters. S = population size.
-                param[:, 0] = u0
-                param[:, 1] = u1
-                param[:, 2] = u2
+        theta = jnp.arccos(1 - 2 * u0)
+        phi = 2 * jnp.pi * u1
 
-            Returns
-            -------
-            U : array (S, 3, 3)
-                Sample orientation matrices for each set of input parameters.
-            """
-            u0, u1, u2 = param.T  # (S,) each
+        # Rotation axis (w)
+        w = jnp.array(
+            [
+                jnp.sin(theta) * jnp.cos(phi),
+                jnp.sin(theta) * jnp.sin(phi),
+                jnp.cos(theta),
+            ]
+        ).T  # (S, 3)
 
-            theta = jnp.arccos(1 - 2 * u0)
-            phi = 2 * jnp.pi * u1
+        # Rotation angle (omega)
+        omega = jnp.interp(u2, self.angle_cdf, self.angle_t)  # (S,)
 
-            # Rotation axis (w)
-            w = jnp.array(
-                [
-                    jnp.sin(theta) * jnp.cos(phi),
-                    jnp.sin(theta) * jnp.sin(phi),
-                    jnp.cos(theta),
-                ]
-            ).T  # (S, 3)
+        # Axis-angle to rotation matrix (Rodrigues' formula)
+        wx, wy, wz = w.T  # (S,) each
+        c = jnp.cos(omega)  # (S,)
+        s = jnp.sin(omega)  # (S,)
+        t = 1.0 - c  # (S,)
 
-            # Rotation angle (omega)
-            omega = jnp.interp(u2, self.angle_cdf, self.angle_t)  # (S,)
+        # Identity matrices
+        I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0)  # noqa: E741 - (S, 3, 3)
 
-            # JAX implementation of axis-angle to rotation matrix (Rodrigues' formula)
-            wx, wy, wz = w.T  # (S,) each
-            c = jnp.cos(omega)  # (S,)
-            s = jnp.sin(omega)  # (S,)
-            t = 1.0 - c  # (S,)
+        # Skew-symmetric cross-product matrix K
+        K = jnp.array(
+            [
+                [jnp.zeros_like(wx), -wz, wy],
+                [wz, jnp.zeros_like(wy), -wx],
+                [-wy, wx, jnp.zeros_like(wz)],
+            ]
+        )  # (3, 3, S)
+        K = jnp.transpose(K, (2, 0, 1))  # (S, 3, 3)
 
-            # Identity matrices
-            I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0)  # noqa: E741 - (S, 3, 3)
+        # K^2
+        K2 = jnp.einsum("sij,sjk->sik", K, K)  # (S, 3, 3)
 
-            # Skew-symmetric cross-product matrix K
-            K = jnp.array(
-                [
-                    [jnp.zeros_like(wx), -wz, wy],
-                    [wz, jnp.zeros_like(wy), -wx],
-                    [-wy, wx, jnp.zeros_like(wz)],
-                ]
-            )  # (3, 3, S)
-            K = jnp.transpose(K, (2, 0, 1))  # (S, 3, 3)
+        # Rodrigues' formula
+        U = I + s[:, None, None] * K + t[:, None, None] * K2  # (S, 3, 3)
 
-            # K^2
-            K2 = jnp.einsum("sij,sjk->sik", K, K)  # (S, 3, 3)
+        return U
 
-            # Rodrigues' formula
-            U = I + s[:, None, None] * K + t[:, None, None] * K2  # (S, 3, 3)
+    def indexer_soft(self, UB, softness=0.001):
+        """
+        Weighted soft-indexing objective.
+        """
+        UB_inv = jnp.linalg.inv(UB)  # (S, 3, 3)
 
-            return U
+        # map to HKL space
+        hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
+        hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]  # (S, 3, M, 100)
 
-        def indexer_soft_jax(self, UB, softness=0.001):
-            """
-            Weighted soft-indexing objective.
-            """
+        # Smooth periodic distance
+        diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
 
-            UB_inv = jnp.linalg.inv(UB)  # (S, 3, 3)
+        # map error back to Cartesian q-space
+        dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
 
-            # map to HKL space
-            hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
-            hkl = hkl_lamda[:, :, :, None] / self.lamda[None, None, :, :]
-            # (S, 3, M, 100)
+        # Squared Euclidean distance for every wavelength candidate
+        dist_sq = jnp.sum(dist_vec**2, axis=1)  # (S, M, 100)
 
-            # Smooth periodic distance: instead of `hkl - round(hkl)`, use Sine.
-            diff_hkl_smooth = jnp.sin(jnp.pi * hkl) / jnp.pi
+        valid = jnp.full_like(hkl[:, 0], True, dtype=bool)
 
-            # map error back to Cartesian q-space
-            # (S, 3, 3) @ (S, 3, M, 100) -> (S, 3, M, 100)
-            dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
+        h, k, l = jnp.round(hkl).transpose(1, 0, 2, 3)  # noqa: E741
 
-            # Squared Euclidean distance for every wavelength candidate
-            dist_sq = jnp.sum(dist_vec**2, axis=1)  # (S, M, 100)
+        if self.centering == "A":
+            valid = (k + l) % 2 == 0
+        elif self.centering == "B":
+            valid = (h + l) % 2 == 0
+        elif self.centering == "C":
+            valid = (h + k) % 2 == 0
+        elif self.centering == "I":
+            valid = (h + k + l) % 2 == 0
+        elif self.centering == "F":
+            valid = ((h + k) % 2 == 0) & ((l + h) % 2 == 0) & ((k + l) % 2 == 0)
+        elif self.centering == "R":
+            valid = (h + k + l) % 3 == 0
+        elif self.centering == "R_obv":
+            valid = (-h + k + l) % 3 == 0
+        elif self.centering == "R_rev":
+            valid = (h - k + l) % 3 == 0
 
-            valid = jnp.full_like(hkl[:, 0], True, dtype=bool)
+        dist_sq = jnp.where(valid, dist_sq, jnp.inf)
 
-            h, k, l = jnp.round(hkl).transpose(1, 0, 2, 3)  # noqa: E741
+        # soft Wavelength Selection
+        min_dist_sq = jnp.min(dist_sq, axis=2)  # (S, M)
 
-            if self.centering == "A":
-                valid = (k + l) % 2 == 0
-            elif self.centering == "B":
-                valid = (h + l) % 2 == 0
-            elif self.centering == "C":
-                valid = (h + k) % 2 == 0
-            elif self.centering == "I":
-                valid = (h + k + l) % 2 == 0
-            elif self.centering == "F":
-                valid = ((h + k) % 2 == 0) & ((l + h) % 2 == 0) & ((k + l) % 2 == 0)
-            elif self.centering == "R":
-                valid = (h + k + l) % 3 == 0
-            elif self.centering == "R_obv":
-                valid = (-h + k + l) % 3 == 0
-            elif self.centering == "R_rev":
-                valid = (h - k + l) % 3 == 0
+        # calculate probability of fit (0 to 1) for each peak
+        peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2))  # (S, M)
 
-            dist_sq = jnp.where(valid, dist_sq, jnp.inf)
+        # apply weights
+        weighted_scores = peak_probs * self.weights[None, :]  # (S, M)
 
-            # dist_sq shape: (S, M, 100)
+        total_score = jnp.sum(weighted_scores, axis=1)  # (S,)
 
-            # soft Wavelength Selection
-            min_dist_sq = jnp.min(dist_sq, axis=2)  # (S, M)
+        # for reporting
+        ind = jnp.argmin(dist_sq, axis=2, keepdims=True)  # (S, M, 1)
+        min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]  # (S, M)
+        int_hkl = jnp.take_along_axis(
+            jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3
+        )[..., 0]
 
-            # calculate probability of fit (0 to 1) for each peak
-            peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2))  # (S, M)
+        return (
+            self.max_score - total_score,
+            total_score,
+            int_hkl.transpose((0, 2, 1)),
+            min_lamb,
+        )
 
-            # apply weights: Strong peaks contribute more to the score
-            weighted_scores = peak_probs * self.weights[None, :]  # (S, M)
+    @partial(jax.jit, static_argnames="self")
+    def __call__(self, x):
+        """
+        Objective function (JIT-compiled when JAX is available).
 
-            # If weights are normalized so mean(w)=1, this value is intuitively
-            # "How many average-quality peaks did we index?"
-            total_score = jnp.sum(weighted_scores, axis=1)  # (S,)
+        Parameters
+        ----------
+        x : array (S, 3)
+            Refineable parameters. S = population size
 
-            # for reporting
-            ind = jnp.argmin(dist_sq, axis=2, keepdims=True)  # (S, M, 1)
-            min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[
-                :, :, 0
-            ]  # (S, M)
-            int_hkl = jnp.take_along_axis(
-                jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3
-            )[..., 0]
+        Returns
+        -------
+        error : array (S,)
+            Indexing error for each particle.
+        """
+        U = self.orientation_U(x)  # (S, 3, 3)
+        UB = jnp.einsum("sij,jk->sik", U, self.B)  # (S, 3, 3)
 
-            return (
-                self.max_score - total_score,
-                total_score,
-                int_hkl.transpose((0, 2, 1)),
-                min_lamb,
-            )
+        error, _, _, _ = self.indexer_soft(UB, softness=self.softness)
 
-        # Use partial to make 'self' a static argument for JIT
-        @partial(jax.jit, static_argnames="self")
-        def __call__(self, x):
-            """
-            JIT-compiled objective function.
-
-            Parameters
-            ----------
-            x : array (S, 3)
-                Refineable parameters. S = population size
-
-            Returns
-            -------
-            error : array (S,)
-                Indexing error for each particle.
-            """
-
-            U = self.orientation_U_jax(x)  # (S, 3, 3)
-            UB = jnp.einsum("sij,jk->sik", U, self.B)
-            # (S, 3, 3)
-
-            #        error, num, hkl, lamda = self.indexer_jax(UB)
-            error, _, _, _ = self.indexer_soft_jax(UB, softness=self.softness)
-
-            return error
+        return error
 
 
 class FindUB:
@@ -569,8 +562,8 @@ class FindUB:
         # from dominating the entire solution (e.g., max weight = 10x average)
         weights = np.clip(weights, 0, 10.0)
 
-        # 1. Instantiate the JAX-compatible objective function
-        objective = VectorizedObjectiveJAX(
+        # 1. Instantiate the objective function
+        objective = VectorizedObjective(
             self.reciprocal_lattice_B(),
             self.centering,
             kf_ki_dir,
