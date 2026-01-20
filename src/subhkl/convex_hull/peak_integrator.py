@@ -125,20 +125,12 @@ class PeakIntegrator:
         # Use masks to compute intensity statistics
         for i_peak in range(len(peak_centers)):
             if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()[0]) > 0:
-                if integration_method == "free_fit":
-                    stats = self._calculate_statistics(
-                        intensity,
-                        peak_masks[i_peak],
-                        bg_masks[i_peak]
-                    )
-                    bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
-                elif integration_method == "gaussian_fit":
-                    stats = self._fit_gaussian_mle(
-                        intensity,
-                        peak_masks[i_peak],
-                        bg_masks[i_peak]
-                    )
-                    bg_density, peak_intensity, peak_bg_intensity, sigma = stats 
+                stats = self._calculate_statistics(
+                    intensity,
+                    peak_masks[i_peak],
+                    bg_masks[i_peak]
+                )
+                bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
 
                 # Discard peak if SNR is too low
                 if peak_intensity is not None:

@@ -519,7 +519,10 @@ def peak_predictor(
     indexed_hdf5_filename: str,
     integration_peaks_filename: str,
     d_min: float = 1.0,
-    create_visualizations: bool = False
+    create_visualizations: bool = False,
+    centering: str = None,
+    wavel_min: float = None,
+    wavel_max: float = None,
 ):
 
     with h5py.File(indexed_hdf5_filename) as f_indexed:
@@ -529,11 +532,17 @@ def peak_predictor(
         alpha = float(np.array(f_indexed["sample/alpha"]))
         beta = float(np.array(f_indexed["sample/beta"]))
         gamma = float(np.array(f_indexed["sample/gamma"]))
-        centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
+        # if user does not provide an explicit centering, use finder setting
+        if centering is None:
+            centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
+        if wavel_min is not None:
+            wavelength[0] = wavel_min
+        if wavel_max is not None:
+            wavelength[1] = wavel_max
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
-        
+
         # Check for refined offsets
         refined_offsets = None
         if "optimization/goniometer_offsets" in f_indexed:
