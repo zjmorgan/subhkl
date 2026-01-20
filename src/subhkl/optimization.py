@@ -13,7 +13,6 @@ import gemmi
 try:
     import jax
     import jax.numpy as jnp
-    import jax.scipy.linalg as jscipy_linalg
     from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
     HAS_JAX = True
