@@ -37,26 +37,64 @@ python -m pip install -e ".[test]"  # with pip
 
 ### Installing optional JAX dependencies
 
-JAX is an optional dependency used for optimization algorithms. Since it can be difficult to install across platforms, it's not required by default. To use JAX-based optimization features (e.g., `minimize_evosax`, `VectorizedObjectiveJAX`):
+JAX is an optional dependency used for GPU-accelerated optimization algorithms. The package automatically uses JAX when available, falling back to NumPy otherwise.
+
+**Installation options:**
 
 ```bash
-uv pip install -e ".[jax]"  # with uv
-# or
-python -m pip install -e ".[jax]"  # with pip
+# Standard installation (NumPy backend only - no GPU)
+pip install subhkl
+
+# CPU-only JAX acceleration (faster, but no GPU)
+pip install subhkl[jax]
+
+# NVIDIA GPU support (CUDA 12.x)
+pip install subhkl[jax-cuda12]
+
+# NVIDIA GPU support (CUDA 11.x - for older systems)
+pip install subhkl[jax-cuda11]
+
+# AMD GPU support (ROCm)
+pip install subhkl[jax-rocm]
 ```
 
-**Checking for JAX availability in code:**
+**For development (editable install):**
+
+```bash
+# NumPy backend
+uv pip install -e .
+
+# JAX CPU
+uv pip install -e ".[jax]"
+
+# JAX with CUDA 12
+uv pip install -e ".[jax-cuda12]"
+
+# JAX with CUDA 11
+uv pip install -e ".[jax-cuda11]"
+
+# JAX with ROCm (AMD)
+uv pip install -e ".[jax-rocm]"
+```
+
+**Backend detection:**
+
+The optimization backend is automatically selected at import time. You can check which backend is being used:
 
 ```python
 import subhkl
 
-if subhkl.HAS_JAX:
-    # Use JAX-accelerated methods
-    opt.minimize_evosax("DE", population_size=1000)
-else:
-    # Fall back to alternative methods or inform user
-    print("JAX not available. Install with: pip install -e '.[jax]'")
+print(f"Backend: {subhkl.OPTIMIZATION_BACKEND}")  # "jax" or "numpy"
+print(f"JAX available: {subhkl.HAS_JAX}")  # True or False
+
+# VectorizedObjective automatically uses the best available backend
+objective = subhkl.VectorizedObjective(...)  # JIT-compiled if JAX available
 ```
+
+**Performance notes:**
+- **NumPy backend**: Works everywhere, no GPU required, good for small-scale problems
+- **JAX CPU**: ~2-5x faster than NumPy due to JIT compilation, no GPU required
+- **JAX GPU (CUDA/ROCm)**: ~10-100x faster for large-scale optimization, requires compatible GPU
 
 ## Running with docker
 
