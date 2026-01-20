@@ -34,7 +34,6 @@ except ImportError:
             return f
 
     jax = _JaxShim()
-    jscipy_linalg = None
     DifferentialEvolution = None
     PSO = None
     CMA_ES = None
