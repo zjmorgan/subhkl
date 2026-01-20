@@ -23,6 +23,7 @@ class BaseConcatenateMerger:
         self.copy_keys = copy_keys
         self.merge_keys = merge_keys
 
+
     def merge(self, output_filename):
         """
         Merges the indexed datasets into a single dataset
@@ -34,17 +35,30 @@ class BaseConcatenateMerger:
         """
 
         total_peaks = 0
+        # Determine total peaks AND find a valid template file
+        typical_file_path = self.h5_files[0]
+        found_valid_template = False
+
         for file in self.h5_files:
             with h5py.File(file, "r") as f_in:
-                total_peaks += len(f_in[self.merge_keys[0]])
+                num = len(f_in[self.merge_keys[0]])
+                total_peaks += num
+
+                # Use the first file with data as the template to ensure
+                # multidimensional shapes (like 3x3 matrices) are preserved.
+                if not found_valid_template and num > 0:
+                    typical_file_path = file
+                    found_valid_template = True
 
         with h5py.File(output_filename, "w") as f_out:
-            with h5py.File(self.h5_files[0], "r") as f_typical:
+            # Open the valid template file we found (or the first one if all are empty)
+            with h5py.File(typical_file_path, "r") as f_typical:
                 for key in self.copy_keys:
                     if key in f_typical:
                         f_out[key] = np.array(f_typical[key])
 
                 for merge_key in self.merge_keys:
+                    # Use the shape from the typical file
                     shape = (total_peaks,) + f_typical[merge_key].shape[1:]
                     dtype = f_typical[merge_key].dtype
                     f_out.create_dataset(merge_key, shape, dtype)
@@ -59,10 +73,11 @@ class BaseConcatenateMerger:
                     f_out["file_offsets"][i_file] = offset
                     for merge_key in self.merge_keys:
                         if merge_key in f_in:
-                            f_out[merge_key][peak_range] = np.array(f_in[merge_key])
+                            # Only copy if there is data to avoid shape mismatch on empty files
+                            if num_items > 0:
+                                f_out[merge_key][peak_range] = np.array(f_in[merge_key])
 
                     offset += num_items
-
 
 class FinderConcatenateMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
