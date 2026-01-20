@@ -975,8 +975,8 @@ class Peaks:
             centers = np.stack([i, j], axis=-1)
 
             if integration_params.get("region_growth_minimum_sigma") is not None:
-                if "thresholding_mask_file" in harvest_peaks_kwargs:
-                    mask = np.array(Image.open(harvest_peaks_kwargs["thresholding_mask_file"])).astype(bool)
+                if "mask_file" in harvest_peaks_kwargs:
+                    mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"])).astype(bool)
                 else:
                     mask = np.full(self.ims[bank].shape, True)
                 
