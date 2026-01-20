@@ -124,7 +124,7 @@ class PeakIntegrator:
 
         # Use masks to compute intensity statistics
         for i_peak in range(len(peak_centers)):
-            if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()) > 0:
+            if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()[0]) > 0:
                 if integration_method == "free_fit":
                     stats = self._calculate_statistics(
                         intensity,

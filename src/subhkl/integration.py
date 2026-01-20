@@ -990,14 +990,6 @@ class Peaks:
                 if show_progress:
                     print(f"Found {len(i)} candidate peaks")
 
-                if visualize:
-                    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                    axes[0].imshow(self.ims[bank], norm="log", cmap="binary")
-                    axes[0].scatter(j, i, marker="1", c="blue")
-                    axes[0].set_title("Candidate peaks")
-                else:
-                    fig, axes = None, None
-
                 centers = np.stack([i, j], axis=-1)
 
                 # Integrate peaks
@@ -1056,8 +1048,6 @@ class Peaks:
                     print(f"Integrated {len(i)}/{len(centers)} peaks")
                 else:
                     print("Bank had 0 peaks")
-            except Exception as e:
-                print(f"Error while processing peaks for bank {bank}: {e}")
 
         return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
 
