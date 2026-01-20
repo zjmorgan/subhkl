@@ -33,22 +33,12 @@ DetectorPeaks = namedtuple(
         "intensity",
         "sigma",
         "bank",
-    ]
+    ],
 )
 
 IntegrationResult = namedtuple(
     "IntegrationResult",
-    [
-        "h",
-        "k",
-        "l",
-        "intensity",
-        "sigma",
-        "tt",
-        "az",
-        "wavelength",
-        "bank"
-    ]
+    ["h", "k", "l", "intensity", "sigma", "tt", "az", "wavelength", "bank"],
 )
 
 
@@ -246,7 +236,7 @@ class Peaks:
         mask_file: str | None = None,
         mask_rel_erosion_radius: float = 0.05,
         show_steps: bool = False,
-        show_scale: str = "linear"
+        show_scale: str = "linear",
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Find peaks using a thresholding algorithm.
@@ -287,13 +277,15 @@ class Peaks:
             mask_file=mask_file,
             mask_rel_erosion_radius=mask_rel_erosion_radius,
             show_steps=show_steps,
-            show_scale=show_scale
+            show_scale=show_scale,
         )
 
         coords = alg.find_peaks(self.ims[bank])
         return coords[:, 0], coords[:, 1]
 
-    def scale_coordinates(self, bank: int, i: npt.NDArray, j: npt.NDArray) -> tuple[npt.NDArray, npt.NDArray]:
+    def scale_coordinates(
+        self, bank: int, i: npt.NDArray, j: npt.NDArray
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Scale from pixel coordinates to real positions.
 
@@ -345,7 +337,7 @@ class Peaks:
         R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
 
         if np.isclose(a, 0) or np.isclose(b, 0):
-            return 0., 0., 0.
+            return 0.0, 0.0, 0.0
 
         S_inv = np.diag([1 / scale_x, 1 / scale_y])
 
@@ -492,7 +484,7 @@ class Peaks:
 
         return i.astype(int), j.astype(int)
 
-    def allow_centering(self, h, k, l, centering="P"):
+    def allow_centering(self, h, k, l, centering="P"):  # noqa: E741
         if centering == "P":
             mask = np.full(l.shape, True, dtype=bool)
         elif centering == "A":
@@ -519,9 +511,9 @@ class Peaks:
     def cartesian_matrix_metric_tensor(self, a, b, c, alpha, beta, gamma):
         G = np.array(
             [
-                [a ** 2, a * b * np.cos(gamma), a * c * np.cos(beta)],
-                [b * a * np.cos(gamma), b ** 2, b * c * np.cos(alpha)],
-                [c * a * np.cos(beta), c * b * np.cos(alpha), c ** 2],
+                [a**2, a * b * np.cos(gamma), a * c * np.cos(beta)],
+                [b * a * np.cos(gamma), b**2, b * c * np.cos(alpha)],
+                [c * a * np.cos(beta), c * b * np.cos(alpha), c**2],
             ]
         )
 
@@ -541,7 +533,7 @@ class Peaks:
         k_max = int(np.floor(1 / d_min / bstar))
         l_max = int(np.floor(1 / d_min / cstar))
 
-        h, k, l = np.meshgrid(
+        h, k, l = np.meshgrid(  # noqa: E741
             np.arange(-h_max, h_max + 1),
             np.arange(-k_max, k_max + 1),
             np.arange(-l_max, l_max + 1),
@@ -549,7 +541,7 @@ class Peaks:
         )
 
         hkl = [h.flatten(), k.flatten(), l.flatten()]
-        h, k, l = hkl
+        h, k, l = hkl  # noqa: E741
 
         with np.errstate(divide="ignore"):
             d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
@@ -558,7 +550,9 @@ class Peaks:
 
         return self.allow_centering(h[mask], k[mask], l[mask], centering)
 
-    def reflections_mask(self, bank: int, xyz: list[float]) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
+    def reflections_mask(
+        self, bank: int, xyz: list[float]
+    ) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Return mask  using bank number and real-space coordinates (x, y, z).
 
@@ -613,10 +607,7 @@ class Peaks:
         return mask, i, j
 
     def detector_trajectories(
-        self,
-        bank: int,
-        x: list[float] | npt.NDArray,
-        y: list[float] | npt.NDArray
+        self, bank: int, x: list[float] | npt.NDArray, y: list[float] | npt.NDArray
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate detector trajectories.
@@ -893,7 +884,7 @@ class Peaks:
         integration_params: dict,
         show_progress: bool = False,
         visualize: bool = False,
-        file_prefix: str | None = None
+        file_prefix: str | None = None,
     ) -> DetectorPeaks:
         """
         Get peaks in detector space (rotation, angles, and wavelength)
@@ -925,7 +916,7 @@ class Peaks:
         Returns
         -------
         detector_peaks : DetectorPeaks
-            namedtuple of Rotations, angles, wavelength_mins, wavelength_maxes, 
+            namedtuple of Rotations, angles, wavelength_mins, wavelength_maxes,
             intensity and sigma of each peak
 
         """
@@ -976,13 +967,19 @@ class Peaks:
 
             # Integrate peaks
             if visualize:
-                int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+                int_result, hulls = integrator.integrate_peaks(
+                    bank, self.ims[bank], centers, return_hulls=True
+                )
             else:
                 int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
                 hulls = None
 
-            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            bank_intensity = np.array(
+                [peak_in for _, _, _, peak_in, _, _ in int_result]
+            )
+            bank_sigma = np.array(
+                [peak_sigma for _, _, _, _, _, peak_sigma in int_result]
+            )
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
@@ -994,26 +991,42 @@ class Peaks:
 
                 # Integrate peaks
                 if visualize:
-                    int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
+                    int_result, hulls = integrator.integrate_peaks(
+                        bank, self.ims[bank], centers, return_hulls=True
+                    )
                 else:
-                    int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
+                    int_result = integrator.integrate_peaks(
+                        bank, self.ims[bank], centers
+                    )
                     hulls = None
 
-                bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-                bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+                bank_intensity = np.array(
+                    [peak_in for _, _, _, peak_in, _, _ in int_result]
+                )
+                bank_sigma = np.array(
+                    [peak_sigma for _, _, _, _, _, peak_sigma in int_result]
+                )
                 keep = [peak_in is not None for peak_in in bank_intensity]
 
                 if visualize:
                     try:
-                        plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
+                        plt_im = axes[1].imshow(
+                            self.ims[bank], norm="log", cmap="binary"
+                        )
                         if show_progress:
-                            for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
-                                print(f'SNR: {peak_in / peak_sigma}')
+                            for peak_in, peak_sigma in zip(
+                                bank_intensity[keep], bank_sigma[keep]
+                            ):
+                                print(f"SNR: {peak_in / peak_sigma}")
 
                         for _, hull, _, _ in hulls:
                             if hull is not None:
                                 for simplex in hull.simplices:
-                                    axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                                    axes[1].plot(
+                                        hull.points[simplex, 1],
+                                        hull.points[simplex, 0],
+                                        c="red",
+                                    )
                         axes[1].set_title("Convex hulls")
                         fig.subplots_adjust(right=0.8)
                         cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
@@ -1049,7 +1062,9 @@ class Peaks:
                 else:
                     print("Bank had 0 peaks")
 
-        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
+        return DetectorPeaks(
+            R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks
+        )
 
     def integrate(
         self,
@@ -1058,11 +1073,11 @@ class Peaks:
         integration_method="free_fit",
         create_visualizations=False,
         show_progress=False,
-        file_prefix=None
+        file_prefix=None,
     ):
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
 
-        h, k, l = [], [], []
+        h, k, l = [], [], []  # noqa: E741
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
@@ -1078,35 +1093,46 @@ class Peaks:
                 self.ims[bank],
                 centers,
                 integration_method=integration_method,
-                return_hulls=True
+                return_hulls=True,
             )
 
-            bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-            bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
+            bank_intensity = np.array(
+                [peak_in for _, _, _, peak_in, _, _ in int_result]
+            )
+            bank_sigma = np.array(
+                [peak_sigma for _, _, _, _, _, peak_sigma in int_result]
+            )
             keep = [peak_in is not None for peak_in in bank_intensity]
             if show_progress:
                 print(f"Integrated {sum(keep)} peaks out of {len(keep)} predicted")
-            
+
             if create_visualizations:
                 import matplotlib.pyplot as plt
+
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
                 axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[0].set_title("Predicted peaks")
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
-                for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
+                for p_i, p_j, p_h, p_k, p_l in zip(
+                    bank_i, bank_j, bank_h, bank_k, bank_l
+                ):
                     axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
-            	
+
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
                 cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
                 fig.colorbar(plt_im, cbar_ax)
-            	
+
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
-                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                            axes[1].plot(
+                                hull.points[simplex, 1],
+                                hull.points[simplex, 0],
+                                c="red",
+                            )
 
                 output_file = str(bank) + "_int.png"
                 if file_prefix is not None:
@@ -1126,20 +1152,20 @@ class Peaks:
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
 
-    def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
+    def coverage(self, h, k, l, UB, wavelength, tol=1e-3):  # noqa: E741
         wl_min, wl_max = wavelength
 
         hkl = np.stack([h, k, l], axis=0)
 
         Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
-        Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
+        Q = np.sqrt(Qx**2 + Qy**2 + Qz**2)
 
-        lamda = -4 * np.pi * Qz / Q ** 2
+        lamda = -4 * np.pi * Qz / Q**2
         mask = np.logical_and(lamda > wl_min, lamda < wl_max)
 
         Qx, Qy, Qz, Q = Qx[mask], Qy[mask], Qz[mask], Q[mask]
 
-        h, k, l, lamda = h[mask], k[mask], l[mask], lamda[mask]
+        h, k, l, lamda = h[mask], k[mask], l[mask], lamda[mask]  # noqa: E741
 
         tt = -2 * np.arcsin(Qz / Q)
         az = np.arctan2(Qy, Qx)
@@ -1156,10 +1182,10 @@ class Peaks:
         return [x[ind], y[ind], z[ind]], [h[ind], k[ind], l[ind]], lamda[ind], mult
 
     def predict_peaks(self, a, b, c, alpha, beta, gamma, centering, d_min, UB):
-        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, centering, d_min)
+        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, centering, d_min)  # noqa: E741
         wavelength = [self.wavelength_min, self.wavelength_max]
         xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
-        h, k, l = hkl
+        h, k, l = hkl  # noqa: E741
 
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
@@ -1179,7 +1205,7 @@ class Peaks:
         wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float],
-        bank: list[int]
+        bank: list[int],
     ):
         """
         Write output HDF5 file for peaks in detector space.

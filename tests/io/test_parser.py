@@ -13,7 +13,7 @@ def test_finder_function_tiff(meso_tiff):
     assert result == 0
 
 
-@pytest.mark.skip(reason="CliRunner usage issue - needs fixing")  
+@pytest.mark.skip(reason="CliRunner usage issue - needs fixing")
 def test_find_args_tiff(meso_tiff):
     runner = CliRunner(meso_tiff)
     test_args = ["finder", meso_tiff, "IMAGINE", "output.h5"]

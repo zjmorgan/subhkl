@@ -34,6 +34,7 @@ Notes
   (that is, it is consistent with constructing the rotation with from_rotvec)
   See here if you are interested: https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation#Rotation_identity
 """
+
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation

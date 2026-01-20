@@ -38,7 +38,7 @@ def finder(
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0
+    peak_pixel_outlier_threshold: float = 2.0,
 ):
     # Create peak finder from file + instrument
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -59,21 +59,25 @@ def finder(
             peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
         if peak_local_max_min_relative_intensity > 0:
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
-        peak_kwargs['normalize'] = peak_local_max_normalization
+        peak_kwargs["normalize"] = peak_local_max_normalization
     elif finder_algorithm == "thresholding":
-        peak_kwargs.update({
-            "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
-            "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-            "mask_file": thresholding_mask_file,
-            "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
-            "blur_kernel_sigma": thresholding_blur_kernel_sigma,
-            "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-            "show_steps": show_steps,
-            "show_scale": "log"
-        })
+        peak_kwargs.update(
+            {
+                "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
+                "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
+                "mask_file": thresholding_mask_file,
+                "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
+                "blur_kernel_sigma": thresholding_blur_kernel_sigma,
+                "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
+                "show_steps": show_steps,
+                "show_scale": "log",
+            }
+        )
     else:
-        raise ValueError("Invalid finder algorithm; only \"peak_local_max\" "
-                         "and \"thresholding\" are allowed")
+        raise ValueError(
+            'Invalid finder algorithm; only "peak_local_max" '
+            'and "thresholding" are allowed'
+        )
 
     # Setup parameters for integration with convex hull algorithm
     integration_params = {
@@ -84,7 +88,7 @@ def finder(
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
     }
 
     # Calculate the peaks in detector space
@@ -93,7 +97,7 @@ def finder(
         integration_params,
         visualize=create_visualizations,
         show_progress=show_progress,
-        file_prefix=filename
+        file_prefix=filename,
     )
 
     # Write out the output HDF5 peaks file
@@ -106,7 +110,7 @@ def finder(
         wavelength_maxes=detector_peaks.wavelength_maxes,
         intensity=detector_peaks.intensity,
         sigma=detector_peaks.sigma,
-        bank=detector_peaks.bank
+        bank=detector_peaks.bank,
     )
 
 
@@ -122,7 +126,7 @@ def finder_merger(
     gamma: float,
     wavelength_min: float,
     wavelength_max: float,
-    sample_centering: str
+    sample_centering: str,
 ):
     with open(finder_h5_txt_list_filename) as f:
         finder_h5_files = f.read().splitlines()
@@ -158,32 +162,25 @@ def indexer(
     goniometer_csv_filename: typing.Optional[str] = None,
     # --- Updated evosax CLI arguments ---
     strategy_name: str = typer.Option(
-        "DE", 
-        "--strategy", 
-        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+        "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
     n_runs: int = typer.Option(
-        1, 
-        "--n-runs", "-n", 
-        help="Number of optimization runs with different seeds."
+        1, "--n-runs", "-n", help="Number of optimization runs with different seeds."
     ),
     population_size: int = typer.Option(
-        1000, 
-        "--population-size", "--popsize", 
-        help="Population size for each generation."
+        1000,
+        "--population-size",
+        "--popsize",
+        help="Population size for each generation.",
     ),
-    gens: int = typer.Option(
-        100, 
-        "--gens", 
-        help="Number of generations to run."
-    ),
+    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
     seed: int = typer.Option(
-        0, 
-        "--seed", 
-        help="Base seed for the first optimization run."
+        0, "--seed", help="Base seed for the first optimization run."
     ),
     softness: float = 0.1,
-    bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
+    bootstrap_filename: typing.Optional[str] = typer.Option(
+        None, "--bootstrap", help="Previous HDF5 solution to refine"
+    ),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -240,33 +237,24 @@ def indexer(
 
 @app.command()
 def indexer_using_file(
-    hdf5_peaks_filename: str, 
+    hdf5_peaks_filename: str,
     output_peaks_filename: str,
     # --- Updated evosax CLI arguments ---
     strategy_name: str = typer.Option(
-        "DE", 
-        "--strategy", 
-        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+        "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
     n_runs: int = typer.Option(
-        1, 
-        "--n-runs", "-n", 
-        help="Number of optimization runs with different seeds."
+        1, "--n-runs", "-n", help="Number of optimization runs with different seeds."
     ),
     population_size: int = typer.Option(
-        1000, 
-        "--population-size", "--popsize", 
-        help="Population size for each generation."
+        1000,
+        "--population-size",
+        "--popsize",
+        help="Population size for each generation.",
     ),
-    gens: int = typer.Option(
-        100, 
-        "--gens", 
-        help="Number of generations to run."
-    ),
+    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
     seed: int = typer.Option(
-        0, 
-        "--seed", 
-        help="Base seed for the first optimization run."
+        0, "--seed", help="Base seed for the first optimization run."
     ),
 ):
     """
@@ -280,7 +268,7 @@ def indexer_using_file(
         population_size=population_size,
         gens=gens,
         n_runs=n_runs,
-        seed=seed
+        seed=seed,
     )
 
 
@@ -323,7 +311,9 @@ def index(
             if "optimization/best_params" in f:
                 init_params = f["optimization/best_params"][()]
             else:
-                print("WARNING: No optimization params found in bootstrap file. Starting random.")
+                print(
+                    "WARNING: No optimization params found in bootstrap file. Starting random."
+                )
 
     # Call the new evosax minimizer
     num, hkl, lamda, U = opt.minimize_evosax(
@@ -391,9 +381,8 @@ def peak_predictor(
     indexed_hdf5_filename: str,
     integration_peaks_filename: str,
     d_min: float = 1.0,
-    create_visualizations: bool = False
+    create_visualizations: bool = False,
 ):
-
     with h5py.File(indexed_hdf5_filename) as f_indexed:
         a = float(np.array(f_indexed["sample/a"]))
         b = float(np.array(f_indexed["sample/b"]))
@@ -401,37 +390,31 @@ def peak_predictor(
         alpha = float(np.array(f_indexed["sample/alpha"]))
         beta = float(np.array(f_indexed["sample/beta"]))
         gamma = float(np.array(f_indexed["sample/gamma"]))
-        centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
+        centering = np.array(f_indexed["sample/centering"]).item().decode("utf-8")
         wavelength = np.array(f_indexed["instrument/wavelength"])
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
-    peaks = Peaks(filename,
-                  instrument,
-                  wavelength_min=wavelength[0],
-                  wavelength_max=wavelength[1])
+    peaks = Peaks(
+        filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1]
+    )
 
     R = peaks.goniometer_rotation
     UB = R @ U @ B
 
-    peak_dict = peaks.predict_peaks(
-        a,
-        b,
-        c,
-        alpha,
-        beta,
-        gamma,
-        centering,
-        d_min,
-        UB
-    )
+    peak_dict = peaks.predict_peaks(a, b, c, alpha, beta, gamma, centering, d_min, UB)
 
     if create_visualizations:
         import matplotlib.pyplot as plt
 
         for bank, predicted_peaks in peak_dict.items():
             plt.imshow(peaks.ims[bank].T + 1, cmap="binary", norm="log")
-            plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
+            plt.scatter(
+                predicted_peaks[0],
+                predicted_peaks[1],
+                edgecolors="r",
+                facecolors="none",
+            )
             plt.title(str(bank))
             plt.savefig(filename + str(bank) + "_pred.png")
             plt.show()
@@ -447,7 +430,7 @@ def peak_predictor(
         f["instrument/wavelength"] = wavelength
         f["goniometer/R"] = R
 
-        for bank, (i, j, h, k, l, wl) in peak_dict.items():
+        for bank, (i, j, h, k, l, wl) in peak_dict.items():  # noqa: E741
             f[f"banks/{bank}/i"] = i
             f[f"banks/{bank}/j"] = j
             f[f"banks/{bank}/h"] = h
@@ -472,7 +455,7 @@ def integrator(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     create_visualizations: bool = False,
-    show_progress: bool = False
+    show_progress: bool = False,
 ):
     peak_dict = {}
     with h5py.File(integration_peaks_filename) as f:
@@ -483,7 +466,7 @@ def integrator(
                 np.array(f[f"banks/{bank}/h"]),
                 np.array(f[f"banks/{bank}/k"]),
                 np.array(f[f"banks/{bank}/l"]),
-                np.array(f[f"banks/{bank}/wavelength"])
+                np.array(f[f"banks/{bank}/wavelength"]),
             ]
 
     # Setup parameters for integration with convex hull algorithm
@@ -495,7 +478,7 @@ def integrator(
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
     }
 
     peaks = Peaks(filename, instrument)
@@ -505,7 +488,7 @@ def integrator(
         create_visualizations=create_visualizations,
         show_progress=show_progress,
         integration_method=integration_method,
-        file_prefix=filename
+        file_prefix=filename,
     )
 
     copy_keys = [

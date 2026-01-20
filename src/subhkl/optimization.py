@@ -15,6 +15,7 @@ try:
     import jax.numpy as jnp
     import jax.scipy.linalg as jscipy_linalg
     from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+
     HAS_JAX = True
 except ImportError:
     HAS_JAX = False
@@ -35,7 +36,7 @@ except ImportError:
 def require_jax():
     """
     Check if JAX is available and raise an informative error if not.
-    
+
     Raises
     ------
     ImportError
@@ -44,7 +45,7 @@ def require_jax():
     if not HAS_JAX:
         raise ImportError(
             "JAX and evosax are required for this functionality. "
-            "Install with: pip install -e \".[jax]\" or pip install jax jaxlib evosax"
+            'Install with: pip install -e ".[jax]" or pip install jax jaxlib evosax'
         )
 
 
@@ -52,10 +53,21 @@ class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
     (Replaces the numpy-based VectorizedObjective)
-    
+
     Note: Requires jax to be installed. Install with: pip install -e ".[jax]"
     """
-    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.15):
+
+    def __init__(
+        self,
+        B,
+        centering,
+        kf_ki_dir,
+        wavelength,
+        angle_cdf,
+        angle_t,
+        weights=None,
+        softness=0.15,
+    ):
         """
         Parameters
         ----------
@@ -121,7 +133,7 @@ class VectorizedObjectiveJAX:
         U : array (S, 3, 3)
             Sample orientation matrices for each set of input parameters.
         """
-        u0, u1, u2 = param.T # (S,) each
+        u0, u1, u2 = param.T  # (S,) each
 
         theta = jnp.arccos(1 - 2 * u0)
         phi = 2 * jnp.pi * u1
@@ -133,35 +145,35 @@ class VectorizedObjectiveJAX:
                 jnp.sin(theta) * jnp.sin(phi),
                 jnp.cos(theta),
             ]
-        ).T # (S, 3)
+        ).T  # (S, 3)
 
         # Rotation angle (omega)
-        omega = jnp.interp(u2, self.angle_cdf, self.angle_t) # (S,)
+        omega = jnp.interp(u2, self.angle_cdf, self.angle_t)  # (S,)
 
         # JAX implementation of axis-angle to rotation matrix (Rodrigues' formula)
-        wx, wy, wz = w.T # (S,) each
-        c = jnp.cos(omega) # (S,)
-        s = jnp.sin(omega) # (S,)
-        t = 1.0 - c # (S,)
+        wx, wy, wz = w.T  # (S,) each
+        c = jnp.cos(omega)  # (S,)
+        s = jnp.sin(omega)  # (S,)
+        t = 1.0 - c  # (S,)
 
         # Identity matrices
-        I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0) # (S, 3, 3)
+        I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0)  # noqa: E741 - (S, 3, 3)
 
         # Skew-symmetric cross-product matrix K
         K = jnp.array(
             [
                 [jnp.zeros_like(wx), -wz, wy],
                 [wz, jnp.zeros_like(wy), -wx],
-                [-wy, wx, jnp.zeros_like(wz)]
+                [-wy, wx, jnp.zeros_like(wz)],
             ]
-        ) # (3, 3, S)
-        K = jnp.transpose(K, (2, 0, 1)) # (S, 3, 3)
+        )  # (3, 3, S)
+        K = jnp.transpose(K, (2, 0, 1))  # (S, 3, 3)
 
         # K^2
-        K2 = jnp.einsum('sij,sjk->sik', K, K) # (S, 3, 3)
+        K2 = jnp.einsum("sij,sjk->sik", K, K)  # (S, 3, 3)
 
         # Rodrigues' formula
-        U = I + s[:, None, None] * K + t[:, None, None] * K2 # (S, 3, 3)
+        U = I + s[:, None, None] * K + t[:, None, None] * K2  # (S, 3, 3)
 
         return U
 
@@ -170,7 +182,7 @@ class VectorizedObjectiveJAX:
         Weighted soft-indexing objective.
         """
 
-        UB_inv = jnp.linalg.inv(UB) # (S, 3, 3)
+        UB_inv = jnp.linalg.inv(UB)  # (S, 3, 3)
 
         # map to HKL space
         hkl_lamda = jnp.einsum("sij,jm->sim", UB_inv, self.kf_ki_dir)
@@ -185,11 +197,11 @@ class VectorizedObjectiveJAX:
         dist_vec = jnp.einsum("sij,sjmd->simd", UB, diff_hkl_smooth)
 
         # Squared Euclidean distance for every wavelength candidate
-        dist_sq = jnp.sum(dist_vec**2, axis=1) # (S, M, 100)
+        dist_sq = jnp.sum(dist_vec**2, axis=1)  # (S, M, 100)
 
         valid = jnp.full_like(hkl[:, 0], True, dtype=bool)
 
-        h, k, l = jnp.round(hkl).transpose(1, 0, 2, 3)
+        h, k, l = jnp.round(hkl).transpose(1, 0, 2, 3)  # noqa: E741
 
         if self.centering == "A":
             valid = (k + l) % 2 == 0
@@ -213,27 +225,34 @@ class VectorizedObjectiveJAX:
         # dist_sq shape: (S, M, 100)
 
         # soft Wavelength Selection
-        min_dist_sq = jnp.min(dist_sq, axis=2) # (S, M)
+        min_dist_sq = jnp.min(dist_sq, axis=2)  # (S, M)
 
         # calculate probability of fit (0 to 1) for each peak
-        peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2)) # (S, M)
+        peak_probs = jnp.exp(-min_dist_sq / (2 * softness**2))  # (S, M)
 
         # apply weights: Strong peaks contribute more to the score
-        weighted_scores = peak_probs * self.weights[None, :] # (S, M)
+        weighted_scores = peak_probs * self.weights[None, :]  # (S, M)
 
         # If weights are normalized so mean(w)=1, this value is intuitively
         # "How many average-quality peaks did we index?"
-        total_score = jnp.sum(weighted_scores, axis=1) # (S,)
+        total_score = jnp.sum(weighted_scores, axis=1)  # (S,)
 
         # for reporting
-        ind = jnp.argmin(dist_sq, axis=2, keepdims=True) # (S, M, 1)
-        min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0] # (S, M)
-        int_hkl = jnp.take_along_axis(jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3)[..., 0]
+        ind = jnp.argmin(dist_sq, axis=2, keepdims=True)  # (S, M, 1)
+        min_lamb = jnp.take_along_axis(self.lamda[None], ind, axis=2)[:, :, 0]  # (S, M)
+        int_hkl = jnp.take_along_axis(
+            jnp.round(hkl).astype(jnp.int32), ind[:, None], axis=3
+        )[..., 0]
 
-        return self.max_score - total_score, total_score, int_hkl.transpose((0, 2, 1)), min_lamb
+        return (
+            self.max_score - total_score,
+            total_score,
+            int_hkl.transpose((0, 2, 1)),
+            min_lamb,
+        )
 
     # Use partial to make 'self' a static argument for JIT
-    @partial(jax.jit, static_argnames='self')
+    @partial(jax.jit, static_argnames="self")
     def __call__(self, x):
         """
         JIT-compiled objective function.
@@ -249,11 +268,11 @@ class VectorizedObjectiveJAX:
             Indexing error for each particle.
         """
 
-        U = self.orientation_U_jax(x) # (S, 3, 3)
+        U = self.orientation_U_jax(x)  # (S, 3, 3)
         UB = jnp.einsum("sij,jk->sik", U, self.B)
         # (S, 3, 3)
 
-#        error, num, hkl, lamda = self.indexer_jax(UB)
+        #        error, num, hkl, lamda = self.indexer_jax(UB)
         error, _, _, _ = self.indexer_soft_jax(UB, softness=self.softness)
 
         return error
@@ -311,30 +330,32 @@ class FindUB:
             self.gamma = f["sample/gamma"][()]
             self.wavelength = f["instrument/wavelength"][()]
             self.R = f["goniometer/R"][()]
-            
+
             # Handle both 'two_theta' and 'scattering' field names
             if "peaks/two_theta" in f:
                 self.two_theta = f["peaks/two_theta"][()]
             elif "peaks/scattering" in f:
                 self.two_theta = f["peaks/scattering"][()]
             else:
-                raise KeyError("Neither 'peaks/two_theta' nor 'peaks/scattering' found in HDF5 file")
-            
+                raise KeyError(
+                    "Neither 'peaks/two_theta' nor 'peaks/scattering' found in HDF5 file"
+                )
+
             self.az_phi = f["peaks/azimuthal"][()]
-            
+
             # Handle optional intensity and sigma fields
             if "peaks/intensity" in f:
                 self.intensity = f["peaks/intensity"][()]
             else:
                 # Use uniform weights if intensity not provided
                 self.intensity = np.ones(len(self.two_theta))
-            
+
             if "peaks/sigma" in f:
                 self.sigma_intensity = f["peaks/sigma"][()]
             else:
                 # Use small constant sigma if not provided
                 self.sigma_intensity = np.ones(len(self.two_theta)) * 0.1
-            
+
             self.centering = f["sample/centering"][()].decode("utf-8")
 
     def get_consistent_U_for_symmetry(self, U_mat, B_mat):
@@ -357,13 +378,11 @@ class FindUB:
             the input U to the unique one
         """
 
-        uc = gemmi.UnitCell(
-            self.a, self.b, self.c, self.alpha, self.beta, self.gamma
-        )
+        uc = gemmi.UnitCell(self.a, self.b, self.c, self.alpha, self.beta, self.gamma)
 
         # extract the proper rotations from the point group
         gops = gemmi.find_lattice_symmetry(uc, self.centering, max_obliq=3.0)
-        transforms = [ np.array(g.rot) // 24 for g in gops.sym_ops ]
+        transforms = [np.array(g.rot) // 24 for g in gops.sym_ops]
 
         # select a rotation that maximes the trace of UB
         cost, T = -np.inf, np.eye(3)
@@ -495,10 +514,10 @@ class FindUB:
 
     def minimize_evosax(
         self,
-        strategy_name: str, 
-        population_size: int = 1000, 
-        num_generations: int = 100, 
-        n_runs: int = 1, 
+        strategy_name: str,
+        population_size: int = 1000,
+        num_generations: int = 100,
+        n_runs: int = 1,
         seed: int = 0,
         softness: float = 1e-3,
         init_params: np.ndarray = None,
@@ -551,9 +570,9 @@ class FindUB:
             self.reciprocal_lattice_B(),
             self.centering,
             kf_ki_dir,
-            np.array(self.wavelength), # Pass wavelength bounds
-            self._angle_cdf,           # Pass interpolation data
-            self._angle_t,             # Pass interpolation data
+            np.array(self.wavelength),  # Pass wavelength bounds
+            self._angle_cdf,  # Pass interpolation data
+            self._angle_t,  # Pass interpolation data
             weights=weights,
             softness=softness,
         )
@@ -565,27 +584,22 @@ class FindUB:
         # clip_min/clip_max removed from constructor
         if strategy_name.lower() == "de":
             strategy = DifferentialEvolution(
-                solution=sample_solution,
-                population_size=population_size
+                solution=sample_solution, population_size=population_size
             )
-            strategy_type = 'population_based'
+            strategy_type = "population_based"
             print("Using Differential Evolution (DE) strategy.")
         elif strategy_name.lower() == "pso":
-            strategy = PSO(
-                solution=sample_solution,
-                population_size=population_size
-            )
-            strategy_type = 'population_based'
+            strategy = PSO(solution=sample_solution, population_size=population_size)
+            strategy_type = "population_based"
             print("Using Particle Swarm Optimization (PSO) strategy.")
         elif strategy_name.lower() == "cma_es":
-            strategy = CMA_ES(
-                solution=sample_solution,
-                population_size=population_size
-            )
-            strategy_type = 'distribution_based'
+            strategy = CMA_ES(solution=sample_solution, population_size=population_size)
+            strategy_type = "distribution_based"
             print("Using Covariance matrix adaptation evolution strategy (CMA-ES).")
         else:
-            raise ValueError(f"Unknown strategy: {strategy_name}. Choose 'DE' or 'PSO'.")
+            raise ValueError(
+                f"Unknown strategy: {strategy_name}. Choose 'DE' or 'PSO'."
+            )
 
         # 3. Get default strategy parameters
         params = strategy.default_params
@@ -616,7 +630,7 @@ class FindUB:
 
         for i in range(n_runs):
             run_seed = seed + i
-            print(f"\n--- Starting Run {i+1}/{n_runs} (Seed: {run_seed}) ---")
+            print(f"\n--- Starting Run {i + 1}/{n_runs} (Seed: {run_seed}) ---")
 
             # 6. Initialize strategy state for this run
             rng = jax.random.PRNGKey(run_seed)
@@ -626,17 +640,19 @@ class FindUB:
 
             if init_params is None:
                 # Initialize random state
-                if strategy_type == 'population_based':
+                if strategy_type == "population_based":
                     # Population is (popsize, 3) random numbers [0, 1]
                     population_init = jax.random.uniform(rng_pop, (population_size, 3))
 
                     # Evaluate the initial population
                     fitness_init = objective(population_init)
 
-                    state = strategy.init(rng_init, population_init, fitness_init, params)
-                elif strategy_type == 'distribution_based':
+                    state = strategy.init(
+                        rng_init, population_init, fitness_init, params
+                    )
+                elif strategy_type == "distribution_based":
                     # solution is (3, ) random numbers [0, 1]
-                    solution_init = jax.random.uniform(rng_pop, (3, ))
+                    solution_init = jax.random.uniform(rng_pop, (3,))
 
                     state = strategy.init(rng_init, solution_init, params)
                 else:
@@ -645,20 +661,22 @@ class FindUB:
             else:
                 # resume using save parameters
                 start_sol = jnp.array(init_params)
-                if strategy_type == 'population_based':
+                if strategy_type == "population_based":
                     # Initialize population as a tight Gaussian ball around the guess
                     # Sigma = 0.05 ensures we stay local but have some diversity
                     noise = jax.random.normal(rng_pop, (population_size, 3)) * 0.05
                     population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
                     fitness_init = objective(population_init)
-                    state = strategy.init(rng_init, population_init, fitness_init, params)
-                elif strategy_type == 'distribution_based': # e.g. CMA-ES
+                    state = strategy.init(
+                        rng_init, population_init, fitness_init, params
+                    )
+                elif strategy_type == "distribution_based":  # e.g. CMA-ES
                     # Initialize the mean of the distribution at our guess
                     state = strategy.init(rng_init, start_sol, params)
 
             pbar = range(num_generations)
             if trange is not None:
-                pbar = trange(num_generations, desc=f"Run {i+1}/{n_runs}")
+                pbar = trange(num_generations, desc=f"Run {i + 1}/{n_runs}")
 
             for gen in pbar:
                 # Run one step
@@ -666,19 +684,21 @@ class FindUB:
 
                 # Update progress bar description
                 if trange is not None:
-                    pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best Fitness: {metrics['best_fitness']:.4f}")
+                    pbar.set_description(
+                        f"Run {i + 1} Gen: {gen + 1}/{num_generations} | Best Fitness: {metrics['best_fitness']:.4f}"
+                    )
 
             # --- Correctly get best member and fitness ---
             # Access the attributes from the *final state*
             current_run_fitness = state.best_fitness
             current_run_member = state.best_solution
-            print(f"Run {i+1} finished. Best fitness: {current_run_fitness:.4f}")
+            print(f"Run {i + 1} finished. Best fitness: {current_run_fitness:.4f}")
 
             # 8. Check if this run is the best so far
             if current_run_fitness < best_overall_fitness:
                 best_overall_fitness = current_run_fitness
-                best_overall_member = current_run_member # This is now the jax array
-                print(f"!!! New best solution found in Run {i+1} !!!")
+                best_overall_member = current_run_member  # This is now the jax array
+                print(f"!!! New best solution found in Run {i + 1} !!!")
 
         # 9. Get the best parameters from all runs
         print(f"\n--- All {n_runs} runs complete ---")
@@ -691,6 +711,8 @@ class FindUB:
         U = objective.orientation_U_jax(self.x[None])[0]
         B = self.reciprocal_lattice_B()
         U_new, _ = self.get_consistent_U_for_symmetry(U, B)
-        _, score, hkl, lamb = objective.indexer_soft_jax((U_new @ B)[None], softness=softness)
+        _, score, hkl, lamb = objective.indexer_soft_jax(
+            (U_new @ B)[None], softness=softness
+        )
 
         return score[0], hkl[0], lamb[0], U_new

@@ -16,9 +16,6 @@ def test_sucrose(test_data_dir):
         U = f["sample/U"][()]
         B = f["sample/B"][()]
         R = f["goniometer/R"][()]
-        h = f["peaks/h"][()]
-        k = f["peaks/k"][()]
-        l = f["peaks/l"][()]  # noqa: E741
         lamda = f["peaks/lambda"][()]
 
     assert np.isclose(np.linalg.det(U), 1.0)
@@ -36,11 +33,11 @@ def test_sucrose(test_data_dir):
     # Test that uncertainty_line_segements works
     kf_ki_dir = opt.uncertainty_line_segements()
     assert kf_ki_dir.shape == (3, len(lamda))
-    
+
     # Test that we can compute the metric tensors
     G = opt.metric_G_tensor()
     assert G.shape == (3, 3)
-    
+
     Gstar = opt.metric_G_star_tensor()
     assert Gstar.shape == (3, 3)
     assert np.allclose(Gstar, np.linalg.inv(G))
@@ -48,7 +45,7 @@ def test_sucrose(test_data_dir):
     # Skip the actual optimization - it requires JAX and takes too long for unit tests
     # The original test had a while loop running optimize.minimize() multiple times
     # which would be better suited for integration tests
-    
+
 
 @pytest.mark.skip(reason="Test file commented out - needs real lysozyme data")
 def test_lysozyme(test_data_dir):
