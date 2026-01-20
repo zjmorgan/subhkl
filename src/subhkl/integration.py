@@ -6,11 +6,13 @@ from collections import namedtuple
 import numpy as np
 import numpy.typing as npt
 
+import h5py
 from h5py import File
 from PIL import Image
 
 import skimage.feature
 import scipy.optimize
+import scipy.ndimage
 
 from subhkl.config import (
     beamlines,
@@ -20,6 +22,7 @@ from subhkl.config import (
 )
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
+from subhkl.detector import Detector
 
 
 DetectorPeaks = namedtuple(
@@ -33,6 +36,9 @@ DetectorPeaks = namedtuple(
         "intensity",
         "sigma",
         "bank",
+        "gonio_axes",
+        "gonio_angles",
+        "gonio_names"
     ]
 )
 
@@ -82,11 +88,18 @@ class Peaks:
         name, ext = os.path.splitext(filename)
 
         self.instrument = instrument
+        
+        # Initialize goniometer data
+        self.goniometer_axes_raw = None
+        self.goniometer_angles_raw = None
+        self.goniometer_names_raw = None
 
         if goniometer_axes is not None and goniometer_angles is not None:
             self.goniometer_rotation = calc_goniometer_rotation_matrix(
                 goniometer_axes, goniometer_angles
             )
+            self.goniometer_axes_raw = goniometer_axes
+            self.goniometer_angles_raw = goniometer_angles
         else:
             # Use identity if goniometer matrix cannot otherwise be loaded
             self.goniometer_rotation = np.eye(3)
@@ -101,7 +114,15 @@ class Peaks:
                 self.get_wavelength_from_settings()
             )
             if goniometer_axes is None or goniometer_angles is None:
+                # Load rotation matrix AND raw data
                 self.goniometer_rotation = self.get_goniometer_from_nexus(filename)
+                # get_goniometer_from_nexus calls get_rotation_data_from_nexus internally but only returns matrix
+                # Let's call it directly to get raw data
+                axes, angles, names = get_rotation_data_from_nexus(filename, self.instrument)
+                self.goniometer_axes_raw = axes
+                self.goniometer_angles_raw = angles
+                self.goniometer_names_raw = names
+                
         else:
             self.ims = {0: np.array(Image.open(filename)).T}
             self.wavelength_min, self.wavelength_max = (
@@ -139,7 +160,7 @@ class Peaks:
             The goniometer rotation matrix calculated from the angles in the
             nexus file
         """
-        axes, angles = get_rotation_data_from_nexus(filename, self.instrument)
+        axes, angles, _ = get_rotation_data_from_nexus(filename, self.instrument)
         return calc_goniometer_rotation_matrix(axes, angles)
 
     def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
@@ -293,6 +314,14 @@ class Peaks:
         coords = alg.find_peaks(self.ims[bank])
         return coords[:, 0], coords[:, 1]
 
+    def get_detector(self, bank: int) -> Detector:
+        """
+        Get the Detector object for the specified bank.
+        """
+        bank_id = str(bank)
+        det_config = beamlines[self.instrument][bank_id]
+        return Detector(det_config)
+
     def scale_coordinates(self, bank: int, i: npt.NDArray, j: npt.NDArray) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Scale from pixel coordinates to real positions.
@@ -310,11 +339,12 @@ class Peaks:
             Image pixel position.
 
         """
-        width, height = self.detector_width_height(bank)
-
-        m, n = self.ims[bank].shape
-
-        return (i / (m - 1) - 0.5) * width, (j / (n - 1) - 0.5) * height
+        det = self.get_detector(bank)
+        # Using internal detector logic to map i -> u, j -> v
+        # Assuming the original intent was mapping pixels to physical width/height on the detector surface
+        x = (i / (det.m - 1) - 0.5) * det.width
+        y = (j / (det.n - 1) - 0.5) * det.height
+        return x, y
 
     def scale_ellipsoid(
         self,
@@ -361,136 +391,6 @@ class Peaks:
         new_theta = np.arctan2(eigvecs[1, 0], eigvecs[0, 0])
 
         return new_a, new_b, new_theta
-
-    def detector_width_height(self, bank: int) -> tuple[float, float]:
-        """
-        Return bank's width and height for instrument.
-
-        Parameters
-        ----------
-        bank : int
-            Bank number.
-
-        Returns
-        -------
-        width, height : array, float
-            Width and height of bank.
-        """
-        detector = beamlines[self.instrument][bank]
-
-        width = detector["width"]
-        height = detector["height"]
-
-        return width, height
-
-    def transform_from_detector(
-        self, bank: int, i: list[float] | npt.NDArray, j: list[float] | npt.NDArray
-    ) -> npt.NDArray:
-        """
-        Return real-space coordinates from detector using bank and image (i,j).
-
-        Parameters
-        ----------
-        bank : int
-            Bank number.
-        i, j : array, int
-            Image coordinates.
-
-        Returns
-        -------
-        x, y, z: array, float
-            Real-space coordinates
-        """
-        bank_id = str(bank)
-        detector = beamlines[self.instrument][bank_id]
-
-        m = detector["m"]
-        n = detector["n"]
-
-        width = detector["width"]
-        height = detector["height"]
-
-        c = np.array(detector["center"])
-        vhat = np.array(detector["vhat"])
-
-        u = np.array(i) / (m - 1) * width
-        v = np.array(j) / (n - 1) * height
-
-        dv = np.einsum("n,d->nd", v, vhat)
-
-        if detector["panel"] == "flat":
-            uhat = np.array(detector["uhat"])
-
-            du = np.einsum("n,d->nd", u, uhat)
-
-        else:
-            radius = detector["radius"]
-            rhat = np.array(detector["rhat"])
-
-            w = np.cross(vhat, rhat)
-
-            dvr = np.einsum("n,d->nd", radius * np.sin(u / radius), w)
-            dr = np.einsum("n,d->nd", radius * (np.cos(u / radius) - 1), rhat)
-
-            du = dr + dvr
-
-        return (c + du + dv).T
-
-    def transform_to_detector(
-        self, bank: int, X: float, Y: float, Z: float
-    ) -> tuple[npt.NDArray, npt.NDArray]:
-        """
-        Return image (i,j) using bank number and real-space coordinates (x, y, z).
-
-        Parameters
-        ----------
-        bank : int
-            Bank number.
-        X, Y, Z: array, float
-            Real-space coordinates
-
-        Returns
-        -------
-        i, j : array, int
-            Image coordinates.
-        """
-        p = np.array([X, Y, Z])
-
-        detector = beamlines[self.instrument][str(bank)]
-
-        m = detector["m"]
-        n = detector["n"]
-
-        width = detector["width"]
-        height = detector["height"]
-
-        c = np.array(detector["center"])
-        vhat = np.array(detector["vhat"])
-
-        dw = width / (m - 1)
-        dh = height / (n - 1)
-
-        j = np.clip(np.dot(p.T - c, vhat) / dh, 0, n)
-
-        if detector["panel"] == "flat":
-            uhat = np.array(detector["uhat"])
-
-            i = np.clip(np.dot(p.T - c, uhat) / dw, 0, m)
-
-        else:
-            radius = detector["radius"]
-            rhat = np.array(detector["rhat"])
-
-            d = p.T - c - (np.dot(p.T - c, vhat)[:, np.newaxis] * vhat)
-
-            what = np.cross(vhat, rhat)
-
-            dt = 2 * np.arctan(-np.dot(d, rhat) / np.dot(d, what))
-            dt = np.mod(dt, 2 * np.pi)
-
-            i = np.clip(dt * (radius / dw), 0, m)
-
-        return i.astype(int), j.astype(int)
 
     def allow_centering(self, h, k, l, centering="P"):
         if centering == "P":
@@ -557,93 +457,6 @@ class Peaks:
         mask = (d > d_min) & (d < np.inf)
 
         return self.allow_centering(h[mask], k[mask], l[mask], centering)
-
-    def reflections_mask(self, bank: int, xyz: list[float]) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
-        """
-        Return mask  using bank number and real-space coordinates (x, y, z).
-
-        Parameters
-        ----------
-        bank : int
-            Bank number.
-        xyz: array, float
-            Real-space coordinates
-
-        Returns
-        -------
-        mask: array, int
-            Mask for reflections.
-        i, j : array, int
-            Image coordinates.
-        """
-        x, y, z = xyz
-
-        detector = beamlines[self.instrument][str(bank)]
-
-        m = detector["m"]
-        n = detector["n"]
-
-        c = np.array(detector["center"])
-        vhat = np.array(detector["vhat"])
-
-        if detector["panel"] == "flat":
-            uhat = np.array(detector["uhat"])
-            norm = np.cross(uhat, vhat)
-
-            d = np.einsum("i,in->n", norm, [x, y, z])
-            t = np.dot(c, norm) / d
-
-        else:
-            radius = detector["radius"]
-
-            d = np.einsum("i,in->n", vhat, [x, y, z])
-
-            norm = np.sqrt(
-                (x - d * vhat[0]) ** 2 + (y - d * vhat[1]) ** 2 + (z - d * vhat[2]) ** 2
-            )
-
-            t = radius / norm
-
-        X, Y, Z = t * x, t * y, t * z
-
-        i, j = self.transform_to_detector(bank, X, Y, Z)
-
-        mask = (i > 0) & (j > 0) & (i < m - 1) & (j < n - 1) & (t > 0)
-
-        return mask, i, j
-
-    def detector_trajectories(
-        self,
-        bank: int,
-        x: list[float] | npt.NDArray,
-        y: list[float] | npt.NDArray
-    ) -> tuple[npt.NDArray, npt.NDArray]:
-        """
-        Calculate detector trajectories.
-
-        Parameters
-        ----------
-        bank : int
-            Bank number.
-        x, y : array, float
-            Pixel position in physical units.
-
-        Returns
-        -------
-        two_theta : array, float
-            Scattering angles in degrees.
-        az_phi : array, float
-            Azimuthal angles in degrees.
-
-        """
-
-        X, Y, Z = self.transform_from_detector(bank, x, y)
-
-        R = np.sqrt(X**2 + Y**2 + Z**2)
-        two_theta = np.rad2deg(np.arccos(Z / R))
-        az_phi = np.rad2deg(np.arctan2(Y, X))
-
-        return two_theta, az_phi
 
     def peak(self, x, y, A, B, mu_x, mu_y, sigma_1, sigma_2, theta):
         """
@@ -946,6 +759,9 @@ class Peaks:
         intensity: list[float] = []
         sigma: list[float] = []
         banks: list[int] = []
+        
+        # New: Goniometer raw data
+        gonio_angles_out: list[list[float]] = [] # list of lists (or arrays)
 
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
@@ -1000,68 +816,55 @@ class Peaks:
             if visualize:
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
                 if show_progress:
-                    print(f"Found {len(i)} candidate peaks")
+                    for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
+                        print(f'SNR: {peak_in / peak_sigma}')
 
-                centers = np.stack([i, j], axis=-1)
+                for _, hull, _, _ in hulls:
+                    if hull is not None:
+                        for simplex in hull.simplices:
+                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                axes[1].set_title("Convex hulls")
+                fig.subplots_adjust(right=0.8)
+                cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
+                fig.colorbar(plt_im, cbar_ax)
+                output_file = str(bank) + ".png"
+                if file_prefix is not None:
+                    output_file = file_prefix + "_" + output_file
+                fig.savefig(output_file)
+                plt.show()
 
-                # Integrate peaks
-                if visualize:
-                    int_result, hulls = integrator.integrate_peaks(bank, self.ims[bank], centers, return_hulls=True)
-                else:
-                    int_result = integrator.integrate_peaks(bank, self.ims[bank], centers)
-                    hulls = None
+            # Only add integrated peaks to data
+            if sum(keep) > 0:
+                i, j = i[keep], j[keep]
+                bank_intensity = bank_intensity[keep]
+                bank_sigma = bank_sigma[keep]
 
-                bank_intensity = np.array([peak_in for _, _, _, peak_in, _, _ in int_result])
-                bank_sigma = np.array([peak_sigma for _, _, _, _, _, peak_sigma in int_result])
-                keep = [peak_in is not None for peak_in in bank_intensity]
+                # Calculate peak angles
+                det = self.get_detector(bank)
+                tt, az = det.pixel_to_angles(i, j)
+                
+                num_new_peaks = len(tt)
 
-                if visualize:
-                    try:
-                        plt_im = axes[1].imshow(self.ims[bank], norm="log", cmap="binary")
-                        if show_progress:
-                            for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
-                                print(f'SNR: {peak_in / peak_sigma}')
-
-                        for _, hull, _, _ in hulls:
-                            if hull is not None:
-                                for simplex in hull.simplices:
-                                    axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-                        axes[1].set_title("Convex hulls")
-                        fig.subplots_adjust(right=0.8)
-                        cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
-                        fig.colorbar(plt_im, cbar_ax)
-                        output_file = str(bank) + ".png"
-                        if file_prefix is not None:
-                            output_file = file_prefix + "_" + output_file
-                        fig.savefig(output_file)
-                        plt.show()
-                    except Exception as e:
-                        print(f"Unable to create image for bank {bank}: {e}")
-
-                # Only add integrated peaks to data
-                if sum(keep) > 0:
-                    i, j = i[keep], j[keep]
-                    bank_intensity = bank_intensity[keep]
-                    bank_sigma = bank_sigma[keep]
-
-                    # Calculate peak angles
-                    tt, az = self.detector_trajectories(bank, i, j)
-
-                    # Add peak data to output
-                    two_theta += tt.tolist()
-                    az_phi += az.tolist()
-                    R += [self.goniometer_rotation] * len(tt)
-                    lamda_min += [self.wavelength_min] * len(tt)
-                    lamda_max += [self.wavelength_max] * len(tt)
-                    intensity += bank_intensity.tolist()
-                    sigma += bank_sigma.tolist()
-                    banks += [bank] * sum(keep)
-
-                    print(f"Integrated {len(i)}/{len(centers)} peaks")
-                else:
-                    print("Bank had 0 peaks")
-
-        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks)
+                # Add peak data to output
+                two_theta += tt.tolist()
+                az_phi += az.tolist()
+                R += [self.goniometer_rotation] * num_new_peaks
+                lamda_min += [self.wavelength_min] * num_new_peaks
+                lamda_max += [self.wavelength_max] * num_new_peaks
+                intensity += bank_intensity.tolist()
+                sigma += bank_sigma.tolist()
+                banks += [bank] * sum(keep)
+                
+                if self.goniometer_angles_raw is not None:
+                     # Replicate angles for each peak
+                     gonio_angles_out.extend([self.goniometer_angles_raw] * num_new_peaks)
+                
+                print(f"Integrated {len(i)}/{len(centers)} peaks")
+            else:
+                print("Bank had 0 peaks")
+                
+        # Return axes (global) and angles (per peak)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
     def integrate(
         self,
@@ -1083,7 +886,9 @@ class Peaks:
         for bank, peaks in peak_dict.items():
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
             centers = np.stack([bank_i, bank_j], axis=-1)
-            bank_tt, bank_az = self.detector_trajectories(bank, bank_i, bank_j)
+            
+            det = self.get_detector(bank)
+            bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
 
             if integration_params.get("region_growth_minimum_sigma") is not None:
                 if integration_params.get("integration_mask_file") is not None:
@@ -1165,6 +970,7 @@ class Peaks:
 
         h, k, l, lamda = h[mask], k[mask], l[mask], lamda[mask]
 
+        # Inverses of scattering_vector_from_angles, essentially
         tt = -2 * np.arcsin(Qz / Q)
         az = np.arctan2(Qy, Qx)
 
@@ -1187,7 +993,8 @@ class Peaks:
 
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
-            mask, i, j = self.reflections_mask(bank, xyz)
+            det = self.get_detector(bank)
+            mask, i, j = det.reflections_mask(xyz[0], xyz[1], xyz[2])
             peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask], wl[mask]]
 
         return peak_dict
@@ -1203,7 +1010,10 @@ class Peaks:
         wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float],
-        bank: list[int]
+        bank: list[int],
+        gonio_axes: list[list[float]] = None,
+        gonio_angles: list[list[float]] = None,
+        gonio_names: list[str] = None
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1228,6 +1038,12 @@ class Peaks:
             Uncertainty in integrated intensity of each peak
         bank: array, int
             Detector id for each peak
+        gonio_axes : array or list
+            Goniometer axes specifications
+        gonio_angles : array or list
+            Goniometer angles per peak (M, N_axes)
+        gonio_names : list[str]
+            Names of the goniometer axes
         """
         # Write HDF5 input file for indexer
         with File(output_filename, "w") as f:
@@ -1239,3 +1055,15 @@ class Peaks:
             f["peaks/intensity"] = intensity
             f["peaks/sigma"] = sigma
             f["bank"] = bank
+            
+            if gonio_axes is not None:
+                # Store axes separately since they are likely constant
+                f["goniometer/axes"] = gonio_axes
+            
+            if gonio_angles is not None:
+                f["goniometer/angles"] = gonio_angles
+                
+            if gonio_names is not None:
+                # Save as fixed-length strings (numpy S-type) or variable length
+                dt = h5py.string_dtype(encoding='utf-8')
+                f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
