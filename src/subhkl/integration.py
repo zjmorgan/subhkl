@@ -1085,6 +1085,18 @@ class Peaks:
             centers = np.stack([bank_i, bank_j], axis=-1)
             bank_tt, bank_az = self.detector_trajectories(bank, bank_i, bank_j)
 
+            if integration_params.get("region_growth_minimum_sigma") is not None:
+                if integration_params.get("integration_mask_file") is not None:
+                    mask = np.array(Image.open(integration_params["integration_mask_file"])).astype(bool)
+                else:
+                    mask = np.full(self.ims[bank].shape, True)
+                
+                mean = np.mean(self.ims[bank][mask])
+                std = np.std(self.ims[bank][mask])
+                n_sigma = integration_params["region_growth_minimum_sigma"]
+                integrator.region_grower.min_intensity = mean + n_sigma * std
+                print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
+
             int_result, hulls = integrator.integrate_peaks(
                 bank,
                 self.ims[bank],

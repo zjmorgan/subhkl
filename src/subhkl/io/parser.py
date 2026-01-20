@@ -465,8 +465,10 @@ def integrator(
     integration_peaks_filename: str,
     output_filename: str,
     integration_method: str,
+    integration_mask_file: typing.Optional[str] = None,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 4500.0,
+    region_growth_minimum_sigma: typing.Optional[float] = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,
@@ -492,12 +494,14 @@ def integrator(
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
         "region_growth_minimum_intensity": region_growth_minimum_intensity,
+        "region_growth_minimum_sigma": region_growth_minimum_sigma,
         "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
         "peak_center_box_size": peak_center_box_size,
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
+        "integration_mask_file": integration_mask_file
     }
 
     peaks = Peaks(filename, instrument)
