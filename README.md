@@ -1,6 +1,40 @@
 # subhkl
 Solving crystal orientation from Laue diffraction images
 
+## Installation
+
+### Option 1: Using uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package installer and resolver. If you don't have it installed:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then create a virtual environment and install the project:
+
+```bash
+uv venv env
+source env/bin/activate  # On Windows: env\Scripts\activate
+uv pip install -e .
+```
+
+### Option 2: Using standard Python venv
+
+```bash
+python -m venv env
+source env/bin/activate  # On Windows: env\Scripts\activate
+python -m pip install -e .
+```
+
+### Installing test dependencies
+
+```bash
+uv pip install -e ".[test]"  # with uv
+# or
+python -m pip install -e ".[test]"  # with pip
+```
+
 ## Running with docker
 
 Building:
