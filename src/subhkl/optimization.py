@@ -9,11 +9,21 @@ import scipy.interpolate
 
 import gemmi
 
-import jax
-import jax.numpy as jnp
-import jax.scipy.linalg as jscipy_linalg
-
-from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+# Try to import JAX and evosax (optional dependencies)
+try:
+    import jax
+    import jax.numpy as jnp
+    import jax.scipy.linalg as jscipy_linalg
+    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+    HAS_JAX = True
+except ImportError:
+    HAS_JAX = False
+    jax = None
+    jnp = None
+    jscipy_linalg = None
+    DifferentialEvolution = None
+    PSO = None
+    CMA_ES = None
 
 # Try to import tqdm for a progress bar
 try:
@@ -22,10 +32,28 @@ except ImportError:
     trange = None
 
 
+def require_jax():
+    """
+    Check if JAX is available and raise an informative error if not.
+    
+    Raises
+    ------
+    ImportError
+        If JAX and evosax are not installed.
+    """
+    if not HAS_JAX:
+        raise ImportError(
+            "JAX and evosax are required for this functionality. "
+            "Install with: pip install -e \".[jax]\" or pip install jax jaxlib evosax"
+        )
+
+
 class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
     (Replaces the numpy-based VectorizedObjective)
+    
+    Note: Requires jax to be installed. Install with: pip install -e ".[jax]"
     """
     def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.15):
         """
@@ -47,6 +75,7 @@ class VectorizedObjectiveJAX:
         softness : float
             Shape parameter for rounding hkls
         """
+        require_jax()
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
         self.softness = softness
@@ -477,6 +506,7 @@ class FindUB:
         (num, hkl, lamda)
             Tuple containing results from index_de().
         """
+        require_jax()
 
         kf_ki_dir = self.uncertainty_line_segements()
 

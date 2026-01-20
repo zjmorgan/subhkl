@@ -35,6 +35,29 @@ uv pip install -e ".[test]"  # with uv
 python -m pip install -e ".[test]"  # with pip
 ```
 
+### Installing optional JAX dependencies
+
+JAX is an optional dependency used for optimization algorithms. Since it can be difficult to install across platforms, it's not required by default. To use JAX-based optimization features (e.g., `minimize_evosax`, `VectorizedObjectiveJAX`):
+
+```bash
+uv pip install -e ".[jax]"  # with uv
+# or
+python -m pip install -e ".[jax]"  # with pip
+```
+
+**Checking for JAX availability in code:**
+
+```python
+import subhkl
+
+if subhkl.HAS_JAX:
+    # Use JAX-accelerated methods
+    opt.minimize_evosax("DE", population_size=1000)
+else:
+    # Fall back to alternative methods or inform user
+    print("JAX not available. Install with: pip install -e '.[jax]'")
+```
+
 ## Running with docker
 
 Building:

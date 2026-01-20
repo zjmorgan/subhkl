@@ -9,10 +9,7 @@ dependencies = [
     "scikit-image>=0.23.2",
     "typer>=0.12.3",
     "opencv-python>=4.11.0",
-    "gemmi>=0.7.3",
-    "jax",
-    "jaxlib",
-    "evosax"
+    "gemmi>=0.7.3"
 ]
 license = { text = "GPL3.0" }
 
@@ -30,6 +27,11 @@ lint = ["ruff>=0.2.0"]
 test = [
   "pytest>=8.0.2,<8.1.0",
   "pytest-cov>=4.1.0,<4.2.0",
+]
+jax = [
+  "jax",
+  "jaxlib",
+  "evosax"
 ]
 
 [tool.versioningit.vcs]
