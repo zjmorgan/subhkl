@@ -104,3 +104,49 @@ rs.concat(mtzs).hkl_to_asu().write_mtz("mesolite_202405/meso.mtz")
 
 which creates a single `.mtz` file `mesolite_202405/meso.mtz` that contains
 all reflections.
+
+## Developer Guide
+
+### Running Tests
+
+```bash
+pytest -v
+```
+
+### Running Linting
+
+```bash
+ruff format --check && ruff check
+```
+
+To auto-fix formatting issues:
+
+```bash
+ruff format
+```
+
+### Publishing a Release
+
+The project uses automated publishing to PyPI and GitHub Container Registry when you create a semantic version tag.
+
+**Prerequisites:**
+
+1. **Set up PyPI trusted publishing** (one-time setup):
+   - Go to https://pypi.org/manage/account/publishing/
+   - Add GitHub as a trusted publisher for your repository
+   - Set the workflow filename to `publish.yaml`
+   - Set the environment name to `pypi`
+
+2. **Create and push a release tag**:
+
+```bash
+# Create a new version tag (e.g., v0.1.0)
+git tag v0.1.0
+
+# Push the tag to GitHub
+git push origin v0.1.0
+```
+
+This will automatically:
+- Build and publish the package to PyPI
+- Build and push a Docker image to `ghcr.io/zjmorgan/subhkl:v0.1.0` (and `latest`)
