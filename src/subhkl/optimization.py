@@ -311,10 +311,30 @@ class FindUB:
             self.gamma = f["sample/gamma"][()]
             self.wavelength = f["instrument/wavelength"][()]
             self.R = f["goniometer/R"][()]
-            self.two_theta = f["peaks/two_theta"][()]
+            
+            # Handle both 'two_theta' and 'scattering' field names
+            if "peaks/two_theta" in f:
+                self.two_theta = f["peaks/two_theta"][()]
+            elif "peaks/scattering" in f:
+                self.two_theta = f["peaks/scattering"][()]
+            else:
+                raise KeyError("Neither 'peaks/two_theta' nor 'peaks/scattering' found in HDF5 file")
+            
             self.az_phi = f["peaks/azimuthal"][()]
-            self.intensity = f["peaks/intensity"][()]
-            self.sigma_intensity = f["peaks/sigma"][()]
+            
+            # Handle optional intensity and sigma fields
+            if "peaks/intensity" in f:
+                self.intensity = f["peaks/intensity"][()]
+            else:
+                # Use uniform weights if intensity not provided
+                self.intensity = np.ones(len(self.two_theta))
+            
+            if "peaks/sigma" in f:
+                self.sigma_intensity = f["peaks/sigma"][()]
+            else:
+                # Use small constant sigma if not provided
+                self.sigma_intensity = np.ones(len(self.two_theta)) * 0.1
+            
             self.centering = f["sample/centering"][()].decode("utf-8")
 
     def get_consistent_U_for_symmetry(self, U_mat, B_mat):
@@ -377,9 +397,13 @@ class FindUB:
             [np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt) - 1]
         )  # (3, M)
 
-        # self.R.shape == (M, 3, 3)
-        return np.einsum("mji,jm->im", self.R, kf_ki_dir)
-        # (3, M)
+        # Handle both cases: R as (3, 3) or (M, 3, 3)
+        if self.R.ndim == 2:
+            # Single rotation matrix applied to all peaks
+            return self.R @ kf_ki_dir  # (3, M)
+        else:
+            # Multiple rotation matrices, one per peak
+            return np.einsum("mji,jm->im", self.R, kf_ki_dir)  # (3, M)
 
     def metric_G_tensor(self):
         """

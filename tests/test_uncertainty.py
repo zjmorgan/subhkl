@@ -41,13 +41,13 @@ rate = calc_rate(xp, yp)
 v_min, v_max = 0, 1.5*rate.max()
 plt.imshow(rate, vmin=v_min, vmax=v_max)
 plt.title("Rate function")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 counts = simulate(1000, rate, np.random.default_rng())
 
 plt.imshow(counts[0], vmin=v_min, vmax=v_max)
 plt.title("A simulation")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 peak_integrator = PeakIntegrator(
     RegionGrower(
@@ -69,7 +69,7 @@ for _, hull, _, _ in hulls:
     for simplex in hull.simplices:
         plt.plot(hull.points[simplex, 0], hull.points[simplex, 1], c='r')
 plt.title("Convex hull")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 print("True intensity", true_intensity)
 print("Integration result")
 print(result)
@@ -89,11 +89,11 @@ for intensity in counts:
 
 plt.hist(integrated_i, bins=30)
 plt.title("Distribution of integrated intensities")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 plt.hist(integrated_sigma, bins=30)
 plt.title("Distribution of integrated sigmas")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 print("Mean integrated intensity", np.mean(integrated_i))
 print("Std integrated intensity", np.std(integrated_i))
@@ -112,11 +112,11 @@ for intensity in counts:
 
 plt.hist(new_integrated_i, bins=30)
 plt.title("Distribution of integrated intensities (new)")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 plt.hist(new_integrated_sigma, bins=30)
 plt.title("Distribution of integrated sigmas (new)")
-plt.show()
+plt.close()  # Close instead of show for non-interactive tests
 
 print("Mean integrated intensity (new)", np.mean(new_integrated_i))
 print("Std integrated intensity (new)", np.std(new_integrated_i))

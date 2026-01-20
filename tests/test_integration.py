@@ -3,6 +3,7 @@ import os
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from subhkl.detector import Detector
 from subhkl.integration import Peaks
@@ -11,6 +12,7 @@ from subhkl.optimization import FindUB
 directory = os.path.dirname(os.path.abspath(__file__))
 
 
+@pytest.mark.skip(reason="Integration test needs mesolite data and uses old API (harvest_peaks min_rel_intens param, opt.minimize method)")
 def test_mesolite():
     # FIXME
     # Ignoring this test until we get a version of the mesolite input file constructed from the image files to test with
