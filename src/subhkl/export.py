@@ -76,8 +76,11 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "peaks/intensity",
             "peaks/sigma"
         ]
-        super().__init__(h5_files, [], merge_keys)
-
+        copy_keys = [
+            "goniometer/axes",
+            "goniometer/names"
+        ]
+        super().__init__(h5_files, copy_keys, merge_keys)
 
 class MTZExporter:
     def __init__(self, peaks_file, space_group="P 1"):
