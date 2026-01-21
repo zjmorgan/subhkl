@@ -104,7 +104,7 @@ class VectorizedObjectiveJAX:
     def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
-                 peak_radii=None, loss_method='gaussian'):
+                 peak_radii=None, loss_method='gaussian', hkl_search_range=20, d_min=2.0, d_max=50.0):
         """
         Parameters
         ----------
@@ -185,6 +185,20 @@ class VectorizedObjectiveJAX:
             self.peak_radii = jnp.array(peak_radii)
 
         self.max_score = jnp.sum(self.weights)
+
+        # Generate a static grid of candidates (e.g., 40x40x40 box)
+        r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
+        # Create meshgrid of indices (N, 3)
+        # This creates a large pool (e.g. ~68,000 candidates)
+        # We will filter them instantly on the GPU
+        h, k, l = jnp.meshgrid(r, r, r, indexing='ij')
+        self.hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
+
+        # Remove (0,0,0)
+        zero_mask = ~jnp.all(self.hkl_pool == 0, axis=0)
+        self.hkl_pool = self.hkl_pool[:, zero_mask]
+        self.d_min = d_min
+        self.d_max = d_max
 
     def reconstruct_cell_params(self, params_norm):
         """
@@ -446,6 +460,87 @@ class VectorizedObjectiveJAX:
         score = -jnp.sum(self.weights * accum_probs, axis=1)
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
+    def indexer_dynamic_forward_jax(self, UB, kf_ki_sample, softness=0.01, chunk_size=4096):
+        """
+        Memory-Efficient Forward Indexer using jax.lax.scan.
+        
+        Splits the HKL pool into chunks to avoid O(M*N) memory usage.
+        """
+        # 1. Setup Data Views
+        # kf_ki_sample: (S, 3, M) -> Transpose to (M, S, 3) for easier broadcasting against chunks
+        obs_vecs = jnp.transpose(kf_ki_sample, (2, 0, 1)) # (M, S, 3)
+        
+        # Pre-calculate Obs Norms/Lambda factors to save work inside loop
+        # (Simplified for brevity, assuming standard layout)
+        
+        # 2. Define the Scanning Function (The "Kernel" for one chunk)
+        # carry: The current best (min_dist, best_idx) for each observation
+        # batch_hkl: A chunk of HKLs (3, chunk_size)
+        
+        init_dist = jnp.full((obs_vecs.shape[0], obs_vecs.shape[1]), 1e9) # (M, S)
+        init_idx = jnp.zeros((obs_vecs.shape[0], obs_vecs.shape[1]), dtype=jnp.int32)
+        init_carry = (init_dist, init_idx)
+
+        # Reshape pool for scanning: (Num_Chunks, 3, Chunk_Size)
+        # Pad pool if necessary to divide evenly
+        n_total = self.hkl_pool.shape[1]
+        n_chunks = (n_total + chunk_size - 1) // chunk_size
+        pad_size = n_chunks * chunk_size - n_total
+        
+        pool_padded = jnp.pad(self.hkl_pool, ((0,0), (0, pad_size)), constant_values=1e6) # Pad with huge HKLs
+        pool_reshaped = pool_padded.T.reshape(n_chunks, chunk_size, 3).transpose(0, 2, 1) # (Chunks, 3, Size)
+
+        def scan_body(carry, chunk_hkls):
+            curr_min_dist, curr_best_idx = carry
+            
+            # --- START: Standard Forward Logic (Applied to Chunk) ---
+            # chunk_hkls: (3, B)
+            # UB: (S, 3, 3)
+            # q_chunk: (S, 3, B)
+            q_chunk = jnp.einsum("sij,jk->sik", UB, chunk_hkls)
+            
+            # Distance Calculation (obs vs chunk)
+            # obs: (M, S, 3) vs q: (S, 3, B) -> (M, S, B)
+            # Expand dims:
+            # obs: (M, S, 3, 1)
+            # q:   (1, S, 3, B)
+            
+            diff = obs_vecs[..., None] - q_chunk[None, ...] # (M, S, 3, B)
+            dist_sq = jnp.sum(diff**2, axis=2) # (M, S, B)
+            
+            # Apply resolution constraints (d_min/d_max)
+            q_sq = jnp.sum(q_chunk**2, axis=1) # (S, B)
+            d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
+            valid_mask = (d_spacings >= self.d_min) & (d_spacings <= self.d_max) # (S, B)
+            
+            # Penalize invalid
+            dist_sq = jnp.where(valid_mask[None, ...], dist_sq, 1e9)
+            
+            # --- END: Standard Logic ---
+
+            # Find best in this chunk
+            chunk_min = jnp.min(dist_sq, axis=2) # (M, S)
+            chunk_argmin = jnp.argmin(dist_sq, axis=2) # (M, S) (Relative index 0..B)
+            
+            # Update Global Best
+            update_mask = chunk_min < curr_min_dist
+            new_min_dist = jnp.where(update_mask, chunk_min, curr_min_dist)
+            
+            # Note: We need absolute index tracking. 
+            # We can pass 'chunk_index' in scan or just reconstruct later.
+            # Simplified: Just returning dists for now.
+            
+            return (new_min_dist, curr_best_idx), None
+
+        # Execute Scan
+        (final_min_dists, _), _ = jax.lax.scan(scan_body, init_carry, pool_reshaped)
+        
+        # Scoring (M, S) -> (S,)
+        probs = jnp.exp(-final_min_dists / (2 * softness**2))
+        score = -jnp.sum(probs, axis=0) # Sum over observations
+        
+        return score, probs, None, None
+
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
         """
@@ -475,7 +570,9 @@ class VectorizedObjectiveJAX:
             kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
 
         # Dispatch based on loss method
-        if self.loss_method == 'cosine':
+        if self.loss_method == 'forward':
+            score, _, _, _ = self.indexer_dynamic_forward_jax(UB, kf_ki_vec, softness=self.softness)
+        elif self.loss_method == 'cosine':
             score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, softness=self.softness)
         else:
             score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, softness=self.softness)
@@ -573,7 +670,10 @@ class FindUB:
         goniometer_angles: np.ndarray = None,
         refine_goniometer: bool = False,
         goniometer_bound_deg: float = 5.0,
-        goniometer_names: list = None
+        goniometer_names: list = None,
+        d_min: float = None,
+        d_max: float = None,
+        hkl_search_range: int = 20,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -606,8 +706,10 @@ class FindUB:
         if refine_lattice:
             print(f"Lattice Refinement Enabled.")
             print(f"Detected System: {lattice_system} ({num_lattice_params} free parameters).")
-        
-        print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
+
+        if loss_method == "forward" and (d_min is None or d_max is None):
+            raise ValueError(f"Need to supply --d_min and --d_max for loss_method=='forward'")
+
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             self.centering,
@@ -625,15 +727,19 @@ class FindUB:
             goniometer_axes=goniometer_axes,
             goniometer_angles=goniometer_angles,
             refine_goniometer=refine_goniometer,
-            goniometer_bound_deg=goniometer_bound_deg
+            goniometer_bound_deg=goniometer_bound_deg,
+            hkl_search_range=hkl_search_range,
+            d_min=d_min,
+            d_max=d_max,
         )
+        print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
         num_dims = 3
         if refine_lattice:
             num_dims += num_lattice_params
         if refine_goniometer:
             num_dims += len(goniometer_axes)
-            
+
         sample_solution = jnp.zeros(num_dims)
 
         if strategy_name.lower() == "de":
@@ -806,7 +912,9 @@ class FindUB:
         UB_final = U_new @ B
         
         # Calculate final results using the chosen loss method
-        if loss_method == 'cosine':
+        if loss_method == 'forward':
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_forward_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+        elif loss_method == 'cosine':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness)
         else:
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)

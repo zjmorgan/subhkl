@@ -30,6 +30,9 @@ def index(
     nexus_filename: str = None,
     instrument_name: str = None,
     loss_method: str = 'cosine',
+    hkl_search_range: int = 20,
+    d_min: float = None,
+    d_max: float = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -93,6 +96,9 @@ def index(
         goniometer_bound_deg=goniometer_bound_deg,
         goniometer_names=goniometer_names,
         loss_method=loss_method,
+        d_min=d_min,
+        d_max=d_max,
+        hkl_search_range=hkl_search_range,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -366,6 +372,21 @@ def indexer(
         "--loss-method",
         help="Loss to use for optimization. Possible values are 'gaussian' or 'cosine' (default)."
     ),
+    d_min: float = typer.Option(
+        None,
+        "--d-min",
+        help="High resolution cut-off (in A) for 'forward' indexing method",
+    ),
+    d_max: float = typer.Option(
+        None,
+        "--d-max",
+        help="Low resolution cut-off (in A) for 'forward' indexing method",
+    ),
+    hkl_search_range: int = typer.Option(
+        20,
+        "--hkl-search-range",
+        help="Maximum Miller index for 'forward' indexing method",
+    ),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -454,6 +475,9 @@ def indexer(
         nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,
         loss_method=loss_method,
+        hkl_search_range=hkl_search_range,
+        d_min=d_min,
+        d_max=d_max,
     )
 
 
