@@ -235,19 +235,48 @@ class ThresholdingPeakFinder:
             plt.show()
             plt.savefig('final_contours.png')
 
-        if len(contours) > 0:
-            contour_centers = np.stack([np.mean(c[:, 0, :], axis=0) for c in contours])
-        else:
-            contour_centers = np.empty((0, 2))
+        refined_centers = []
+        for c in contours:
+            # 1. Create a mask for just this peak
+            # Create a small ROI to avoid full-image processing
+            x, y, w, h = cv2.boundingRect(c)
+            roi_mask = np.zeros((h, w), dtype=np.uint8)
+
+            # Shift contour to ROI coordinates
+            c_roi = c - np.array([x, y])
+            cv2.drawContours(roi_mask, [c_roi], -1, 1, -1) # Fill contour
+
+            # 2. Extract Intensity ROI
+            roi_im = im[y:y+h, x:x+w].astype(float)
+
+            # 3. Calculate Moments on Intensity-Weighted ROI
+            # We multiply the binary shape mask by the actual pixel values
+            weighted_roi = roi_im * roi_mask
+
+            # Subtract local background (optional, but recommended)
+            # Simple version: subtract min in ROI to remove pedestal
+            bg_level = np.min(weighted_roi[roi_mask > 0])
+            weighted_roi = np.maximum(0, weighted_roi - bg_level)
+
+            M = cv2.moments(weighted_roi)
+
+            if M["m00"] > 0:
+                cX = x + (M["m10"] / M["m00"])
+                cY = y + (M["m01"] / M["m00"])
+                refined_centers.append([cY, cX]) # Store as (Row, Col) / (y, x)
+            else:
+                # Fallback to geometric center if moment fails (flat zero intensity)
+                mean_pos = np.mean(c[:, 0, :], axis=0)
+                refined_centers.append([mean_pos[1], mean_pos[0]])
 
         if self.show_steps:
             plt.imshow(im, norm=self.show_scale, cmap="binary")
-            plt.scatter(contour_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
+            plt.scatter(refined_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
             plt.title("Peaks")
             plt.show()
             plt.savefig('peaks.png')
 
-        if len(contours) > 0:
-            return np.stack([contour_centers[:, 1], contour_centers[:, 0]], axis=1)
+        if len(refined_centers) > 0:
+            return np.array(refined_centers)
         else:
             return np.empty((0, 2))
