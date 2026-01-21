@@ -820,7 +820,7 @@ class FindUB:
 
             current_run_fitness = state.best_fitness
             current_run_member = state.best_solution
-            print(f"Run {i+1} finished. Best Peaks: {-current_run_fitness:.2f} (weighted by S/N)")
+            print(f"Run {i+1} finished. Best Peaks: {-current_run_fitness:.2f}")
 
             if current_run_fitness < best_overall_fitness:
                 best_overall_fitness = current_run_fitness
@@ -828,7 +828,7 @@ class FindUB:
                 print(f"!!! New best solution found in Run {i+1} !!!")
 
         print(f"\n--- All {n_runs} runs complete ---")
-        print(f"Best overall peaks: {-best_overall_fitness:.2f}")
+        print(f"Best overall peaks: {-best_overall_fitness:.2f} (weighted by S/N)")
         
         self.x = np.array(best_overall_member)
 
