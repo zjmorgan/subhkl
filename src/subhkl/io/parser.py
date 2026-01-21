@@ -33,6 +33,7 @@ def index(
     hkl_search_range: int = 20,
     d_min: float = None,
     d_max: float = None,
+    search_window_size: int = 256,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -387,6 +388,11 @@ def indexer(
         "--hkl-search-range",
         help="Maximum Miller index for 'forward' indexing method",
     ),
+    search_window_size: int = typer.Option(
+        256,
+        "--search-window-size",
+        help="Aziumuthal search window size for 'forward' indexing method",
+    ),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -478,6 +484,7 @@ def indexer(
         hkl_search_range=hkl_search_range,
         d_min=d_min,
         d_max=d_max,
+        search_window_size=search_window_size,
     )
 
 

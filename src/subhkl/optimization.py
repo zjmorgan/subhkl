@@ -7,8 +7,6 @@ import scipy.linalg
 import scipy.spatial
 import scipy.interpolate
 
-import gemmi
-
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jscipy_linalg
@@ -85,7 +83,7 @@ class VectorizedObjectiveJAX:
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  peak_radii=None, loss_method='gaussian', 
                  # New Args for Forward Indexing
-                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=512):
+                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256):
         
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
@@ -600,24 +598,6 @@ class FindUB:
             if "goniometer/names" in f:
                  self.goniometer_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
 
-    def get_consistent_U_for_symmetry(self, U_mat, B_mat):
-        uc = gemmi.UnitCell(
-            self.a, self.b, self.c, self.alpha, self.beta, self.gamma
-        )
-        gops = gemmi.find_lattice_symmetry(uc, self.centering, max_obliq=3.0)
-        transforms = [ np.array(g.rot) // 24 for g in gops.sym_ops ]
-        transforms = [M for M in transforms if np.isclose(np.linalg.det(M), 1.0)]
-
-        cost, T = -np.inf, np.eye(3)
-        for M in transforms:
-            UBp = U_mat @ B_mat @ np.linalg.inv(M) @ np.linalg.inv(B_mat)
-            trace = np.trace(UBp)
-            if trace > cost:
-                cost = trace
-                T = M.copy()
-        U_prime = U_mat @ B_mat @ np.linalg.inv(T) @ np.linalg.inv(B_mat)
-        return U_prime, T
-
     def reciprocal_lattice_B(self):
         alpha = np.deg2rad(self.alpha)
         beta = np.deg2rad(self.beta)
@@ -651,6 +631,7 @@ class FindUB:
         d_min: float = None,
         d_max: float = None,
         hkl_search_range: int = 20,
+        search_window_size: int = 256,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -664,6 +645,7 @@ class FindUB:
              goniometer_names = self.goniometer_names
 
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
+        num_obs = kf_ki_dir_lab.shape[1]
         
         if refine_goniometer:
             kf_ki_input = kf_ki_dir_lab
@@ -832,11 +814,13 @@ class FindUB:
                 rng, state, metrics = es_step(rng, state, params)
                 if trange is not None:
                     current_peaks = -metrics['best_fitness']
-                    pbar.set_description(f"Run {i+1} Gen: {gen+1}/{num_generations} | Best: {current_peaks:.2f} peaks")
+                    pbar.set_description(
+                        f"Run {i+1} Gen: {gen+1}/{num_generations} | Best: {current_peaks:.1f}/{num_obs} peaks"
+                    )
 
             current_run_fitness = state.best_fitness
             current_run_member = state.best_solution
-            print(f"Run {i+1} finished. Best Peaks: {-current_run_fitness:.2f}")
+            print(f"Run {i+1} finished. Best Peaks: {-current_run_fitness:.2f} (weighted by S/N)")
 
             if current_run_fitness < best_overall_fitness:
                 best_overall_fitness = current_run_fitness
@@ -885,9 +869,8 @@ class FindUB:
         else:
             kf_ki_vec = kf_ki_input
 
-        U_new, _ = self.get_consistent_U_for_symmetry(U, B)
-        UB_final = U_new @ B
-        
+        UB_final = U @ B
+
         # Calculate final results using the chosen loss method
         if loss_method == 'forward':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], softness=softness)
@@ -897,6 +880,6 @@ class FindUB:
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
 
         num_peaks_soft = float(jnp.sum(accum_probs[0]))
-        print(f"Final Solution indexed {num_peaks_soft:.2f} peaks (Effective Count).")
+        print(f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count).")
 
-        return num_peaks_soft, hkl[0], lamb[0], U_new
+        return num_peaks_soft, hkl[0], lamb[0], U
