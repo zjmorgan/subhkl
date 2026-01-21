@@ -589,6 +589,7 @@ class FindUB:
             self.az_phi = f["peaks/azimuthal"][()]
             self.intensity = f["peaks/intensity"][()]
             self.sigma_intensity = f["peaks/sigma"][()]
+            self.radii = f["peaks/radius"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
             
             if "goniometer/axes" in f:
@@ -680,6 +681,7 @@ class FindUB:
             softness=softness,
             loss_method=loss_method,
             cell_params=cell_params_init,
+            peak_radii=self.radii,
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
             lattice_system=lattice_system,
