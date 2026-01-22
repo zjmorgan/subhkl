@@ -1001,7 +1001,7 @@ class Peaks:
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
 
-    def coverage(self, h, k, l, UB, wavelength, tol=1e-3):
+    def coverage(self, h, k, l, UB, wavelength, tol=1e-5):
         wl_min, wl_max = wavelength
 
         hkl = np.stack([h, k, l], axis=0)

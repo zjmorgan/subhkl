@@ -162,7 +162,7 @@ class Detector:
 
             i = np.clip(dt * (self.radius / dw), 0, self.m)
 
-        return i.astype(int), j.astype(int)
+        return i, j
 
     def pixel_to_angles(self, i: npt.ArrayLike, j: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
         """
