@@ -908,7 +908,7 @@ class Peaks:
                 print(f"Integrated {len(i)}/{len(centers)} peaks")
             else:
                 print("Bank had 0 peaks")
-                
+               
         # Return axes (global) and angles (per peak)
         return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
@@ -1039,9 +1039,16 @@ class Peaks:
 
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
+            # Keep other banks normal so you don't break the whole app
             det = self.get_detector(bank)
+
             mask, i, j = det.reflections_mask(xyz[0], xyz[1], xyz[2])
-            peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask], wl[mask]]
+
+            # 2. Flip Col (Horizontal)
+            col_visual = (det.m - 1) - i
+
+            # 3. Return [Row, Col]
+            peak_dict[bank] = [j[mask], col_visual[mask], h[mask], k[mask], l[mask], wl[mask]]
 
         return peak_dict
 
