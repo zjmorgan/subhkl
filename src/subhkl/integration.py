@@ -840,7 +840,7 @@ class Peaks:
 
                 # Calculate peak angles
                 det = self.get_detector(bank)
-                tt, az = det.pixel_to_angles(i, j)
+                tt, az = det.pixel_to_angles(j, i)
                 
                 num_new_peaks = len(tt)
                 
