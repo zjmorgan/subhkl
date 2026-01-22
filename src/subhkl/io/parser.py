@@ -681,6 +681,7 @@ def integrator(
     output_filename: str,
     integration_method: str,
     integration_mask_file: typing.Optional[str] = None,
+    integration_mask_rel_erosion_radius: typing.Optional[float] = 0.05,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_minimum_sigma: typing.Optional[float] = None,
@@ -716,7 +717,8 @@ def integrator(
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
         "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
-        "integration_mask_file": integration_mask_file
+        "integration_mask_file": integration_mask_file,
+        "integration_mask_rel_erosion_radius": integration_mask_rel_erosion_radius,
     }
 
     peaks = Peaks(filename, instrument)

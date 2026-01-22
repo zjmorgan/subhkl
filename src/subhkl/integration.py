@@ -13,6 +13,7 @@ from PIL import Image
 import skimage.feature
 import scipy.optimize
 import scipy.ndimage
+import cv2
 
 from subhkl.config import (
     beamlines,
@@ -938,10 +939,13 @@ class Peaks:
 
             if integration_params.get("region_growth_minimum_sigma") is not None:
                 if integration_params.get("integration_mask_file") is not None:
-                    mask = np.array(Image.open(integration_params["integration_mask_file"])).astype(bool)
+                    mask = np.array(Image.open(integration_params["integration_mask_file"]))
+                    radius = max(1, int(min(mask.shape) * integration_params["integration_mask_rel_erosion_radius"]))
+                    kernel = np.ones((radius, radius), dtype=np.uint8)
+                    mask = cv2.erode(mask, kernel).astype(bool)
                 else:
                     mask = np.full(self.ims[bank].shape, True)
-                
+
                 mean = np.mean(self.ims[bank][mask])
                 std = np.std(self.ims[bank][mask])
                 n_sigma = integration_params["region_growth_minimum_sigma"]
@@ -971,8 +975,14 @@ class Peaks:
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
-            	
+
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+
+                forbidden = ~mask
+                overlay = np.zeros((*forbidden.shape, 4))
+                overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
+                axes[1].imshow(overlay)
+
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
                 cbar_ax = fig.add_axes((0.85, 0.15, 0.05, 0.7))
