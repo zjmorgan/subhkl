@@ -815,6 +815,12 @@ class Peaks:
 
             if visualize:
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+
+                forbidden = ~self.mask
+                overlay = np.zeros((*forbidden.shape, 4))
+                overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
+                axes[1].imshow(overlay)
+
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
                         print(f'SNR: {peak_in / peak_sigma}')
@@ -937,20 +943,38 @@ class Peaks:
             det = self.get_detector(bank)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
 
-            if integration_params.get("region_growth_minimum_sigma") is not None:
-                if integration_params.get("integration_mask_file") is not None:
-                    mask = np.array(Image.open(integration_params["integration_mask_file"]))
-                    radius = max(1, int(min(mask.shape) * integration_params["integration_mask_rel_erosion_radius"]))
-                    kernel = np.ones((radius, radius), dtype=np.uint8)
-                    mask = cv2.erode(mask, kernel).astype(bool)
-                else:
-                    mask = np.full(self.ims[bank].shape, True)
+            if integration_params.get("integration_mask_file") is not None:
+                mask = np.array(Image.open(integration_params["integration_mask_file"]))
+                radius = max(1, int(min(mask.shape) * integration_params["integration_mask_rel_erosion_radius"]))
+                kernel = np.ones((radius, radius), dtype=np.uint8)
+                mask = cv2.erode(mask, kernel).astype(bool)
+            else:
+                mask = np.full(self.ims[bank].shape, True)
 
+            if integration_params.get("region_growth_minimum_sigma") is not None:
                 mean = np.mean(self.ims[bank][mask])
                 std = np.std(self.ims[bank][mask])
                 n_sigma = integration_params["region_growth_minimum_sigma"]
                 integrator.region_grower.min_intensity = mean + n_sigma * std
                 print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
+
+            # FILTER STEP: Only keep centers that are inside the valid mask region
+            # centers is (N, 2) array of [row, col]
+            valid_indices = []
+            for idx, (r, c) in enumerate(centers):
+                r_int, c_int = int(r), int(c)
+                # Check bounds and mask (mask is True for Valid, False for Masked/Forbidden)
+                if (0 <= r_int < mask.shape[0] and
+                    0 <= c_int < mask.shape[1] and
+                    mask[r_int, c_int]):
+                    valid_indices.append(idx)
+            centers = centers[valid_indices]
+            bank_tt = bank_tt[valid_indices]
+            bank_az = bank_az[valid_indices]
+            bank_h = bank_h[valid_indices]
+            bank_k = bank_k[valid_indices]
+            bank_l = bank_l[valid_indices]
+            bank_wl = bank_wl[valid_indices]
 
             int_result, hulls = integrator.integrate_peaks(
                 bank,
