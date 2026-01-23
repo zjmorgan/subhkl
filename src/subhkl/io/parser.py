@@ -35,6 +35,7 @@ def index(
     d_max: float = None,
     search_window_size: int = 256,
     batch_size: int = None,
+    window_batch_size: int = 32,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -103,6 +104,7 @@ def index(
         hkl_search_range=hkl_search_range,
         search_window_size=search_window_size,
         batch_size=batch_size,
+        window_batch_size=window_batch_size,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -399,8 +401,13 @@ def indexer(
     batch_size: int = typer.Option(
         None,
         "--batch-size",
-        help="Parallel batch size (>=1) for independent runs, reduce to save GPU memory",
-    )
+        help="Parallel batch size for independent runs, reduce to save GPU memory",
+    ),
+    window_batch_size: int = typer.Option(
+        32,
+        "--window-batch-size",
+        help="Parallel batch size for --method=forward kernel, reduce to save GPU memory",
+    ),
 ) -> None:
     """
     Find peaks, prepare, and index them from command-line parameters.
@@ -494,6 +501,7 @@ def indexer(
         d_max=d_max,
         search_window_size=search_window_size,
         batch_size=batch_size,
+        window_batch_size=window_batch_size,
     )
 
 

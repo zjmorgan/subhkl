@@ -83,7 +83,7 @@ class VectorizedObjectiveJAX:
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  peak_radii=None, loss_method='gaussian', 
                  # New Args for Forward Indexing
-                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256):
+                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32):
         
         self.B = jnp.array(B)
         self.kf_ki_dir = jnp.array(kf_ki_dir)
@@ -142,6 +142,7 @@ class VectorizedObjectiveJAX:
         self.d_min = d_min
         self.d_max = d_max
         self.search_window_size = search_window_size
+        self.window_batch_size = window_batch_size
 
         # 1. Generate Static HKL Pool
         r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
@@ -368,158 +369,124 @@ class VectorizedObjectiveJAX:
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
 
-    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, softness=0.01):
+    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, softness=0.01, window_batch_size=32):
         """
-        Forward Indexer with Azimuthal Binary Search.
-        
-        1. Rotate Obs to Crystal Frame (U_inv * Obs).
-        2. Calculate Phi of Obs.
-        3. Binary Search sorted HKL pool for nearby Phi.
-        4. Select small window of HKLs.
-        5. Compute score on subset.
+        Forward Indexer with Azimuthal Binary Search (Memory Optimized).
+        Batches the search window using jax.lax.scan to prevent OOM with large windows.
         """
         # 1. Transform Observations to Crystal Frame
-        # Obs: (S, 3, M)
-        # U_inv is just U.T for rotation matrices
-        # UB contains B, so we want to invert UB?
-        # Ideally: k_crys = B * h.  k_lab = U * k_crys. 
-        # So k_crys_obs = U_inv * k_lab.
-        
-        # UB = U @ B. 
-        # We need U to rotate k_lab back to crystal frame.
-        # But UB is computed directly. 
-        # We can reconstruct U if needed, or if refined lattice, we rely on UB.
-        # If we use UB_inv, we get fractional coordinates hkl_float directly?
-        # That's what the Soft Indexer does (hkl_float = UB_inv * k).
-        
-        # FOR BINARY SEARCH: We want Cartesian Crystal vectors to check angles.
-        # This matches our pool (B @ hkl).
-        # So we want to remove U from k_lab.
-        # k_cart_crys = U_inv * k_lab.
-        
-        # However, we only have UB in the function signature usually.
-        # But 'orientation_U_jax' generated U in __call__. 
-        # Let's verify __call__ logic.
-        # In __call__, we calculate U and B separately, then UB.
-        # But we pass UB to the indexer.
-        # TO FIX: We need U passed to this function, OR we assume B is approx identity for angle check.
-        # Better: Recalculate U_inv roughly or pass U? 
-        # Modifying signature of indexers might break polymorphism?
-        # Actually, U is orthogonal, so U_inv = U.T.
-        # We can get U back from UB via Polar Decomposition if B is symmetric positive definite?
-        # Easier: Just perform the full UB_inv projection (like Soft Indexer) to get hkl_float.
-        # Then calculate Phi of hkl_float!
-        # This is robust to any U or B.
-        
+        # UB_inv approximation for finding rough HKLs
         UB_inv = jnp.linalg.inv(UB)
         hkl_float = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample) # (S, 3, M)
         
         # 2. Calculate Phi of the observed fractional HKLs
-        # Note: Our pool is sorted by Phi of (B_init @ h).
-        # hkl_float is roughly h. 
-        # If B is diagonal/simple, Phi(h) ~ Phi(B@h).
-        # If B is skewed (Triclinic), we should multiply by B_init to match the pool sorting frame.
-        
-        hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float) # Use INITIAL B for consistency with sorted pool
-        
-        # Calculate Phi
+        # Use INITIAL B to match the sorting frame of the HKL pool
+        hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float)
         phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :]) # (S, M)
         
-        # 3. Binary Search
-        # We perform search on the sorted pool_phi array.
-        # pool_phi_sorted is (N_pool,).
-        # We want indices for each (S, M).
+        # 3. Binary Search for Center Indices
+        idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs) # (S, M)
         
-        # searchsorted requires 1D haystack. vmap it?
-        # pool is constant.
-        idx = jnp.searchsorted(self.pool_phi_sorted, phi_obs) # (S, M)
-        
-        # 4. Gather Window
-        # We want indices [idx - w, ..., idx + w]
-        # Handle wrap-around using mode='wrap' in take.
+        # 4. Prepare Window Batches
+        # We process the window [idx - half, idx + half] in chunks
         half_win = self.search_window_size // 2
-        offsets = jnp.arange(-half_win, half_win + 1) # (W,)
+        raw_offsets = jnp.arange(-half_win, half_win + 1)
         
-        # gather_idx: (S, M, W)
-        gather_idx = idx[..., None] + offsets[None, None, :]
+        # Pad offsets to ensure they divide evenly by window_batch_size
+        remainder = raw_offsets.shape[0] % window_batch_size
+        if remainder != 0:
+            pad_len = window_batch_size - remainder
+            # Pad with the last offset (harmless redundant check)
+            offsets_padded = jnp.pad(raw_offsets, (0, pad_len), constant_values=raw_offsets[-1])
+        else:
+            offsets_padded = raw_offsets
+            
+        # Reshape into batches: (Num_Batches, Batch_Size)
+        num_batches = offsets_padded.shape[0] // window_batch_size
+        offset_batches = offsets_padded.reshape(num_batches, window_batch_size)
+
+        # 5. Define Scan Body (Process one batch of window candidates)
+        # Carry state: (current_min_dist_sq, current_best_hkl, current_best_lamb)
         
-        # Gather HKLs
-        # self.pool_hkl_sorted: (3, N)
-        # Result: (S, M, W, 3)
-        # Transpose pool to (N, 3) for easier taking
-        pool_T = self.pool_hkl_sorted.T 
+        # Initialize carry with "infinity"
+        init_min_dist = jnp.full(idx_centers.shape, 1e9)
+        init_best_hkl = jnp.zeros(idx_centers.shape + (3,)) # (S, M, 3)
+        init_best_lamb = jnp.zeros(idx_centers.shape)       # (S, M)
         
-        # Use take with wrap to handle indices < 0 or > N
-        hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode='wrap') # (S, M, W, 3)
+        init_carry = (init_min_dist, init_best_hkl, init_best_lamb)
+
+        def scan_body(carry, batch_offsets):
+            curr_min_dist, curr_best_hkl, curr_best_lamb = carry
+            
+            # A. Gather HKLs for this batch
+            # batch_offsets: (B,) -> broadcast to (S, M, B)
+            gather_idx = idx_centers[..., None] + batch_offsets[None, None, :]
+            
+            # Retrieve HKLs from pool (handle wrap-around)
+            pool_T = self.pool_hkl_sorted.T 
+            hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode='wrap') # (S, M, B, 3)
+            
+            # B. Predict Q and Lambda
+            # UB: (S, 3, 3) -> (S, 1, 1, 3, 3)
+            # hkl: (S, M, B, 3) -> (S, M, B, 3, 1)
+            q_pred = jnp.einsum("sij,smwj->smwi", UB, hkl_cands)
+            
+            # k_obs: (S, M, 1, 3)
+            k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
+            
+            # Lambda Optimization
+            k_dot_q = jnp.sum(k_obs * q_pred, axis=3) # (S, M, B)
+            lambda_opt = self.k_sq_invariant[None, :, None] / jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
+            
+            # C. Validation Masks
+            valid_lamb = (lambda_opt >= self.wl_min_val) & (lambda_opt <= self.wl_max_val)
+            
+            q_sq = jnp.sum(q_pred**2, axis=3)
+            d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
+            valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
+            
+            valid_mask = valid_lamb & valid_res
+            
+            # D. Compute Distance
+            q_obs_opt = k_obs / jnp.where(lambda_opt==0, 1.0, lambda_opt)[..., None]
+            diff = q_obs_opt - q_pred
+            dist_sq = jnp.sum(diff**2, axis=3) # (S, M, B)
+            
+            # Apply mask (set invalid to infinity)
+            dist_sq_masked = jnp.where(valid_mask, dist_sq, 1e9)
+            
+            # E. Find best within this batch
+            batch_min_dist = jnp.min(dist_sq_masked, axis=2) # (S, M)
+            batch_best_local_idx = jnp.argmin(dist_sq_masked, axis=2)
+            
+            # Extract corresponding HKL/Lambda
+            batch_best_hkl = jnp.take_along_axis(hkl_cands, batch_best_local_idx[..., None, None], axis=2).squeeze(axis=2)
+            batch_best_lamb = jnp.take_along_axis(lambda_opt, batch_best_local_idx[..., None], axis=2).squeeze(axis=2)
+            
+            # F. Update Global Best (Running Minimum)
+            improve_mask = batch_min_dist < curr_min_dist
+            
+            new_min_dist = jnp.where(improve_mask, batch_min_dist, curr_min_dist)
+            new_best_hkl = jnp.where(improve_mask[..., None], batch_best_hkl, curr_best_hkl)
+            new_best_lamb = jnp.where(improve_mask, batch_best_lamb, curr_best_lamb)
+            
+            return (new_min_dist, new_best_hkl, new_best_lamb), None
+
+        # 6. Execute Scan
+        final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
+        best_dist_sq, best_hkl, best_lamb = final_carry
         
-        # 5. Predict and Score (Vectorized on Window)
-        # Predict Q for candidates using CURRENT UB
-        # hkl_cands: (S, M, W, 3)
-        # UB: (S, 3, 3)
-        # q_pred = UB * hkl
-        # shape match: UB (S, 1, 1, 3, 3) @ hkl (S, M, W, 3, 1) -> (S, M, W, 3)
-        q_pred = jnp.einsum("sij,smwj->smwi", UB, hkl_cands)
-        
-        # Obs: kf_ki_sample (S, 3, M) -> (S, M, 1, 3)
-        k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
-        
-        # Pairwise Dot Product for Lambda Optimization
-        # k . q
-        k_dot_q = jnp.sum(k_obs * q_pred, axis=3) # (S, M, W)
-        
-        # Lambda = k^2 / (k.q)
-        # k_sq_invariant: (M,) -> (1, M, 1)
-        lambda_opt = self.k_sq_invariant[None, :, None] / jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-        
-        # Masks
-        # 1. Wavelength limits
-        valid_lamb = (lambda_opt >= self.wl_min_val) & (lambda_opt <= self.wl_max_val)
-        
-        # 2. Resolution (d-spacing) limits on HKLs
-        # q_sq = |UB h|^2
-        q_sq = jnp.sum(q_pred**2, axis=3)
-        d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
-        valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
-        
-        # Calculate Distance (using Optimal Lambda)
-        # q_obs_opt = k / lambda
-        q_obs_opt = k_obs / jnp.where(lambda_opt==0, 1.0, lambda_opt)[..., None]
-        
-        diff = q_obs_opt - q_pred
-        dist_sq = jnp.sum(diff**2, axis=3) # (S, M, W)
-        
-        # Combined Mask (S, M, W)
-        valid_mask = valid_lamb & valid_res
-        
-        # Penalize invalid
-        dist_sq_masked = jnp.where(valid_mask, dist_sq, 1e9)
-        
-        # Find Best Match in Window
-        min_dist_sq = jnp.min(dist_sq_masked, axis=2) # (S, M)
-        best_win_idx = jnp.argmin(dist_sq_masked, axis=2) # (S, M)
-        
-        # Extract Best HKL and Lambda
-        # hkl_cands: (S, M, W, 3)
-        # best_win_idx: (S, M) -> expand to (S, M, 1, 1) for take? 
-        # Use take_along_axis
-        
-        # HKL
-        # We need to take from axis 2.
-        best_hkl = jnp.take_along_axis(hkl_cands, best_win_idx[..., None, None], axis=2).squeeze(axis=2)
-        # Shape (S, M, 3) -> Transpose to (S, 3, M) to match signature
-        best_hkl = best_hkl.transpose((0, 2, 1))
-        
-        # Lambda
-        best_lamb = jnp.take_along_axis(lambda_opt, best_win_idx[..., None], axis=2).squeeze(axis=2) # (S, M)
-        
-        # Score
+        # 7. Final Score Calculation
         k_norm = jnp.sqrt(self.k_sq_invariant) # (M,)
         effective_sigma = softness + (k_norm[None, :] / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
         
-        probs = jnp.exp(-min_dist_sq / (2 * effective_sigma**2))
+        # Avoid division by zero in exp if sigma is tiny
+        probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
+        
+        # If best_dist_sq is still 1e9 (no valid match found), prob becomes ~0
         score = -jnp.sum(self.weights * probs, axis=1)
         
-        return score, probs, best_hkl, best_lamb
+        return score, probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
@@ -547,7 +514,8 @@ class VectorizedObjectiveJAX:
             kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
 
         if self.loss_method == 'forward':
-            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, softness=self.softness,
+                window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
             score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, softness=self.softness)
         else:
@@ -633,7 +601,8 @@ class FindUB:
         d_max: float = None,
         hkl_search_range: int = 20,
         search_window_size: int = 256,
-        batch_size: int = None,  # <--- New argument for memory control
+        batch_size: int = None,
+        window_batch_size: int = 32,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
@@ -697,6 +666,7 @@ class FindUB:
             search_window_size=search_window_size,
             d_min=d_min,
             d_max=d_max,
+            window_batch_size=window_batch_size,
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
