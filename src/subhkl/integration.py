@@ -794,7 +794,11 @@ class Peaks:
             centers = np.stack([i, j], axis=-1)
 
             if harvest_peaks_kwargs.get("mask_file") is not None:
-                mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"])).astype(bool)
+                mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"]))
+                if 'mask_rel_erosion_radius' in harvest_peaks_kwargs and harvest_peaks_kwargs['mask_rel_erosion_radius'] is not None:
+                    radius = max(1, int(min(mask.shape) * harvest_peaks_kwargs['mask_rel_erosion_radius']))
+                    kernel = np.ones((radius, radius), dtype=np.uint8)
+                    mask = cv2.erode(mask, kernel).astype(bool)
             else:
                 mask = np.full(self.ims[bank].shape, True)
 
