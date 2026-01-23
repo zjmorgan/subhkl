@@ -816,7 +816,7 @@ class Peaks:
             if visualize:
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
 
-                forbidden = ~self.mask
+                forbidden = ~mask
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
                 axes[1].imshow(overlay)
@@ -847,10 +847,12 @@ class Peaks:
 
                 # Calculate peak angles
                 det = self.get_detector(bank)
-                tt, az = det.pixel_to_angles(j, i)
-                
+
+                # Pass i (Row), j (Col) consistently
+                tt, az = det.pixel_to_angles(i, j)
+
                 num_new_peaks = len(tt)
-                
+
                 # --- Calculate peak angular radii ---
                 kept_indices = np.where(keep)[0]
                 bank_radii = []
@@ -1074,8 +1076,12 @@ class Peaks:
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
             det = self.get_detector(bank)
-            mask, i, j = det.reflections_mask(xyz[0], xyz[1], xyz[2])
-            peak_dict[bank] = [i[mask], j[mask], h[mask], k[mask], l[mask], wl[mask]]
+            
+            # Clean and centralized!
+            # mask, row, col are already in correct Image Space
+            mask, row, col = det.reflections_mask(xyz[0], xyz[1], xyz[2])
+            
+            peak_dict[bank] = [row[mask], col[mask], h[mask], k[mask], l[mask], wl[mask]]
 
         return peak_dict
 
