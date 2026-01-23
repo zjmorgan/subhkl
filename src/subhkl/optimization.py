@@ -633,11 +633,14 @@ class FindUB:
         d_max: float = None,
         hkl_search_range: int = 20,
         search_window_size: int = 256,
+        batch_size: int = None,  # <--- New argument for memory control
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
+        Uses jax.vmap with batch_size logic to handle massive n_runs without OOM.
         """
 
+        # --- 1. Setup Data and Configurations (CPU Side) ---
         if goniometer_axes is None and self.goniometer_axes is not None:
              goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
@@ -670,6 +673,7 @@ class FindUB:
         if loss_method == "forward" and (d_min is None or d_max is None):
             raise ValueError(f"Need to supply --d_min and --d_max for loss_method=='forward'")
 
+        # --- 2. Initialize JAX Objective ---
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             self.centering,
@@ -690,16 +694,44 @@ class FindUB:
             refine_goniometer=refine_goniometer,
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
+            search_window_size=search_window_size,
             d_min=d_min,
             d_max=d_max,
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
+        # --- 3. Determine Dimension and Strategy ---
         num_dims = 3
         if refine_lattice:
             num_dims += num_lattice_params
         if refine_goniometer:
             num_dims += len(goniometer_axes)
+
+        # Prepare init_params
+        start_sol_processed = None
+        if init_params is not None:
+            start_sol = jnp.array(init_params)
+            if start_sol.shape[0] != num_dims:
+                if start_sol.shape[0] < num_dims:
+                    print(f"Bootstrapping: extending solution from {start_sol.shape[0]} to {num_dims} dims.")
+                    n_new = num_dims - start_sol.shape[0]
+                    padding = jnp.full((n_new,), 0.5)
+                    start_sol_processed = jnp.concatenate([start_sol, padding])
+                else:
+                    n_gonio = len(goniometer_axes) if refine_goniometer else 0
+                    if n_gonio > 0:
+                        sliced_sol = jnp.concatenate([start_sol[:3], start_sol[-n_gonio:]])
+                    else:
+                        sliced_sol = start_sol[:3]
+
+                    if sliced_sol.shape[0] == num_dims:
+                        print(f"Bootstrapping: reducing solution from {start_sol.shape[0]} to {num_dims} dims.")
+                        start_sol_processed = sliced_sol
+                    else:
+                        print(f"Warning: init_params shape {start_sol.shape} mismatch. Ignoring.")
+                        start_sol_processed = None
+            else:
+                start_sol_processed = start_sol
 
         sample_solution = jnp.zeros(num_dims)
 
@@ -715,125 +747,119 @@ class FindUB:
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
-        params = strategy.default_params
+        es_params = strategy.default_params
 
+        # --- 4. Define Single Run Function (for lax.map) ---
         @jax.jit
-        def es_step(rng, state, params):
-            rng, rng_ask, rng_tell = jax.random.split(rng, 3)
-            population, state = strategy.ask(rng_ask, state, params)
-            population_clipped = jnp.clip(population, 0.0, 1.0)
-            fitness = objective(population_clipped)
-            state, metrics = strategy.tell(rng_tell, population_clipped, fitness, state, params)
-            return rng, state, metrics
-
-        best_overall_fitness = jnp.inf
-        best_overall_member = None
-
-        for i in range(n_runs):
-            run_seed = seed + i
-            print(f"\n--- Starting Run {i+1}/{n_runs} (Seed: {run_seed}) ---")
-
-            rng = jax.random.PRNGKey(run_seed)
-            rng, rng_pop, rng_init = jax.random.split(rng, 3)
-
-            if init_params is None:
-                if strategy_type == 'population_based':
-                    population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
-                    fitness_init = objective(population_init)
-                    state = strategy.init(rng_init, population_init, fitness_init, params)
-                elif strategy_type == 'distribution_based':
-                    solution_init = jax.random.uniform(rng_pop, (num_dims, ))
-                    state = strategy.init(rng_init, solution_init, params)
-            else:
-                start_sol = jnp.array(init_params)
-
-                if start_sol.shape[0] != num_dims:
-                    # CASE 1: Solution is too small (Padding)
-                    if start_sol.shape[0] < num_dims:
-                        print(f"Bootstrapping: extending solution from {start_sol.shape[0]} to {num_dims} dims.")
-                        n_new = num_dims - start_sol.shape[0]
-                        padding = jnp.full((n_new,), 0.5)
-                        start_sol = jnp.concatenate([start_sol, padding])
-
-                        # Initialize state with padded solution
-                        if strategy_type == 'population_based':
-                            noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
-                            population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
-                            fitness_init = objective(population_init)
-                            state = strategy.init(rng_init, population_init, fitness_init, params)
-                        elif strategy_type == 'distribution_based':
-                            state = strategy.init(rng_init, start_sol, params)
-
-                    # CASE 2: Solution is too large (Slicing) - THIS FIXES YOUR BUG
-                    else:
-                        # Attempt to slice: Keep first 3 (Orientation) and last N (Goniometer)
-                        # This drops the middle parameters (Lattice), which matches your workflow.
-                        n_gonio = len(goniometer_axes) if refine_goniometer else 0
-                        n_keep_end = n_gonio
-                        
-                        # If we have goniometer params, we take the last n_gonio params.
-                        # If not, we only take the first 3 (Orientation).
-                        if n_keep_end > 0:
-                            sliced_sol = jnp.concatenate([start_sol[:3], start_sol[-n_keep_end:]])
-                        else:
-                            sliced_sol = start_sol[:3]
-
-                        if sliced_sol.shape[0] == num_dims:
-                            print(f"Bootstrapping: reducing solution from {start_sol.shape[0]} to {num_dims} dims (dropping intermediate lattice params).")
-                            start_sol = sliced_sol
-                            
-                            # Initialize state with sliced solution
-                            if strategy_type == 'population_based':
-                                noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
-                                population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
-                                fitness_init = objective(population_init)
-                                state = strategy.init(rng_init, population_init, fitness_init, params)
-                            elif strategy_type == 'distribution_based':
-                                state = strategy.init(rng_init, start_sol, params)
-                        else:
-                            print(f"Warning: init_params shape {start_sol.shape} mismatch. Restarting random.")
-                            if strategy_type == 'population_based':
-                                 population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
-                                 fitness_init = objective(population_init)
-                                 state = strategy.init(rng_init, population_init, fitness_init, params)
-                            else:
-                                 state = strategy.init(rng_init, jax.random.uniform(rng_pop, (num_dims, )), params)
-                else:
-                    # Exact match case
+        def run_batch_of_optimizations(rng_keys):
+            """
+            Runs a batch of independent optimizations in parallel using vmap.
+            """
+            def run_single(rng_key):
+                rng, rng_pop, rng_init = jax.random.split(rng_key, 3)
+                
+                # A. Initialization
+                if start_sol_processed is not None:
+                    # [Initialization logic same as before...]
                     if strategy_type == 'population_based':
                         noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
-                        population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                        population_init = jnp.clip(start_sol_processed + noise, 0.0, 1.0)
                         fitness_init = objective(population_init)
-                        state = strategy.init(rng_init, population_init, fitness_init, params)
-                    elif strategy_type == 'distribution_based':
-                        state = strategy.init(rng_init, start_sol, params)
+                        state = strategy.init(rng_init, population_init, fitness_init, es_params)
+                    else:
+                        state = strategy.init(rng_init, start_sol_processed, es_params)
+                else:
+                    # [Random init logic same as before...]
+                    if strategy_type == 'population_based':
+                        population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                        fitness_init = objective(population_init)
+                        state = strategy.init(rng_init, population_init, fitness_init, es_params)
+                    else:
+                        solution_init = jax.random.uniform(rng_pop, (num_dims, ))
+                        state = strategy.init(rng_init, solution_init, es_params)
 
-            pbar = range(num_generations)
+                # B. Generation Loop
+                def scan_step(carry, _):
+                    rng, state = carry
+                    rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+                    x, state_ask = strategy.ask(rng_ask, state, es_params)
+                    x = jnp.clip(x, 0.0, 1.0)
+                    fitness = objective(x) 
+                    state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
+                    return (rng, state_tell), None
+
+                (final_rng, final_state), _ = jax.lax.scan(
+                    scan_step, 
+                    (rng, state), 
+                    None, 
+                    length=num_generations
+                )
+                return final_state.best_fitness, final_state.best_solution
+
+            # Use vmap to run this batch in parallel
+            return jax.vmap(run_single)(rng_keys)
+
+        # --- 5. Execute with Python-Side Batching (Restores Progress Bar) ---
+        
+        # Default batch_size to n_runs (all at once) if not specified
+        # If n_runs is huge, user SHOULD specify batch_size to avoid OOM
+        exec_batch_size = batch_size if batch_size is not None else n_runs
+        
+        print(f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---")
+        
+        # Generate all seeds upfront
+        rng_key_root = jax.random.PRNGKey(seed)
+        all_keys = jax.random.split(rng_key_root, n_runs)
+        
+        results_fitness = []
+        results_solutions = []
+
+        # Python Loop over Batches
+        total_batches = int(np.ceil(n_runs / exec_batch_size))
+        
+        # Setup Progress Bar
+        pbar = range(total_batches)
+        if trange is not None:
+            pbar = trange(total_batches, desc="Optimization Batches")
+
+        best_so_far = np.inf
+
+        for i in pbar:
+            # Slicing the keys for this batch
+            start_idx = i * exec_batch_size
+            end_idx = min((i + 1) * exec_batch_size, n_runs)
+            batch_keys = all_keys[start_idx:end_idx]
+            
+            # Run JIT-compiled batch
+            b_fit, b_sol = run_batch_of_optimizations(batch_keys)
+            
+            # Move results to CPU list to free GPU memory
+            results_fitness.append(np.array(b_fit))
+            results_solutions.append(np.array(b_sol))
+            
+            # Update Progress Bar description with best fit from this batch
+            current_min = np.min(b_fit)
+            if current_min < best_so_far:
+                best_so_far = current_min
+            
             if trange is not None:
-                pbar = trange(num_generations, desc=f"Run {i+1}/{n_runs}")
+                pbar.set_description(f"Batch {i+1}/{total_batches} | Best: {-best_so_far:.1f} peaks")
 
-            for gen in pbar:
-                rng, state, metrics = es_step(rng, state, params)
-                if trange is not None:
-                    current_peaks = -metrics['best_fitness']
-                    pbar.set_description(
-                        f"Run {i+1} Gen: {gen+1}/{num_generations} | Best: {current_peaks:.1f}/{num_obs} peaks"
-                    )
+        # Concatenate all results
+        all_fitness = np.concatenate(results_fitness, axis=0)
+        all_solutions = np.concatenate(results_solutions, axis=0)
 
-            current_run_fitness = state.best_fitness
-            current_run_member = state.best_solution
-            print(f"Run {i+1} finished. Best Peaks: {-current_run_fitness:.2f}")
+        # --- 6. Gather Results ---
+        best_idx = np.argmin(all_fitness)
+        best_overall_fitness = all_fitness[best_idx]
+        best_overall_member = all_solutions[best_idx]
 
-            if current_run_fitness < best_overall_fitness:
-                best_overall_fitness = current_run_fitness
-                best_overall_member = current_run_member
-                print(f"!!! New best solution found in Run {i+1} !!!")
-
-        print(f"\n--- All {n_runs} runs complete ---")
-        print(f"Best overall peaks: {-best_overall_fitness:.2f} (weighted by S/N)")
+        print(f"\n--- Optimization Complete ---")
+        print(f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})")
         
         self.x = np.array(best_overall_member)
 
+        # --- 7. Final Reconstruction (Unchanged) ---
         idx = 0
         rot_params = self.x[idx:idx+3]
         idx += 3
@@ -867,13 +893,12 @@ class FindUB:
             else:
                 print(offsets_val[0])
             self.goniometer_offsets = offsets_val[0]
-            kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
+            kf_ki_vec = np.einsum("mji,jm->sim", self.R, kf_ki_vec)
         else:
             kf_ki_vec = kf_ki_input
 
         UB_final = U @ B
 
-        # Calculate final results using the chosen loss method
         if loss_method == 'forward':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], softness=softness)
         elif loss_method == 'cosine':
