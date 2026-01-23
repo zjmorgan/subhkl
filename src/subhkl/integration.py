@@ -793,12 +793,12 @@ class Peaks:
 
             centers = np.stack([i, j], axis=-1)
 
+            if harvest_peaks_kwargs.get("mask_file") is not None:
+                mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"])).astype(bool)
+            else:
+                mask = np.full(self.ims[bank].shape, True)
+
             if integration_params.get("region_growth_minimum_sigma") is not None:
-                if harvest_peaks_kwargs.get("mask_file") is not None:
-                    mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"])).astype(bool)
-                else:
-                    mask = np.full(self.ims[bank].shape, True)
-                
                 mean = np.mean(self.ims[bank][mask])
                 std = np.std(self.ims[bank][mask])
                 n_sigma = integration_params["region_growth_minimum_sigma"]
