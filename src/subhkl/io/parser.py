@@ -22,7 +22,7 @@ def index(
     n_runs: int,
     seed: int,
     softness: float,
-    sigma_init: float = 0.4,
+    sigma_init: float = None,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
     bootstrap_filename: str = None,
@@ -334,9 +334,10 @@ def indexer(
         help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
     sigma_init: float = typer.Option(
-        0.4,
+        None,
         "--sigma-init",
-        help="Initial parameter exploration range. Should be 0<sigma_init<1. Reduce when polishing the solution.",
+        help="Parameter exploration range. Should be 0<sigma_init<1. If not specified, will be automatically set "
+        "to a reasonable starting value for initial runs and restarts.",
     ),
     n_runs: int = typer.Option(
         1, 
