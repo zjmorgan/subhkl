@@ -176,64 +176,6 @@ class Detector:
         xyz = self.center + du + dv
         return xyz.T if xyz.ndim > 1 else xyz
 
-    def lab_to_pixel(self, x: float, y: float, z: float) -> tuple[npt.NDArray, npt.NDArray]:
-        """
-        Convert lab frame coordinates (x, y, z) to detector pixel coordinates.
-        
-        Returns
-        -------
-        i : Row index
-        j : Col index
-        """
-        p = np.array([x, y, z])
-        
-        dw = self.width / (self.n - 1)  # Width / Cols
-        dh = self.height / (self.m - 1) # Height / Rows
-
-        vec = p.T - self.center
-        
-        # Projection onto vertical axis (Height -> Row -> i)
-        if vec.ndim == 1:
-            dot_v = np.dot(vec, self.vhat)
-        else:
-            dot_v = np.dot(vec, self.vhat)
-
-        # i = Row Index
-        i = np.clip(dot_v / dh, 0, self.m)
-
-        if self.panel_type == DetectorShape.flat_panel:
-            if vec.ndim == 1:
-                dot_u = np.dot(vec, self.uhat)
-            else:
-                dot_u = np.dot(vec, self.uhat)
-            
-            # j = Col Index (Width -> Col -> j)
-            j = np.clip(dot_u / dw, 0, self.n)
-
-        else:
-            # Curved panel
-            if vec.ndim == 1:
-                d_planar = vec - dot_v * self.vhat
-            else:
-                d_planar = vec - (dot_v[:, np.newaxis] * self.vhat)
-
-            what = np.cross(self.vhat, self.rhat)
-
-            if vec.ndim == 1:
-                dot_r = np.dot(d_planar, self.rhat)
-                dot_w = np.dot(d_planar, what)
-            else:
-                dot_r = np.dot(d_planar, self.rhat)
-                dot_w = np.dot(d_planar, what)
-
-            val = -dot_r / dot_w
-            dt = 2 * np.arctan(val)
-            dt = np.mod(dt, 2 * np.pi)
-
-            # j = Col Index (Curved Width)
-            j = np.clip(dt * (self.radius / dw), 0, self.n)
-
-        return i, j
 
     def pixel_to_angles(self, i: npt.ArrayLike, j: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
         """
