@@ -142,41 +142,6 @@ class Detector:
 
         return row, col
 
-    def pixel_to_lab(self, i: npt.ArrayLike, j: npt.ArrayLike) -> npt.NDArray:
-        """
-        Convert detector pixel coordinates (i=Row, j=Col) to lab frame (x, y, z).
-        
-        Convention:
-        i (Row) -> v (Height)
-        j (Col) -> u (Width)
-        """
-        i = np.asarray(i)
-        j = np.asarray(j)
-
-        # Map Col (j) to Width (u)
-        u = j / (self.n - 1) * self.width
-        
-        # Map Row (i) to Height (v)
-        v = i / (self.m - 1) * self.height
-
-        dv = np.einsum("...,d->...d", v, self.vhat)
-
-        if self.panel_type == DetectorShape.flat_panel:
-            du = np.einsum("...,d->...d", u, self.uhat)
-        else:
-            # Curved panel logic
-            w = np.cross(self.vhat, self.rhat)
-            angle = u / self.radius
-            sin_u = np.sin(angle)
-            cos_u = np.cos(angle)
-            dvr = np.einsum("...,d->...d", self.radius * sin_u, w)
-            dr = np.einsum("...,d->...d", self.radius * (cos_u - 1), self.rhat)
-            du = dr + dvr
-
-        xyz = self.center + du + dv
-        return xyz.T if xyz.ndim > 1 else xyz
-
-
     def pixel_to_angles(self, i: npt.ArrayLike, j: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate scattering angles (two_theta, az_phi) for pixels (i=Row, j=Col).
