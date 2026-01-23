@@ -882,7 +882,7 @@ class FindUB:
             else:
                 print(offsets_val[0])
             self.goniometer_offsets = offsets_val[0]
-            kf_ki_vec = np.einsum("mji,jm->sim", self.R, kf_ki_vec)
+            kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
         else:
             kf_ki_vec = kf_ki_input
 
