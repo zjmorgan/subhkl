@@ -582,10 +582,10 @@ class FindUB:
 
     def minimize_evosax(
         self,
-        strategy_name: str, 
-        population_size: int = 1000, 
-        num_generations: int = 100, 
-        n_runs: int = 1, 
+        strategy_name: str,
+        population_size: int = 1000,
+        num_generations: int = 100,
+        n_runs: int = 1,
         seed: int = 0,
         softness: float = 0.01,
         loss_method: str = 'gaussian',
@@ -601,15 +601,19 @@ class FindUB:
         d_max: float = None,
         hkl_search_range: int = 20,
         search_window_size: int = 256,
-        batch_size: int = None,
         window_batch_size: int = 32,
+        batch_size: int = None,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
-        Uses jax.vmap with batch_size logic to handle massive n_runs without OOM.
+
+        Architecture:
+        - Batches execution of 'n_runs' to respect memory limits (batch_size).
+        - Loops over generations externally to provide a single, unified progress bar.
+        - Batches the internal HKL search window (window_batch_size) to prevent OOM.
         """
 
-        # --- 1. Setup Data and Configurations (CPU Side) ---
+        # --- 1. Setup Data and Configurations ---
         if goniometer_axes is None and self.goniometer_axes is not None:
              goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
@@ -619,7 +623,7 @@ class FindUB:
 
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
         num_obs = kf_ki_dir_lab.shape[1]
-        
+
         if refine_goniometer:
             kf_ki_input = kf_ki_dir_lab
         else:
@@ -630,11 +634,10 @@ class FindUB:
         weights = np.clip(weights, 0, 10.0)
 
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
-
         lattice_system, num_lattice_params = get_lattice_system(
             self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.centering
         )
-        
+
         if refine_lattice:
             print(f"Lattice Refinement Enabled.")
             print(f"Detected System: {lattice_system} ({num_lattice_params} free parameters).")
@@ -663,10 +666,9 @@ class FindUB:
             refine_goniometer=refine_goniometer,
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
-            search_window_size=search_window_size,
             d_min=d_min,
             d_max=d_max,
-            window_batch_size=window_batch_size,
+            window_batch_size=window_batch_size
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
@@ -719,124 +721,141 @@ class FindUB:
 
         es_params = strategy.default_params
 
-        # --- 4. Define Single Run Function (for lax.map) ---
-        @jax.jit
-        def run_batch_of_optimizations(rng_keys):
-            """
-            Runs a batch of independent optimizations in parallel using vmap.
-            """
-            def run_single(rng_key):
-                rng, rng_pop, rng_init = jax.random.split(rng_key, 3)
-                
-                # A. Initialization
-                if start_sol_processed is not None:
-                    # [Initialization logic same as before...]
-                    if strategy_type == 'population_based':
-                        noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
-                        population_init = jnp.clip(start_sol_processed + noise, 0.0, 1.0)
-                        fitness_init = objective(population_init)
-                        state = strategy.init(rng_init, population_init, fitness_init, es_params)
-                    else:
-                        state = strategy.init(rng_init, start_sol_processed, es_params)
+        # --- 4. Define JIT-Compiled Batch Functions ---
+
+        def init_single_run(rng, start_sol):
+            rng, rng_pop, rng_init = jax.random.split(rng, 3)
+            if start_sol is not None:
+                if strategy_type == 'population_based':
+                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                    population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                    fitness_init = objective(population_init)
+                    state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
-                    # [Random init logic same as before...]
-                    if strategy_type == 'population_based':
-                        population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
-                        fitness_init = objective(population_init)
-                        state = strategy.init(rng_init, population_init, fitness_init, es_params)
-                    else:
-                        solution_init = jax.random.uniform(rng_pop, (num_dims, ))
-                        state = strategy.init(rng_init, solution_init, es_params)
+                    state = strategy.init(rng_init, start_sol, es_params)
+            else:
+                if strategy_type == 'population_based':
+                    population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                    fitness_init = objective(population_init)
+                    state = strategy.init(rng_init, population_init, fitness_init, es_params)
+                else:
+                    solution_init = jax.random.uniform(rng_pop, (num_dims, ))
+                    state = strategy.init(rng_init, solution_init, es_params)
+            return state
 
-                # B. Generation Loop
-                def scan_step(carry, _):
-                    rng, state = carry
-                    rng, rng_ask, rng_tell = jax.random.split(rng, 3)
-                    x, state_ask = strategy.ask(rng_ask, state, es_params)
-                    x = jnp.clip(x, 0.0, 1.0)
-                    fitness = objective(x) 
-                    state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
-                    return (rng, state_tell), None
+        def step_single_run(rng, state):
+            rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+            x, state_ask = strategy.ask(rng_ask, state, es_params)
+            x = jnp.clip(x, 0.0, 1.0)
+            fitness = objective(x)
+            state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
+            return rng, state_tell, metrics
 
-                (final_rng, final_state), _ = jax.lax.scan(
-                    scan_step, 
-                    (rng, state), 
-                    None, 
-                    length=num_generations
-                )
-                return final_state.best_fitness, final_state.best_solution
+        # Vectorize over the 'batch' dimension
+        init_batch_jit = jax.jit(jax.vmap(init_single_run, in_axes=(0, None)))
+        step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0)))
 
-            # Use vmap to run this batch in parallel
-            return jax.vmap(run_single)(rng_keys)
+        # --- 5. Execution Setup ---
 
-        # --- 5. Execute with Python-Side Batching (Restores Progress Bar) ---
-        
-        # Default batch_size to n_runs (all at once) if not specified
-        # If n_runs is huge, user SHOULD specify batch_size to avoid OOM
         exec_batch_size = batch_size if batch_size is not None else n_runs
-        
         print(f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---")
-        
-        # Generate all seeds upfront
-        rng_key_root = jax.random.PRNGKey(seed)
-        all_keys = jax.random.split(rng_key_root, n_runs)
-        
-        results_fitness = []
-        results_solutions = []
 
-        # Python Loop over Batches
+        # Reproducible Keys
+        seeds = jnp.arange(seed, seed + n_runs)
+        all_keys = jax.vmap(jax.random.PRNGKey)(seeds)
+
+        # Containers for State Management
+        # We hold the state of ALL runs in these lists, broken down by batch.
+        # This fits in memory because "state" is small (population + params),
+        # whereas "step" is heavy (intermediate tensors).
+        batch_keys_list = []
+        batch_states_list = []
+
         total_batches = int(np.ceil(n_runs / exec_batch_size))
-        
-        # Setup Progress Bar
-        pbar = range(total_batches)
+
+        # --- 6. Initialization Phase ---
+        # Initialize all batches upfront
+        print("Initializing populations...")
+        for b_i in range(total_batches):
+            start_idx = b_i * exec_batch_size
+            end_idx = min((b_i + 1) * exec_batch_size, n_runs)
+            b_keys = all_keys[start_idx:end_idx]
+
+            # Init state (includes initial fitness calc)
+            b_state = init_batch_jit(b_keys, start_sol_processed)
+
+            batch_keys_list.append(b_keys)
+            batch_states_list.append(b_state)
+
+        # --- 7. Optimization Phase (Single Progress Bar) ---
+
+        pbar = range(num_generations)
         if trange is not None:
-            pbar = trange(total_batches, desc="Optimization Batches")
+            pbar = trange(num_generations, desc="Optimizing")
 
-        best_so_far = np.inf
+        global_best_fitness = np.inf
 
-        for i in pbar:
-            # Slicing the keys for this batch
-            start_idx = i * exec_batch_size
-            end_idx = min((i + 1) * exec_batch_size, n_runs)
-            batch_keys = all_keys[start_idx:end_idx]
-            
-            # Run JIT-compiled batch
-            b_fit, b_sol = run_batch_of_optimizations(batch_keys)
-            
-            # Move results to CPU list to free GPU memory
-            results_fitness.append(np.array(b_fit))
-            results_solutions.append(np.array(b_sol))
-            
-            # Update Progress Bar description with best fit from this batch
-            current_min = np.min(b_fit)
-            if current_min < best_so_far:
-                best_so_far = current_min
-            
+        for gen in pbar:
+            current_gen_best = np.inf
+
+            # Iterate through all batches to advance them by 1 generation
+            for b_i in range(total_batches):
+                # Load current batch data
+                curr_keys = batch_keys_list[b_i]
+                curr_state = batch_states_list[b_i]
+
+                # Step (Heavy computation on GPU)
+                next_keys, next_state, _ = step_batch_jit(curr_keys, curr_state)
+
+                # Save updated data back to list
+                batch_keys_list[b_i] = next_keys
+                batch_states_list[b_i] = next_state
+
+                # Check fitness for this batch
+                # .best_fitness is an array of shape (Batch_Size,)
+                b_min = jnp.min(next_state.best_fitness)
+                if b_min < current_gen_best:
+                    current_gen_best = b_min
+
+            # Update Global Best
+            if current_gen_best < global_best_fitness:
+                global_best_fitness = current_gen_best
+
+            # Update Progress Bar
             if trange is not None:
-                pbar.set_description(f"Batch {i+1}/{total_batches} | Best: {-best_so_far:.1f} peaks")
+                pbar.set_description(
+                    f"Gen {gen+1} | Best: {-global_best_fitness:.1f}/{num_obs}"
+                )
 
-        # Concatenate all results
-        all_fitness = np.concatenate(results_fitness, axis=0)
-        all_solutions = np.concatenate(results_solutions, axis=0)
+        # --- 8. Gather Results ---
+        # Consolidate results from all batches
+        all_fitness_list = []
+        all_solutions_list = []
 
-        # --- 6. Gather Results ---
+        for b_state in batch_states_list:
+            all_fitness_list.append(b_state.best_fitness)
+            all_solutions_list.append(b_state.best_solution)
+
+        all_fitness = jnp.concatenate(all_fitness_list, axis=0)
+        all_solutions = jnp.concatenate(all_solutions_list, axis=0)
+
         best_idx = np.argmin(all_fitness)
         best_overall_fitness = all_fitness[best_idx]
         best_overall_member = all_solutions[best_idx]
 
         print(f"\n--- Optimization Complete ---")
         print(f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})")
-        
+
         self.x = np.array(best_overall_member)
 
-        # --- 7. Final Reconstruction (Unchanged) ---
+        # --- 9. Final Reconstruction (Unchanged) ---
         idx = 0
         rot_params = self.x[idx:idx+3]
         idx += 3
         U = objective.orientation_U_jax(rot_params[None])[0]
 
         if refine_lattice:
-            cell_norm = self.x[None, idx:idx+num_lattice_params] 
+            cell_norm = self.x[None, idx:idx+num_lattice_params]
             idx += num_lattice_params
             p_full_real = objective.reconstruct_cell_params(cell_norm)
             p = np.array(p_full_real[0])
@@ -849,7 +868,7 @@ class FindUB:
             B = B_new
         else:
             B = self.reciprocal_lattice_B()
-            
+
         kf_ki_vec = np.array(kf_ki_input)
         if refine_goniometer:
             gonio_norm = self.x[None, idx:idx+len(goniometer_axes)]
@@ -870,7 +889,9 @@ class FindUB:
         UB_final = U @ B
 
         if loss_method == 'forward':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(
+                UB_final[None], kf_ki_vec[None], softness=softness, window_batch_size=window_batch_size
+            )
         elif loss_method == 'cosine':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness)
         else:
