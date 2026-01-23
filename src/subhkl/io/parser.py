@@ -22,6 +22,7 @@ def index(
     n_runs: int,
     seed: int,
     softness: float,
+    sigma_init: float = 0.4,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
     bootstrap_filename: str = None,
@@ -90,6 +91,7 @@ def index(
         population_size=population_size,
         num_generations=gens,
         n_runs=n_runs,
+        sigma_init=sigma_init,
         seed=seed,
         softness=softness,
         init_params=init_params,
@@ -331,6 +333,11 @@ def indexer(
         "--strategy", 
         help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
+    sigma_init: float = typer.Option(
+        0.4,
+        "--sigma-init",
+        help="Initial parameter exploration range. Should be 0<sigma_init<1. Reduce when polishing the solution.",
+    ),
     n_runs: int = typer.Option(
         1, 
         "--n-runs", "-n", 
@@ -485,6 +492,7 @@ def indexer(
         strategy_name=strategy_name,
         population_size=population_size,
         gens=gens,
+        sigma_init=sigma_init,
         n_runs=n_runs,
         seed=seed,
         softness=softness,

@@ -582,10 +582,10 @@ class FindUB:
 
     def minimize_evosax(
         self,
-        strategy_name: str,
-        population_size: int = 1000,
-        num_generations: int = 100,
-        n_runs: int = 1,
+        strategy_name: str, 
+        population_size: int = 1000, 
+        num_generations: int = 100, 
+        n_runs: int = 1, 
         seed: int = 0,
         softness: float = 0.01,
         loss_method: str = 'gaussian',
@@ -603,14 +603,11 @@ class FindUB:
         search_window_size: int = 256,
         window_batch_size: int = 32,
         batch_size: int = None,
+        sigma_init: float = None,
     ):
         """
         Minimize the objective function using evosax JAX-based algorithms.
-
-        Architecture:
-        - Batches execution of 'n_runs' to respect memory limits (batch_size).
-        - Loops over generations externally to provide a single, unified progress bar.
-        - Batches the internal HKL search window (window_batch_size) to prevent OOM.
+        Corrects 'sigma' vs 'std' naming convention for CMA-ES.
         """
 
         # --- 1. Setup Data and Configurations ---
@@ -623,7 +620,7 @@ class FindUB:
 
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
         num_obs = kf_ki_dir_lab.shape[1]
-
+        
         if refine_goniometer:
             kf_ki_input = kf_ki_dir_lab
         else:
@@ -637,7 +634,7 @@ class FindUB:
         lattice_system, num_lattice_params = get_lattice_system(
             self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.centering
         )
-
+        
         if refine_lattice:
             print(f"Lattice Refinement Enabled.")
             print(f"Detected System: {lattice_system} ({num_lattice_params} free parameters).")
@@ -707,6 +704,17 @@ class FindUB:
 
         sample_solution = jnp.zeros(num_dims)
 
+        # Calculate Sigma Target
+        target_sigma = sigma_init
+        if target_sigma is None:
+            if start_sol_processed is not None:
+                # Bootstrap: Small search radius (5%)
+                target_sigma = 0.05
+            else:
+                # Global: Large search radius (40%)
+                target_sigma = 0.4
+        print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
+
         if strategy_name.lower() == "de":
             strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
             strategy_type = 'population_based'
@@ -722,32 +730,42 @@ class FindUB:
         es_params = strategy.default_params
 
         # --- 4. Define JIT-Compiled Batch Functions ---
-
+        
         def init_single_run(rng, start_sol):
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
+            
             if start_sol is not None:
+                # BOOTSTRAPPING
                 if strategy_type == 'population_based':
-                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                    # DE/PSO: Initialize cluster around solution
+                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * target_sigma
                     population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
+                    # CMA-ES: Initialize mean at start_sol
                     state = strategy.init(rng_init, start_sol, es_params)
+                    # FIX: Use 'std' instead of 'sigma' for evosax CMA-ES state
+                    state = state.replace(std=target_sigma)
             else:
+                # RANDOM SEARCH
                 if strategy_type == 'population_based':
                     population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
-                    solution_init = jax.random.uniform(rng_pop, (num_dims, ))
+                    # CMA-ES: Center at 0.5
+                    solution_init = jnp.full((num_dims,), 0.5)
                     state = strategy.init(rng_init, solution_init, es_params)
+                    # FIX: Use 'std' instead of 'sigma' for evosax CMA-ES state
+                    state = state.replace(std=target_sigma)
             return state
 
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
             x = jnp.clip(x, 0.0, 1.0)
-            fitness = objective(x)
+            fitness = objective(x) 
             state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
             return rng, state_tell, metrics
 
@@ -756,39 +774,33 @@ class FindUB:
         step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0)))
 
         # --- 5. Execution Setup ---
-
+        
         exec_batch_size = batch_size if batch_size is not None else n_runs
         print(f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---")
-
-        # Reproducible Keys
+        
         seeds = jnp.arange(seed, seed + n_runs)
         all_keys = jax.vmap(jax.random.PRNGKey)(seeds)
-
-        # Containers for State Management
-        # We hold the state of ALL runs in these lists, broken down by batch.
-        # This fits in memory because "state" is small (population + params),
-        # whereas "step" is heavy (intermediate tensors).
+        
         batch_keys_list = []
         batch_states_list = []
-
+        
         total_batches = int(np.ceil(n_runs / exec_batch_size))
-
+        
         # --- 6. Initialization Phase ---
-        # Initialize all batches upfront
         print("Initializing populations...")
         for b_i in range(total_batches):
             start_idx = b_i * exec_batch_size
             end_idx = min((b_i + 1) * exec_batch_size, n_runs)
             b_keys = all_keys[start_idx:end_idx]
-
-            # Init state (includes initial fitness calc)
+            
+            # Init state
             b_state = init_batch_jit(b_keys, start_sol_processed)
-
+            
             batch_keys_list.append(b_keys)
             batch_states_list.append(b_state)
 
-        # --- 7. Optimization Phase (Single Progress Bar) ---
-
+        # --- 7. Optimization Phase ---
+        
         pbar = range(num_generations)
         if trange is not None:
             pbar = trange(num_generations, desc="Optimizing")
@@ -797,65 +809,56 @@ class FindUB:
 
         for gen in pbar:
             current_gen_best = np.inf
-
-            # Iterate through all batches to advance them by 1 generation
+            
             for b_i in range(total_batches):
-                # Load current batch data
                 curr_keys = batch_keys_list[b_i]
                 curr_state = batch_states_list[b_i]
-
-                # Step (Heavy computation on GPU)
+                
                 next_keys, next_state, _ = step_batch_jit(curr_keys, curr_state)
-
-                # Save updated data back to list
+                
                 batch_keys_list[b_i] = next_keys
                 batch_states_list[b_i] = next_state
-
-                # Check fitness for this batch
-                # .best_fitness is an array of shape (Batch_Size,)
+                
                 b_min = jnp.min(next_state.best_fitness)
                 if b_min < current_gen_best:
                     current_gen_best = b_min
 
-            # Update Global Best
             if current_gen_best < global_best_fitness:
                 global_best_fitness = current_gen_best
 
-            # Update Progress Bar
             if trange is not None:
                 pbar.set_description(
                     f"Gen {gen+1} | Best: {-global_best_fitness:.1f}/{num_obs}"
                 )
 
         # --- 8. Gather Results ---
-        # Consolidate results from all batches
         all_fitness_list = []
         all_solutions_list = []
-
+        
         for b_state in batch_states_list:
             all_fitness_list.append(b_state.best_fitness)
             all_solutions_list.append(b_state.best_solution)
-
+            
         all_fitness = jnp.concatenate(all_fitness_list, axis=0)
         all_solutions = jnp.concatenate(all_solutions_list, axis=0)
 
         best_idx = np.argmin(all_fitness)
         best_overall_fitness = all_fitness[best_idx]
         best_overall_member = all_solutions[best_idx]
-
+        
         print(f"\n--- Optimization Complete ---")
         print(f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})")
-
+        
         self.x = np.array(best_overall_member)
 
-        # --- 9. Final Reconstruction (Unchanged) ---
+        # --- 9. Final Reconstruction ---
         idx = 0
         rot_params = self.x[idx:idx+3]
         idx += 3
         U = objective.orientation_U_jax(rot_params[None])[0]
 
         if refine_lattice:
-            cell_norm = self.x[None, idx:idx+num_lattice_params]
+            cell_norm = self.x[None, idx:idx+num_lattice_params] 
             idx += num_lattice_params
             p_full_real = objective.reconstruct_cell_params(cell_norm)
             p = np.array(p_full_real[0])
@@ -868,7 +871,7 @@ class FindUB:
             B = B_new
         else:
             B = self.reciprocal_lattice_B()
-
+            
         kf_ki_vec = np.array(kf_ki_input)
         if refine_goniometer:
             gonio_norm = self.x[None, idx:idx+len(goniometer_axes)]
