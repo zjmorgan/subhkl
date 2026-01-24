@@ -157,33 +157,91 @@ class Detector:
 
         return two_theta, az_phi
 
-    def reflections_mask(self, x: npt.ArrayLike, y: npt.ArrayLike, z: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
+    def reflections_mask(self, x: npt.ArrayLike, y: npt.ArrayLike, z: npt.ArrayLike, sample_offset: npt.ArrayLike = None) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Determine which reflections intersect this detector.
-        Returns (mask, row, col) in Image Coordinates.
+        Accounts for an optional sample offset (mm).
+        
+        Args:
+            x, y, z: Direction vector of the scattered ray (reciprocal space or real space direction).
+            sample_offset: (3,) array [ox, oy, oz] in mm indicating sample displacement from origin.
+            
+        Returns:
+            (mask, row, col) in Image Coordinates.
         """
-        dir_vec = np.array([x, y, z])
-        
-        if self.panel_type == DetectorShape.flat_panel:
-            norm = np.cross(self.uhat, self.vhat)
-            numer = np.dot(self.center, norm)
-            denom = np.einsum("i,in->n", norm, dir_vec)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                t = numer / denom
+        dir_vec = np.array([x, y, z]) # Shape (3, N)
+        if dir_vec.ndim == 1:
+            dir_vec = dir_vec[:, np.newaxis]
+            
+        # Default sample offset is zero
+        if sample_offset is None:
+            s = np.zeros(3)
         else:
-            d_dot_v = np.einsum("i,in->n", self.vhat, dir_vec)
-            d_perp_x = x - d_dot_v * self.vhat[0]
-            d_perp_y = y - d_dot_v * self.vhat[1]
-            d_perp_z = z - d_dot_v * self.vhat[2]
-            norm_d_perp = np.sqrt(d_perp_x**2 + d_perp_y**2 + d_perp_z**2)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                t = self.radius / norm_d_perp
+            s = np.array(sample_offset)
 
-        X, Y, Z = t * x, t * y, t * z
+        if self.panel_type == DetectorShape.flat_panel:
+            # Ray: r(t) = s + t * d
+            # Plane: (r - c) . n = 0  => (s + t*d - c) . n = 0
+            # t = (c - s) . n / (d . n)
+            
+            norm = np.cross(self.uhat, self.vhat)
+            c_minus_s_dot_n = np.dot(self.center - s, norm)
+            
+            # d . n
+            d_dot_n = np.einsum("i,in->n", norm, dir_vec)
+            
+            with np.errstate(divide='ignore', invalid='ignore'):
+                t = c_minus_s_dot_n / d_dot_n
+                
+        else:
+            # Curved Panel (Cylinder aligned with vhat)
+            # Ray: r(t) = s + t * d
+            # Cylinder: |(r - origin) x vhat|^2 = R^2  (Assuming cylinder axis passes through origin)
+            
+            # r x v = (s + t*d) x v = (s x v) + t(d x v)
+            # Let B = s x v, D = d x v
+            # |B + tD|^2 = R^2
+            # |B|^2 + t^2 |D|^2 + 2t (B.D) - R^2 = 0
+            # At^2 + Bt + C = 0
+            
+            v = self.vhat
+            B_vec = np.cross(s, v) # (3,)
+            D_vec = np.cross(dir_vec.T, v).T # (3, N)
+            
+            QA = np.sum(D_vec**2, axis=0)
+            QB = 2 * np.dot(B_vec, D_vec)
+            QC = np.dot(B_vec, B_vec) - self.radius**2
+            
+            delta = QB**2 - 4*QA*QC
+            
+            # We want positive t. 
+            # t = (-B +/- sqrt(delta)) / 2A
+            # Usually the smaller positive root is the intersection (entering the cylinder?)
+            # Or the larger? For a detector, we likely want the forward intersection.
+            # Assuming detector is "in front" of scatterer.
+            
+            with np.errstate(invalid='ignore'):
+                sqrt_delta = np.sqrt(delta)
+                t1 = (-QB + sqrt_delta) / (2*QA)
+                t2 = (-QB - sqrt_delta) / (2*QA)
+                
+                # Pick valid positive t
+                # If both positive, pick smaller? (First hit)
+                t = np.where((t2 > 0), t2, t1)
+                t = np.where(delta < 0, -1.0, t)
+
+        # Calculate intersection point in Lab Frame
+        # X = s + t * d
+        X = s[0] + t * dir_vec[0]
+        Y = s[1] + t * dir_vec[1]
+        Z = s[2] + t * dir_vec[2]
         
+        # Convert Intersection to Pixel Coordinates
         # Returns Image Coordinates (Row, Col)
         row, col = self.lab_to_pixel(X, Y, Z)
         
+        # Mask valid pixels
         mask = (row > 0) & (col > 0) & (row < self.m - 1) & (col < self.n - 1) & (t > 0)
         
         return mask, row, col
+

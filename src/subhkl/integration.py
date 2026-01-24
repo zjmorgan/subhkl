@@ -36,7 +36,8 @@ DetectorPeaks = namedtuple(
         "wavelength_maxes",
         "intensity",
         "sigma",
-        "radii",  # Added field for peak angular radius
+        "radii",
+        "xyz",  # <--- Added: Lab coordinates [x, y, z]
         "bank",
         "gonio_axes",
         "gonio_angles",
@@ -55,7 +56,8 @@ IntegrationResult = namedtuple(
         "tt",
         "az",
         "wavelength",
-        "bank"
+        "bank",
+        "xyz",
     ]
 )
 
@@ -760,7 +762,8 @@ class Peaks:
         lamda_max: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
-        radii: list[float] = [] # Added list for radii
+        radii: list[float] = [] 
+        xyz_out: list[list[float]] = [] # Added list for lab coordinates [x, y, z]
         banks: list[int] = []
         
         # New: Goniometer raw data
@@ -854,6 +857,18 @@ class Peaks:
 
                 # Pass i (Row), j (Col) consistently
                 tt, az = det.pixel_to_angles(i, j)
+                
+                # --- NEW: Get Lab Coordinates for Sample Refinement ---
+                # pixel_to_lab returns (N, 3) if N>1, or (3,) if N=1. 
+                # We need to ensure we consistently get a list of [x,y,z]
+                lab_coords_T = det.pixel_to_lab(i, j) 
+                
+                if lab_coords_T.ndim == 1:
+                    # (3,) -> (1, 3)
+                    lab_coords = lab_coords_T[np.newaxis, :]
+                else:
+                    # (3, N) -> (N, 3)
+                    lab_coords = lab_coords_T.T
 
                 num_new_peaks = len(tt)
 
@@ -912,6 +927,7 @@ class Peaks:
                 intensity += bank_intensity.tolist()
                 sigma += bank_sigma.tolist()
                 radii += bank_radii
+                xyz_out += lab_coords.tolist() # <--- Store lab coords [x, y, z]
                 banks += [bank] * sum(keep)
                 
                 if self.goniometer_angles_raw is not None:
@@ -923,7 +939,7 @@ class Peaks:
                 print("Bank had 0 peaks")
                 
         # Return axes (global) and angles (per peak)
-        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
+        return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, xyz_out, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
     def integrate(
         self,
@@ -941,6 +957,7 @@ class Peaks:
         tt, az = [], []
         wavelength = []
         banks = []
+        xyz = []
 
         for bank, peaks in peak_dict.items():
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
@@ -948,6 +965,12 @@ class Peaks:
             
             det = self.get_detector(bank)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
+
+            lab_coords_T = det.pixel_to_lab(bank_i, bank_j)
+            lab_coords_T = np.atleast_2d(lab_coords_T)
+            if lab_coords_T.shape[0] != 3:
+                lab_coords_T = lab_coords_T.T
+            lab_coords = lab_coords_T.T
 
             if integration_params.get("integration_mask_file") is not None:
                 mask = np.array(Image.open(integration_params["integration_mask_file"]))
@@ -981,6 +1004,7 @@ class Peaks:
             bank_k = bank_k[valid_indices]
             bank_l = bank_l[valid_indices]
             bank_wl = bank_wl[valid_indices]
+            lab_coords = lab_coords[valid_indices]
 
             int_result, hulls = integrator.integrate_peaks(
                 bank,
@@ -1037,9 +1061,10 @@ class Peaks:
             tt.extend(bank_tt[keep])
             az.extend(bank_az[keep])
             wavelength.extend(bank_wl[keep])
+            xyz.extend(lab_coords[keep].tolist())
             banks.extend([bank] * sum(keep))
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks)
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
 
     def coverage(self, h, k, l, UB, wavelength, tol=1e-5):
         wl_min, wl_max = wavelength
@@ -1071,7 +1096,7 @@ class Peaks:
 
         return [x[ind], y[ind], z[ind]], [h[ind], k[ind], l[ind]], lamda[ind], mult
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, centering, d_min, UB):
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, centering, d_min, UB, sample_offset=None):
         h, k, l = self.reflections(a, b, c, alpha, beta, gamma, centering, d_min)
         wavelength = [self.wavelength_min, self.wavelength_max]
         xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
@@ -1081,9 +1106,8 @@ class Peaks:
         for bank in sorted(self.ims.keys()):
             det = self.get_detector(bank)
             
-            # Clean and centralized!
-            # mask, row, col are already in correct Image Space
-            mask, row, col = det.reflections_mask(xyz[0], xyz[1], xyz[2])
+            # Use updated reflections_mask which now supports sample_offset
+            mask, row, col = det.reflections_mask(xyz[0], xyz[1], xyz[2], sample_offset=sample_offset)
             
             peak_dict[bank] = [row[mask], col[mask], h[mask], k[mask], l[mask], wl[mask]]
 
@@ -1100,7 +1124,8 @@ class Peaks:
         wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float],
-        radii: list[float], # Added radii argument
+        radii: list[float], 
+        xyz: list[list[float]], # <--- Added: list of [x, y, z] coords
         bank: list[int],
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
@@ -1129,6 +1154,8 @@ class Peaks:
             Uncertainty in integrated intensity of each peak
         radii: array, float
             Angular radius of each peak
+        xyz: list[list[float]]
+            Lab coordinates [x, y, z] of each peak
         bank: array, int
             Detector id for each peak
         gonio_axes : array or list
@@ -1147,7 +1174,8 @@ class Peaks:
             f["peaks/azimuthal"] = az_phi
             f["peaks/intensity"] = intensity
             f["peaks/sigma"] = sigma
-            f["peaks/radius"] = radii # Write radii
+            f["peaks/radius"] = radii
+            f["peaks/xyz"] = xyz  # <--- Write the new XYZ dataset
             f["bank"] = bank
             
             if gonio_axes is not None:

@@ -76,7 +76,7 @@ def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
 def rotation_matrix_from_rodrigues_jax(w):
     """
     Maps a 3D parameter vector (Rodrigues/Rotation vector) to a 3x3 Rotation Matrix.
-    Bijective mapping from R^3 to SO(3) (within radius pi).
+    Bijective mapping from R^3 to SO(3).
     """
     theta = jnp.linalg.norm(w) + 1e-9 # Avoid div by zero
     k = w / theta
@@ -94,16 +94,29 @@ class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
     """
-    def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
+    def __init__(self, B, centering, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
-                 goniometer_refine_mask=None, peak_radii=None, loss_method='gaussian', 
-                 # New Args for Forward Indexing
+                 goniometer_refine_mask=None, 
+                 refine_sample=False, sample_bound_meters=0.002,
+                 peak_radii=None, loss_method='gaussian', 
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32):
         
         self.B = jnp.array(B)
-        self.kf_ki_dir = jnp.array(kf_ki_dir)
-        self.k_sq_invariant = jnp.sum(self.kf_ki_dir**2, axis=0)
+        
+        # Pre-calculated vectors (used if sample refinement is OFF)
+        self.kf_ki_dir_init = jnp.array(kf_ki_dir)
+        self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
+        
+        # Peak Coordinates (used if sample refinement is ON)
+        # xyz is (N, 3) -> transpose to (3, N)
+        if peak_xyz_lab is not None:
+            self.peak_xyz = jnp.array(peak_xyz_lab.T) 
+        else:
+            self.peak_xyz = None
+
+        self.refine_sample = refine_sample
+        self.sample_bound = sample_bound_meters
 
         self.softness = softness
         self.loss_method = loss_method
@@ -153,10 +166,10 @@ class VectorizedObjectiveJAX:
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
 
-        if weights is None: self.weights = jnp.ones(self.kf_ki_dir.shape[1])
+        if weights is None: self.weights = jnp.ones(self.kf_ki_dir_init.shape[1])
         else: self.weights = jnp.array(weights)
             
-        if peak_radii is None: self.peak_radii = jnp.zeros(self.kf_ki_dir.shape[1])
+        if peak_radii is None: self.peak_radii = jnp.zeros(self.kf_ki_dir_init.shape[1])
         else: self.peak_radii = jnp.array(peak_radii)
 
         self.max_score = jnp.sum(self.weights)
@@ -175,20 +188,12 @@ class VectorizedObjectiveJAX:
         hkl_pool = hkl_pool[:, zero_mask]
 
         # 2. Convert Pool to Spherical Coordinates (Crystal Frame)
-        # We use the initial B matrix for this sorting. 
-        # Even if B refines, the relative angular ordering of HKLs rarely swaps locally.
-        q_cart = self.B @ hkl_pool # (3, N)
-        
-        # Calculate Phi (Azimuth) in [-pi, pi]
-        # x = q[0], y = q[1]
+        q_cart = self.B @ hkl_pool 
         phis = jnp.arctan2(q_cart[1], q_cart[0])
-        
-        # 3. Sort Pool by Phi
         sort_idx = jnp.argsort(phis)
         self.pool_phi_sorted = phis[sort_idx]
-        self.pool_hkl_sorted = hkl_pool[:, sort_idx] # (3, N)
+        self.pool_hkl_sorted = hkl_pool[:, sort_idx] 
 
-    # ... [reconstruct_cell_params, compute_B_jax, compute_goniometer_R_jax, orientation_U_jax unchanged] ...
     def reconstruct_cell_params(self, params_norm):
         p_free = self.lat_min + params_norm * (self.lat_max - self.lat_min)
         S = params_norm.shape[0]
@@ -244,26 +249,21 @@ class VectorizedObjectiveJAX:
             R = jnp.einsum('smij,smjk->smik', R, Ri)
         return R
 
-    # Inside your Objective Class:
     def orientation_U_jax(self, param):
-        # param is shape (Batch, 3), unrestricted R^3
-        # If param is [0,0,0], U is Identity.
-
-        # We vmap the single-vector function over the batch
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
-    # ... [indexer_dynamic_soft_jax, indexer_dynamic_cosine_aniso_jax unchanged] ...
-    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, softness=0.01):
-        # (Included for compatibility with old modes, keep existing implementation)
+    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
-        k_sq = self.k_sq_invariant[None, :]
+        
+        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
+        
         initial_carry = (jnp.zeros(max_v_val.shape), jnp.zeros(max_v_val.shape), jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), jnp.zeros(max_v_val.shape))
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
@@ -284,7 +284,6 @@ class VectorizedObjectiveJAX:
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
             valid_sym = jnp.full_like(h, True, dtype=bool) 
-            # (Simplifying sym check for brevity in snippet, assume handled)
             prob = jnp.where(valid_cand, prob, 0.0)
             new_sum = curr_sum + prob
             update_mask = prob > curr_max
@@ -297,32 +296,15 @@ class VectorizedObjectiveJAX:
         score = -jnp.sum(self.weights * accum_probs, axis=1)
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
     
-    def indexer_dynamic_cosine_aniso_jax(self, UB, kf_ki_sample, softness=0.01):
-        """
-        Anisotropic Cosine (Von Mises) Indexing.
-        Scales the concentration (kappa) per axis based on unit cell dimensions.
-        """
+    def indexer_dynamic_cosine_aniso_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
-        
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
-        
-        # --- Anisotropy Calculation ---
-        # Calculate squared lengths of reciprocal lattice vectors (columns of UB)
-        # UB shape (S, 3, 3). Columns j are reciprocal vectors b_j.
-        # recip_len_sq shape (S, 3)
         recip_len_sq = jnp.sum(UB**2, axis=1)
-        
-        # Calculate kappa per axis: kappa_j = |b_j|^2 / (softness^2 * 4*pi^2)
-        # This approximates Gaussian decay with width `softness` in Q-space
-        # for a deviation along axis j.
-        # Added epsilon to softness to avoid division by zero
         kappa = recip_len_sq / ((softness + 1e-9)**2 * 4 * jnp.pi**2)
-        
-        # Reshape kappa for broadcasting: (S, 3, 1) to multiply against hkl components (S, 3, M)
         kappa = kappa[:, :, None]
 
         initial_carry = (
@@ -335,28 +317,15 @@ class VectorizedObjectiveJAX:
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
             n = start_int + i
-            n_safe = jnp.where(n == 0, 1e-9, n)
-
-            # Predict HKL and Lambda
             ratio = n / max_v_val
-            hkl_float = v * ratio[:, None, :] # (S, 3, M)
+            hkl_float = v * ratio[:, None, :]
             lamda_cand = 1.0 / ratio
-
-            # --- Anisotropic Cosine Score ---
-            # Sum over axes j=0,1,2: kappa_j * (cos(2pi * h_j) - 1)
-            # This penalizes deviations from integer values proportional to axis sensitivity.
-            # term shape: (S, 3, M) -> sum -> (S, M)
             cos_terms = kappa * (jnp.cos(2 * jnp.pi * hkl_float) - 1.0)
             log_prob = jnp.sum(cos_terms, axis=1) 
-            
-            # Convert to probability space (0 to 1)
             prob = jnp.exp(log_prob)
-
-            # Masks
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            
             valid_sym = jnp.full_like(h, True, dtype=bool)
             if self.centering == "A": valid_sym = (k + l) % 2 == 0
             elif self.centering == "B": valid_sym = (h + l) % 2 == 0
@@ -364,144 +333,88 @@ class VectorizedObjectiveJAX:
             elif self.centering == "I": valid_sym = (h + k + l) % 2 == 0
             elif self.centering == "F": valid_sym = ((h + k)%2==0) & ((l+h)%2==0) & ((k+l)%2==0)
             elif self.centering == "R": valid_sym = (-h + k + l) % 3 == 0 
-            
             prob = jnp.where(valid_cand & valid_sym, prob, 0.0)
-
-            # Update
             new_sum = curr_sum + prob
-            
             score_tracked = jnp.where(valid_cand & valid_sym, log_prob, -1e9)
             update_mask = score_tracked > curr_max
             new_max = jnp.where(update_mask, score_tracked, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
-
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = jax.lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
         accum_probs, _, best_hkl, best_lamb = final_carry
-
         score = -jnp.sum(self.weights * accum_probs, axis=1)
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
 
-    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, softness=0.01, window_batch_size=32):
-        """
-        Forward Indexer with Azimuthal Binary Search (Memory Optimized).
-        Batches the search window using jax.lax.scan to prevent OOM with large windows.
-        """
-        # 1. Transform Observations to Crystal Frame
-        # UB_inv approximation for finding rough HKLs
+    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01, window_batch_size=32):
+        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
+        k_norm = jnp.sqrt(k_sq)
+
         UB_inv = jnp.linalg.inv(UB)
-        hkl_float = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample) # (S, 3, M)
+        hkl_float = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         
-        # 2. Calculate Phi of the observed fractional HKLs
-        # Use INITIAL B to match the sorting frame of the HKL pool
         hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float)
-        phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :]) # (S, M)
+        phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :])
         
-        # 3. Binary Search for Center Indices
-        idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs) # (S, M)
+        idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs)
         
-        # 4. Prepare Window Batches
-        # We process the window [idx - half, idx + half] in chunks
         half_win = self.search_window_size // 2
         raw_offsets = jnp.arange(-half_win, half_win + 1)
-        
-        # Pad offsets to ensure they divide evenly by window_batch_size
         remainder = raw_offsets.shape[0] % window_batch_size
         if remainder != 0:
             pad_len = window_batch_size - remainder
-            # Pad with the last offset (harmless redundant check)
             offsets_padded = jnp.pad(raw_offsets, (0, pad_len), constant_values=raw_offsets[-1])
         else:
             offsets_padded = raw_offsets
-            
-        # Reshape into batches: (Num_Batches, Batch_Size)
         num_batches = offsets_padded.shape[0] // window_batch_size
         offset_batches = offsets_padded.reshape(num_batches, window_batch_size)
 
-        # 5. Define Scan Body (Process one batch of window candidates)
-        # Carry state: (current_min_dist_sq, current_best_hkl, current_best_lamb)
-        
-        # Initialize carry with "infinity"
         init_min_dist = jnp.full(idx_centers.shape, 1e9)
-        init_best_hkl = jnp.zeros(idx_centers.shape + (3,)) # (S, M, 3)
-        init_best_lamb = jnp.zeros(idx_centers.shape)       # (S, M)
-        
+        init_best_hkl = jnp.zeros(idx_centers.shape + (3,))
+        init_best_lamb = jnp.zeros(idx_centers.shape)
         init_carry = (init_min_dist, init_best_hkl, init_best_lamb)
 
         def scan_body(carry, batch_offsets):
             curr_min_dist, curr_best_hkl, curr_best_lamb = carry
-            
-            # A. Gather HKLs for this batch
-            # batch_offsets: (B,) -> broadcast to (S, M, B)
             gather_idx = idx_centers[..., None] + batch_offsets[None, None, :]
-            
-            # Retrieve HKLs from pool (handle wrap-around)
             pool_T = self.pool_hkl_sorted.T 
-            hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode='wrap') # (S, M, B, 3)
-            
-            # B. Predict Q and Lambda
-            # UB: (S, 3, 3) -> (S, 1, 1, 3, 3)
-            # hkl: (S, M, B, 3) -> (S, M, B, 3, 1)
+            hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode='wrap') 
             q_pred = jnp.einsum("sij,smwj->smwi", UB, hkl_cands)
-            
-            # k_obs: (S, M, 1, 3)
             k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
+            k_dot_q = jnp.sum(k_obs * q_pred, axis=3)
+            lambda_opt = k_sq[..., None] / jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             
-            # Lambda Optimization
-            k_dot_q = jnp.sum(k_obs * q_pred, axis=3) # (S, M, B)
-            lambda_opt = self.k_sq_invariant[None, :, None] / jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            
-            # C. Validation Masks
             valid_lamb = (lambda_opt >= self.wl_min_val) & (lambda_opt <= self.wl_max_val)
-            
             q_sq = jnp.sum(q_pred**2, axis=3)
             d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
-            
             valid_mask = valid_lamb & valid_res
             
-            # D. Compute Distance
             q_obs_opt = k_obs / jnp.where(lambda_opt==0, 1.0, lambda_opt)[..., None]
             diff = q_obs_opt - q_pred
-            dist_sq = jnp.sum(diff**2, axis=3) # (S, M, B)
-            
-            # Apply mask (set invalid to infinity)
+            dist_sq = jnp.sum(diff**2, axis=3)
             dist_sq_masked = jnp.where(valid_mask, dist_sq, 1e9)
             
-            # E. Find best within this batch
-            batch_min_dist = jnp.min(dist_sq_masked, axis=2) # (S, M)
+            batch_min_dist = jnp.min(dist_sq_masked, axis=2)
             batch_best_local_idx = jnp.argmin(dist_sq_masked, axis=2)
             
-            # Extract corresponding HKL/Lambda
             batch_best_hkl = jnp.take_along_axis(hkl_cands, batch_best_local_idx[..., None, None], axis=2).squeeze(axis=2)
             batch_best_lamb = jnp.take_along_axis(lambda_opt, batch_best_local_idx[..., None], axis=2).squeeze(axis=2)
             
-            # F. Update Global Best (Running Minimum)
             improve_mask = batch_min_dist < curr_min_dist
-            
             new_min_dist = jnp.where(improve_mask, batch_min_dist, curr_min_dist)
             new_best_hkl = jnp.where(improve_mask[..., None], batch_best_hkl, curr_best_hkl)
             new_best_lamb = jnp.where(improve_mask, batch_best_lamb, curr_best_lamb)
-            
             return (new_min_dist, new_best_hkl, new_best_lamb), None
 
-        # 6. Execute Scan
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
         
-        # 7. Final Score Calculation
-        k_norm = jnp.sqrt(self.k_sq_invariant) # (M,)
-        effective_sigma = softness + (k_norm[None, :] / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
-        
-        # Avoid division by zero in exp if sigma is tiny
+        effective_sigma = softness + (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
-        
-        # If best_dist_sq is still 1e9 (no valid match found), prob becomes ~0
         score = -jnp.sum(self.weights * probs, axis=1)
-        
         return score, probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
     @partial(jax.jit, static_argnames='self')
@@ -520,37 +433,55 @@ class VectorizedObjectiveJAX:
         else:
             UB = jnp.einsum("sij,jk->sik", U, self.B)
 
+        sample_offset = jnp.zeros((x.shape[0], 3))
+        if self.refine_sample:
+            if self.peak_xyz is not None:
+                s_norm = x[:, idx:idx+3]
+                idx += 3
+                sample_offset = (s_norm - 0.5) * 2.0 * self.sample_bound
+        
+        if self.refine_sample:
+            s = sample_offset[:, :, None]
+            p = self.peak_xyz[None, :, :]
+            v = p - s 
+            dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
+            kf = v / dist
+            ki = jnp.array([0.0, 0.0, 1.0])[None, :, None]
+            q_lab = kf - ki
+            k_sq_dyn = jnp.sum(q_lab**2, axis=1) 
+        else:
+            q_lab = self.kf_ki_dir_init[None, ...].repeat(x.shape[0], axis=0)
+            k_sq_dyn = self.k_sq_init[None, :].repeat(x.shape[0], axis=0)
+
         if self.refine_goniometer:
-            # NEW: Reconstruct full goniometer params from active subset
             n_active = self.num_active_gonio
             if n_active > 0:
                 active_params = x[:, idx:idx+n_active]
                 idx += n_active
-                
-                # Create full parameter vector filled with 0.5 (Neutral/Zero Offset)
-                # 0.5 in normalized space maps to (min + max)/2 = 0.0 degrees
                 batch_size = x.shape[0]
                 gonio_norm = jnp.full((batch_size, self.num_gonio_axes), 0.5)
-                
-                # Insert active parameters
-                # We use .at[].set() for JAX immutability
                 gonio_norm = gonio_norm.at[:, self.gonio_mask].set(active_params)
             else:
-                # No refined axes, all fixed at 0
                 gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
 
             R = self.compute_goniometer_R_jax(gonio_norm)
-            kf_ki_vec = jnp.einsum("smji,jm->sim", R, self.kf_ki_dir)
+            if R.ndim == 4:
+                 kf_ki_vec = jnp.einsum("smji,sjm->sim", R, q_lab)
+            else:
+                 kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
         else:
-            kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
+            if self.R.ndim == 3:
+                 kf_ki_vec = jnp.einsum("mji,sjm->sim", self.R, q_lab)
+            else:
+                 kf_ki_vec = jnp.einsum("ji,sjm->sim", self.R, q_lab)
 
         if self.loss_method == 'forward':
-            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, softness=self.softness,
+            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness,
                 window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
-            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
         else:
-            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
 
         return score
 
@@ -564,6 +495,8 @@ class FindUB:
         self.goniometer_angles = None
         self.goniometer_offsets = None 
         self.goniometer_names = None 
+        self.sample_offset = None
+        self.peak_xyz = None
 
         if filename is not None:
             self.load_peaks(filename)
@@ -590,6 +523,9 @@ class FindUB:
             self.sigma_intensity = f["peaks/sigma"][()]
             self.radii = f["peaks/radius"][()]
             self.centering = f["sample/centering"][()].decode("utf-8")
+            
+            if "peaks/xyz" in f:
+                self.peak_xyz = f["peaks/xyz"][()]
             
             if "goniometer/axes" in f:
                  self.goniometer_axes = f["goniometer/axes"][()]
@@ -629,6 +565,8 @@ class FindUB:
         goniometer_bound_deg: float = 5.0,
         goniometer_names: list = None,
         refine_goniometer_axes: list = None,
+        refine_sample: bool = False,
+        sample_bound_meters: float = 2.0,
         d_min: float = None,
         d_max: float = None,
         hkl_search_range: int = 20,
@@ -637,12 +575,6 @@ class FindUB:
         batch_size: int = None,
         sigma_init: float = None,
     ):
-        """
-        Minimize the objective function using evosax JAX-based algorithms.
-        Corrects 'sigma' vs 'std' naming convention for CMA-ES.
-        """
-
-        # --- 1. Setup Data and Configurations ---
         if goniometer_axes is None and self.goniometer_axes is not None:
              goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
@@ -658,18 +590,14 @@ class FindUB:
         else:
             kf_ki_input = np.einsum("mji,jm->im", self.R, kf_ki_dir_lab)
 
-        # Logic to build mask from names
         goniometer_refine_mask = None
         if refine_goniometer and refine_goniometer_axes is not None:
             if self.goniometer_names is None:
                 print("Warning: refine_goniometer_axes provided but goniometer_names not found. Refining ALL.")
             else:
-                # Build boolean mask
                 mask = []
                 print(f"Refining specific goniometer axes: {refine_goniometer_axes}")
                 for name in self.goniometer_names:
-                    # Check if name contains any of the requested strings (partial match allowed? be strict for now)
-                    # Let's check strict equality or substring
                     should_refine = any(req in name for req in refine_goniometer_axes)
                     mask.append(should_refine)
                 goniometer_refine_mask = np.array(mask, dtype=bool)
@@ -691,11 +619,11 @@ class FindUB:
         if loss_method == "forward" and (d_min is None or d_max is None):
             raise ValueError(f"Need to supply --d_min and --d_max for loss_method=='forward'")
 
-        # --- 2. Initialize JAX Objective ---
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
             self.centering,
             kf_ki_input,
+            self.peak_xyz,
             np.array(self.wavelength),
             self._angle_cdf,
             self._angle_t,
@@ -711,6 +639,8 @@ class FindUB:
             goniometer_angles=goniometer_angles,
             refine_goniometer=refine_goniometer,
             goniometer_refine_mask=goniometer_refine_mask,
+            refine_sample=refine_sample,
+            sample_bound_meters=sample_bound_meters,
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
             d_min=d_min,
@@ -719,17 +649,21 @@ class FindUB:
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
-        # --- 3. Determine Dimension and Strategy ---
         num_dims = 3
         if refine_lattice:
             num_dims += num_lattice_params
+        if refine_sample:
+            if self.peak_xyz is None:
+                print("Warning: refine_sample requested but peaks/xyz not found. Disabling sample refinement.")
+                refine_sample = False
+            else:
+                num_dims += 3
         if refine_goniometer:
             if goniometer_refine_mask is not None:
                 num_dims += np.sum(goniometer_refine_mask)
             else:
                 num_dims += len(goniometer_axes)
 
-        # Prepare init_params
         start_sol_processed = None
         if init_params is not None:
             start_sol = jnp.array(init_params)
@@ -757,14 +691,11 @@ class FindUB:
 
         sample_solution = jnp.zeros(num_dims)
 
-        # Calculate Sigma Target
         target_sigma = sigma_init
         if target_sigma is None:
             if start_sol_processed is not None:
-                # Bootstrap: Small search radius (5%)
                 target_sigma = 0.05
             else:
-                # Global: Large search radius (40%)
                 target_sigma = 3.14
         print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
 
@@ -781,78 +712,51 @@ class FindUB:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
         es_params = strategy.default_params
-
-        # --- 4. Define JIT-Compiled Batch Functions ---
         
         def init_single_run(rng, start_sol):
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
             
             if start_sol is not None:
-                # BOOTSTRAPPING
                 if strategy_type == 'population_based':
-                    # DE/PSO: Initialize cluster around solution
                     noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
-                    # Clip only the normalized parts (index 3+)
                     p_orient = start_sol[:3] + noise[:, :3]
                     p_rest = jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)
                     population_init = jnp.concatenate([p_orient, p_rest], axis=1)
-
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
-                    # CMA-ES: Initialize mean at start_sol
                     state = strategy.init(rng_init, start_sol, es_params)
-                    # FIX: Use 'std' instead of 'sigma' for evosax CMA-ES state
                     state = state.replace(std=target_sigma)
             else:
-                # RANDOM SEARCH
                 if strategy_type == 'population_based':
-                    # Hybrid initialization: Unbounded Orientation, Bounded Lattice
                     pop_orient = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
                     rng_rest, _ = jax.random.split(rng_pop)
                     pop_rest = jax.random.uniform(rng_rest, (population_size, max(0, num_dims-3)))
                     population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
-
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
-                    # CMA-ES: Center at 0.0 (Unbounded) or 0.5 (Bounded)?
-                    # For Rodrigues (0-3), 0.0 is Identity rotation. Good start.
-                    # For Lattice (3+), 0.5 is center of range. Good start.
-                    
-                    # Create mixed mean vector
                     mean_orient = jnp.zeros(3)
                     mean_rest = jnp.full((max(0, num_dims-3),), 0.5)
                     solution_init = jnp.concatenate([mean_orient, mean_rest])
-                    
                     state = strategy.init(rng_init, solution_init, es_params)
-                    # FIX: Use 'std' for evosax CMA-ES state
                     state = state.replace(std=target_sigma)
             return state
 
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
-
-            # --- PARTIAL CLIPPING ---
-            # Indices 0-2 (Orientation): Unbounded (Rodrigues)
-            # Indices 3+ (Lattice/Gonio): Bounded [0, 1]
             x_orient = x[:, :3]
             x_rest = x[:, 3:]
             x_rest_clipped = jnp.clip(x_rest, 0.0, 1.0)
-
             x_valid = jnp.concatenate([x_orient, x_rest_clipped], axis=1)
-
             fitness = objective(x_valid)
             state_tell, metrics = strategy.tell(rng_tell, x_valid, fitness, state_ask, es_params)
             return rng, state_tell, metrics
 
-        # Vectorize over the 'batch' dimension
         init_batch_jit = jax.jit(jax.vmap(init_single_run, in_axes=(0, None)))
         step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0)))
 
-        # --- 5. Execution Setup ---
-        
         exec_batch_size = batch_size if batch_size is not None else n_runs
         print(f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---")
         
@@ -864,21 +768,15 @@ class FindUB:
         
         total_batches = int(np.ceil(n_runs / exec_batch_size))
         
-        # --- 6. Initialization Phase ---
         print("Initializing populations...")
         for b_i in range(total_batches):
             start_idx = b_i * exec_batch_size
             end_idx = min((b_i + 1) * exec_batch_size, n_runs)
             b_keys = all_keys[start_idx:end_idx]
-            
-            # Init state
             b_state = init_batch_jit(b_keys, start_sol_processed)
-            
             batch_keys_list.append(b_keys)
             batch_states_list.append(b_state)
 
-        # --- 7. Optimization Phase ---
-        
         pbar = range(num_generations)
         if trange is not None:
             pbar = trange(num_generations, desc="Optimizing")
@@ -891,12 +789,9 @@ class FindUB:
             for b_i in range(total_batches):
                 curr_keys = batch_keys_list[b_i]
                 curr_state = batch_states_list[b_i]
-                
                 next_keys, next_state, _ = step_batch_jit(curr_keys, curr_state)
-                
                 batch_keys_list[b_i] = next_keys
                 batch_states_list[b_i] = next_state
-                
                 b_min = jnp.min(next_state.best_fitness)
                 if b_min < current_gen_best:
                     current_gen_best = b_min
@@ -909,7 +804,6 @@ class FindUB:
                     f"Gen {gen+1} | Best: {-global_best_fitness:.1f}/{num_obs}"
                 )
 
-        # --- 8. Gather Results ---
         all_fitness_list = []
         all_solutions_list = []
         
@@ -929,7 +823,6 @@ class FindUB:
         
         self.x = np.array(best_overall_member)
 
-        # --- 9. Final Reconstruction ---
         idx = 0
         rot_params = self.x[idx:idx+3]
         idx += 3
@@ -950,13 +843,17 @@ class FindUB:
         else:
             B = self.reciprocal_lattice_B()
 
+        if refine_sample:
+             s_norm = self.x[idx:idx+3]
+             idx += 3
+             self.sample_offset = (s_norm - 0.5) * 2.0 * sample_bound_meters
+             print(f"--- Refined Sample Offset (mm) ---")
+             print(f"X: {1000*self.sample_offset[0]:.4f}, Y: {1000*self.sample_offset[1]:.4f}, Z: {1000*self.sample_offset[2]:.4f}")
+
         if refine_goniometer:
             n_active = np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
-
             if n_active > 0:
                 active_norm = self.x[None, idx:idx+n_active]
-
-                # Reconstruct full norm vector
                 gonio_norm = np.full((1, len(goniometer_axes)), 0.5)
                 if goniometer_refine_mask is not None:
                     gonio_norm[:, goniometer_refine_mask] = active_norm
@@ -977,15 +874,30 @@ class FindUB:
             else:
                 print(offsets_val[0])
             self.goniometer_offsets = offsets_val[0]
-            kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
+            if self.R.ndim == 3:
+                 kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
+            else:
+                 kf_ki_vec = np.einsum("ji,jm->im", self.R, kf_ki_vec)
         else:
             kf_ki_vec = kf_ki_input
 
         UB_final = U @ B
 
         if loss_method == 'forward':
+            # Need to re-calculate Q magnitude if sample offset changed
+            k_sq_dyn = None
+            if refine_sample:
+                s = self.sample_offset # (3,)
+                p = self.peak_xyz.T # (3, M)
+                v = p - s[:, None]
+                dist = np.linalg.norm(v, axis=0)
+                kf = v / dist
+                ki = np.array([0, 0, 1])[:, None]
+                q_lab = kf - ki
+                k_sq_dyn = np.sum(q_lab**2, axis=0)[None, :]
+                
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(
-                UB_final[None], kf_ki_vec[None], softness=softness, window_batch_size=window_batch_size
+                UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=softness, window_batch_size=window_batch_size
             )
         elif loss_method == 'cosine':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness)
