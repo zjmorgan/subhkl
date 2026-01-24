@@ -73,6 +73,22 @@ def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
     R = eye + s[..., None, None] * K + t[..., None, None] * (K @ K)
     return R
 
+def rotation_matrix_from_rodrigues_jax(w):
+    """
+    Maps a 3D parameter vector (Rodrigues/Rotation vector) to a 3x3 Rotation Matrix.
+    Bijective mapping from R^3 to SO(3) (within radius pi).
+    """
+    theta = jnp.linalg.norm(w) + 1e-9 # Avoid div by zero
+    k = w / theta
+    K = jnp.array([
+        [0.0, -k[2], k[1]],
+        [k[2], 0.0, -k[0]],
+        [-k[1], k[0], 0.0]
+    ])
+    # Rodrigues formula: I + sin(t)K + (1-cos(t))K^2
+    I = jnp.eye(3)
+    R = I + jnp.sin(theta) * K + (1 - jnp.cos(theta)) * (K @ K)
+    return R
 
 class VectorizedObjectiveJAX:
     """
@@ -228,20 +244,13 @@ class VectorizedObjectiveJAX:
             R = jnp.einsum('smij,smjk->smik', R, Ri)
         return R
 
+    # Inside your Objective Class:
     def orientation_U_jax(self, param):
-        u0, u1, u2 = param[:, 0], param[:, 1], param[:, 2]
-        theta = jnp.arccos(1 - 2 * u0)
-        phi = 2 * jnp.pi * u1
-        w = jnp.array([jnp.sin(theta) * jnp.cos(phi), jnp.sin(theta) * jnp.sin(phi), jnp.cos(theta)]).T
-        omega = jnp.interp(u2, self.angle_cdf, self.angle_t)
-        wx, wy, wz = w.T
-        c, s = jnp.cos(omega), jnp.sin(omega)
-        t = 1.0 - c
-        I = jnp.eye(3)[None, :, :].repeat(param.shape[0], axis=0)
-        K = jnp.array([[jnp.zeros_like(wx), -wz, wy], [wz, jnp.zeros_like(wy), -wx], [-wy, wx, jnp.zeros_like(wz)]])
-        K = jnp.transpose(K, (2, 0, 1))
-        K2 = jnp.einsum('sij,sjk->sik', K, K)
-        U = I + s[:, None, None] * K + t[:, None, None] * K2
+        # param is shape (Batch, 3), unrestricted R^3
+        # If param is [0,0,0], U is Identity.
+
+        # We vmap the single-vector function over the batch
+        U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
     # ... [indexer_dynamic_soft_jax, indexer_dynamic_cosine_aniso_jax unchanged] ...
@@ -756,7 +765,7 @@ class FindUB:
                 target_sigma = 0.05
             else:
                 # Global: Large search radius (40%)
-                target_sigma = 0.4
+                target_sigma = 3.14
         print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
 
         if strategy_name.lower() == "de":
@@ -782,8 +791,12 @@ class FindUB:
                 # BOOTSTRAPPING
                 if strategy_type == 'population_based':
                     # DE/PSO: Initialize cluster around solution
-                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * target_sigma
-                    population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                    # Clip only the normalized parts (index 3+)
+                    p_orient = start_sol[:3] + noise[:, :3]
+                    p_rest = jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)
+                    population_init = jnp.concatenate([p_orient, p_rest], axis=1)
+
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
@@ -794,23 +807,44 @@ class FindUB:
             else:
                 # RANDOM SEARCH
                 if strategy_type == 'population_based':
-                    population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                    # Hybrid initialization: Unbounded Orientation, Bounded Lattice
+                    pop_orient = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+                    rng_rest, _ = jax.random.split(rng_pop)
+                    pop_rest = jax.random.uniform(rng_rest, (population_size, max(0, num_dims-3)))
+                    population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
+
                     fitness_init = objective(population_init)
                     state = strategy.init(rng_init, population_init, fitness_init, es_params)
                 else:
-                    # CMA-ES: Center at 0.5
-                    solution_init = jnp.full((num_dims,), 0.5)
+                    # CMA-ES: Center at 0.0 (Unbounded) or 0.5 (Bounded)?
+                    # For Rodrigues (0-3), 0.0 is Identity rotation. Good start.
+                    # For Lattice (3+), 0.5 is center of range. Good start.
+                    
+                    # Create mixed mean vector
+                    mean_orient = jnp.zeros(3)
+                    mean_rest = jnp.full((max(0, num_dims-3),), 0.5)
+                    solution_init = jnp.concatenate([mean_orient, mean_rest])
+                    
                     state = strategy.init(rng_init, solution_init, es_params)
-                    # FIX: Use 'std' instead of 'sigma' for evosax CMA-ES state
+                    # FIX: Use 'std' for evosax CMA-ES state
                     state = state.replace(std=target_sigma)
             return state
 
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
-            x = jnp.clip(x, 0.0, 1.0)
-            fitness = objective(x) 
-            state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
+
+            # --- PARTIAL CLIPPING ---
+            # Indices 0-2 (Orientation): Unbounded (Rodrigues)
+            # Indices 3+ (Lattice/Gonio): Bounded [0, 1]
+            x_orient = x[:, :3]
+            x_rest = x[:, 3:]
+            x_rest_clipped = jnp.clip(x_rest, 0.0, 1.0)
+
+            x_valid = jnp.concatenate([x_orient, x_rest_clipped], axis=1)
+
+            fitness = objective(x_valid)
+            state_tell, metrics = strategy.tell(rng_tell, x_valid, fitness, state_ask, es_params)
             return rng, state_tell, metrics
 
         # Vectorize over the 'batch' dimension
