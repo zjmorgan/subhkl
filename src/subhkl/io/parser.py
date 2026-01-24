@@ -27,6 +27,7 @@ def index(
     lattice_bound_frac: float = 0.05,
     bootstrap_filename: str = None,
     refine_goniometer: bool = False,
+    refine_goniometer_axes: list = None,
     goniometer_bound_deg: float = 5.0,
     nexus_filename: str = None,
     instrument_name: str = None,
@@ -98,6 +99,7 @@ def index(
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
+        refine_goniometer_axes=refine_goniometer_axes,
         goniometer_bound_deg=goniometer_bound_deg,
         goniometer_names=goniometer_names,
         loss_method=loss_method,
@@ -375,6 +377,11 @@ def indexer(
         "--refine-goniometer", 
         help="Refine goniometer angles during optimization."
     ),
+    refine_goniometer_axes: str = typer.Option(
+        None,
+        "--refine-goniometer-axes",
+        help="Comma-separated list of goniometer axis names to refine (e.g. 'omega,phi'). Requires --refine-goniometer."
+    ),
     goniometer_bound_deg: float = typer.Option(
         5.0,
         "--goniometer-bound-deg",
@@ -486,6 +493,10 @@ def indexer(
             dt = h5py.string_dtype(encoding='utf-8')
             f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
 
+    gonio_axes_list = None
+    if refine_goniometer_axes:
+        gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(',')]
+
     # Call the internal index function with the new parameters
     index(
         hdf5_peaks_filename=unique_filename,
@@ -501,6 +512,7 @@ def indexer(
         lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
         refine_goniometer=refine_goniometer,
+        refine_goniometer_axes=gonio_axes_list,
         goniometer_bound_deg=goniometer_bound_deg,
         nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,

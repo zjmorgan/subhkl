@@ -81,7 +81,7 @@ class VectorizedObjectiveJAX:
     def __init__(self, B, centering, kf_ki_dir, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
-                 peak_radii=None, loss_method='gaussian', 
+                 goniometer_refine_mask=None, peak_radii=None, loss_method='gaussian', 
                  # New Args for Forward Indexing
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32):
         
@@ -124,6 +124,13 @@ class VectorizedObjectiveJAX:
             self.num_gonio_axes = self.gonio_axes.shape[0]
             self.gonio_min = jnp.full(self.num_gonio_axes, -goniometer_bound_deg)
             self.gonio_max = jnp.full(self.num_gonio_axes, goniometer_bound_deg)
+
+            if goniometer_refine_mask is not None:
+                self.gonio_mask = np.array(goniometer_refine_mask, dtype=bool)
+            else:
+                self.gonio_mask = np.ones(self.num_gonio_axes, dtype=bool)
+
+            self.num_active_gonio = np.sum(self.gonio_mask)
 
         wavelength = jnp.array(wavelength)
         self.wl_min_val = wavelength[0]
@@ -505,10 +512,25 @@ class VectorizedObjectiveJAX:
             UB = jnp.einsum("sij,jk->sik", U, self.B)
 
         if self.refine_goniometer:
-            n_gon = self.num_gonio_axes
-            gonio_params_norm = x[:, idx:idx+n_gon]
-            idx += n_gon
-            R = self.compute_goniometer_R_jax(gonio_params_norm)
+            # NEW: Reconstruct full goniometer params from active subset
+            n_active = self.num_active_gonio
+            if n_active > 0:
+                active_params = x[:, idx:idx+n_active]
+                idx += n_active
+                
+                # Create full parameter vector filled with 0.5 (Neutral/Zero Offset)
+                # 0.5 in normalized space maps to (min + max)/2 = 0.0 degrees
+                batch_size = x.shape[0]
+                gonio_norm = jnp.full((batch_size, self.num_gonio_axes), 0.5)
+                
+                # Insert active parameters
+                # We use .at[].set() for JAX immutability
+                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(active_params)
+            else:
+                # No refined axes, all fixed at 0
+                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+
+            R = self.compute_goniometer_R_jax(gonio_norm)
             kf_ki_vec = jnp.einsum("smji,jm->sim", R, self.kf_ki_dir)
         else:
             kf_ki_vec = self.kf_ki_dir[None, ...].repeat(x.shape[0], axis=0)
@@ -597,6 +619,7 @@ class FindUB:
         refine_goniometer: bool = False,
         goniometer_bound_deg: float = 5.0,
         goniometer_names: list = None,
+        refine_goniometer_axes: list = None,
         d_min: float = None,
         d_max: float = None,
         hkl_search_range: int = 20,
@@ -625,6 +648,23 @@ class FindUB:
             kf_ki_input = kf_ki_dir_lab
         else:
             kf_ki_input = np.einsum("mji,jm->im", self.R, kf_ki_dir_lab)
+
+        # Logic to build mask from names
+        goniometer_refine_mask = None
+        if refine_goniometer and refine_goniometer_axes is not None:
+            if self.goniometer_names is None:
+                print("Warning: refine_goniometer_axes provided but goniometer_names not found. Refining ALL.")
+            else:
+                # Build boolean mask
+                mask = []
+                print(f"Refining specific goniometer axes: {refine_goniometer_axes}")
+                for name in self.goniometer_names:
+                    # Check if name contains any of the requested strings (partial match allowed? be strict for now)
+                    # Let's check strict equality or substring
+                    should_refine = any(req in name for req in refine_goniometer_axes)
+                    mask.append(should_refine)
+                goniometer_refine_mask = np.array(mask, dtype=bool)
+                print(f"Goniometer Mask: {goniometer_refine_mask} (Names: {self.goniometer_names})")
 
         weights = self.intensity / (self.sigma_intensity + 1e-6)
         weights = weights / np.mean(weights)
@@ -661,6 +701,7 @@ class FindUB:
             goniometer_axes=goniometer_axes,
             goniometer_angles=goniometer_angles,
             refine_goniometer=refine_goniometer,
+            goniometer_refine_mask=goniometer_refine_mask,
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
             d_min=d_min,
@@ -674,7 +715,10 @@ class FindUB:
         if refine_lattice:
             num_dims += num_lattice_params
         if refine_goniometer:
-            num_dims += len(goniometer_axes)
+            if goniometer_refine_mask is not None:
+                num_dims += np.sum(goniometer_refine_mask)
+            else:
+                num_dims += len(goniometer_axes)
 
         # Prepare init_params
         start_sol_processed = None
@@ -871,10 +915,24 @@ class FindUB:
             B = B_new
         else:
             B = self.reciprocal_lattice_B()
-            
+
+        if refine_goniometer:
+            n_active = np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
+
+            if n_active > 0:
+                active_norm = self.x[None, idx:idx+n_active]
+
+                # Reconstruct full norm vector
+                gonio_norm = np.full((1, len(goniometer_axes)), 0.5)
+                if goniometer_refine_mask is not None:
+                    gonio_norm[:, goniometer_refine_mask] = active_norm
+                else:
+                    gonio_norm = active_norm
+            else:
+                gonio_norm = np.full((1, len(goniometer_axes)), 0.5)
+
         kf_ki_vec = np.array(kf_ki_input)
         if refine_goniometer:
-            gonio_norm = self.x[None, idx:idx+len(goniometer_axes)]
             R_refined = objective.compute_goniometer_R_jax(gonio_norm)[0]
             self.R = np.array(R_refined)
             offsets_val = objective.gonio_min + gonio_norm * (objective.gonio_max - objective.gonio_min)
