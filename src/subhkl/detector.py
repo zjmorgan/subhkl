@@ -23,6 +23,49 @@ def scattering_vector_from_angles(two_theta: npt.ArrayLike, az_phi: npt.ArrayLik
     # ki direction is (0, 0, 1)
     return np.array([kx, ky, kz - 1])
 
+def angles_from_kf(kf_vectors):
+    """
+    Converts outgoing wavevectors (kf) to Lab Frame detector angles.
+
+    Physics:
+      The detector pixels are defined by spherical coordinates (2theta, az)
+      relative to the MECHANICAL Lab axes (Z=Optical Axis), regardless of
+      where the beam is actually pointing.
+    """
+    # 1. Normalize (just in case)
+    norms = np.linalg.norm(kf_vectors, axis=1, keepdims=True)
+    kf_dir = kf_vectors / norms
+
+    # 2. Lab Coordinate Calculation
+    # Z is along the beam pipe. Y is vertical. X is horizontal.
+    # 2theta = angle from Z axis
+    # azimuth = angle in XY plane from X axis
+
+    # cos(2theta) = z
+    two_theta = np.arccos(kf_dir[:, 2])
+
+    # tan(az) = y / x
+    azimuth = np.arctan2(kf_dir[:, 1], kf_dir[:, 0])
+
+    return two_theta, azimuth
+
+def angles_from_scattering_vector(q_vectors, ki_vec=None):
+    """
+    Legacy wrapper for backward compatibility, now aware of beam tilt.
+    """
+    if ki_vec is None:
+        ki_vec = np.array([0.0, 0.0, 1.0])
+
+    # Broadcast ki if q is (N,3)
+    if q_vectors.ndim == 2 and ki_vec.ndim == 1:
+        ki = ki_vec[None, :]
+    else:
+        ki = ki_vec
+
+    # k_f = Q + k_i
+    kf = q_vectors + ki
+
+    return angles_from_kf(kf)
 
 class Detector:
     def __init__(self, config: dict):

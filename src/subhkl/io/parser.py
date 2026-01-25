@@ -31,6 +31,8 @@ def index(
     goniometer_bound_deg: float = 5.0,
     refine_sample: bool = False, # NEW
     sample_bound_meters: float = 0.002,
+    refine_beam: bool = False,
+    beam_bound_deg: float = 1.0,
     nexus_filename: str = None,
     instrument_name: str = None,
     loss_method: str = 'cosine',
@@ -56,6 +58,8 @@ def index(
         print(f"Refining lattice parameters with {lattice_bound_frac*100}% bounds.")
     if refine_sample:
         print(f"Refining sample offset with {1000*sample_bound_meters} mm bounds.")
+    if refine_beam:
+        print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
     goniometer_names = None
     if refine_goniometer:
@@ -99,6 +103,8 @@ def index(
         goniometer_names=goniometer_names,
         refine_sample=refine_sample,
         sample_bound_meters=sample_bound_meters,
+        refine_beam=refine_beam,
+        beam_bound_deg=beam_bound_deg,
         loss_method=loss_method,
         d_min=d_min,
         d_max=d_max,
@@ -152,6 +158,7 @@ def index(
         if opt.sample_offset is not None:
             f["sample/offset"] = opt.sample_offset
 
+        f["beam/ki_vec"] = opt.ki_vec
         f["sample/a"] = opt.a
         f["sample/b"] = opt.b
         f["sample/c"] = opt.c
@@ -381,6 +388,16 @@ def indexer(
         "--sample-bound-meters",
         help="Bound for sample offset in meters."
     ),
+    refine_beam: bool = typer.Option(
+        False,
+        "--refine-beam",
+        help="Refine beam direction. Default (0,0,1)."
+    ),
+    beam_bound_deg: float = typer.Option(
+        1.0,
+        "--beam-bound-deg",
+        help="Bound for beam direction in degrees."
+    ),
     bootstrap_filename: typing.Optional[str] = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
     loss_method: str = typer.Option(
         'cosine',
@@ -488,6 +505,8 @@ def indexer(
         goniometer_bound_deg=goniometer_bound_deg,
         refine_sample=refine_sample,
         sample_bound_meters=sample_bound_meters,
+        refine_beam=refine_beam,
+        beam_bound_deg=beam_bound_deg,
         nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,
         loss_method=loss_method,
@@ -573,6 +592,11 @@ def peak_predictor(
         if "sample/offset" in f_indexed:
             sample_offset = np.array(f_indexed["sample/offset"])
 
+        ki_vec = None
+        if "beam/ki_vec" in f_indexed:
+            ki_vec = np.array(f_indexed["beam/ki_vec"])
+            print(f"Using refined beam direction {ki_vec} in peak prediction.")
+
     peaks = Peaks(filename,
                   instrument,
                   wavelength_min=wavelength[0],
@@ -591,7 +615,7 @@ def peak_predictor(
     UB = R_used @ U @ B
 
     peak_dict = peaks.predict_peaks(
-        a, b, c, alpha, beta, gamma, d_min, UB, space_group=space_group, sample_offset=sample_offset
+        a, b, c, alpha, beta, gamma, d_min, UB, space_group=space_group, sample_offset=sample_offset, ki_vec=ki_vec,
     )
 
     if create_visualizations:
@@ -615,9 +639,12 @@ def peak_predictor(
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
         f["goniometer/R"] = R_used 
-        
+
         if sample_offset is not None:
             f["sample/offset"] = sample_offset
+
+        if ki_vec is not None:
+            f["beam/ki_vec"] = ki_vec
 
         for bank, (i, j, h, k, l, wl) in peak_dict.items():
             f[f"banks/{bank}/i"] = i
@@ -695,7 +722,8 @@ def integrator(
         "sample/space_group",
         "sample/U",
         "sample/B",
-        "sample/offset", # Copy offset
+        "sample/offset",
+        "beam/ki_vec",
         "instrument/wavelength",
         "goniometer/R",
     ]

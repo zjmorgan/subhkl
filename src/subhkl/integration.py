@@ -1051,49 +1051,96 @@ class Peaks:
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
 
-    def coverage(self, h, k, l, UB, wavelength, tol=1e-5):
+
+    def coverage(self, h, k, l, UB, wavelength, ki_vec=None, tol=1e-5):
+        """
+        Calculates which reflections are geometrically possible and returns their
+        scattering direction vectors (kf direction).
+
+        Supports tilted incident beam via ki_vec.
+        """
         wl_min, wl_max = wavelength
 
+        # 1. Setup Incident Beam (normalized direction)
+        if ki_vec is None:
+            ki_hat = np.array([0.0, 0.0, 1.0])
+        else:
+            ki_hat = np.array(ki_vec)
+            ki_hat = ki_hat / np.linalg.norm(ki_hat)
+
+        # 2. Calculate Q_lab vectors (Reciprocal Lattice points in Lab Frame)
         hkl = np.stack([h, k, l], axis=0)
+        # Q = 2pi * UB * hkl (Units: Inverse Angstroms)
+        Q_vecs = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl) # Shape (3, N)
+        Q_sq = np.sum(Q_vecs**2, axis=0) # Shape (N,)
 
-        Qx, Qy, Qz = np.einsum("ij,jk->ik", 2 * np.pi * UB, hkl)
-        Q = np.sqrt(Qx ** 2 + Qy ** 2 + Qz ** 2)
+        # 3. Calculate Wavelength (Generalized Laue Condition)
+        # Elastic scattering: |kf| = |ki| = k
+        # Q = kf - ki  =>  kf = Q + ki
+        # |Q + ki|^2 = k^2  =>  Q^2 + 2(Q . ki) + k^2 = k^2
+        # k = - Q^2 / (2 * (Q . ki_hat))
+        # lambda = 2pi / k = -4pi * (Q . ki_hat) / Q^2
 
-        lamda = -4 * np.pi * Qz / Q ** 2
+        Q_dot_ki = np.sum(Q_vecs * ki_hat[:, None], axis=0)
+
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+             lamda = -4 * np.pi * Q_dot_ki / Q_sq
+
+        # 4. Filter by Wavelength Range
         mask = np.logical_and(lamda > wl_min, lamda < wl_max)
 
-        Qx, Qy, Qz, Q = Qx[mask], Qy[mask], Qz[mask], Q[mask]
+        # Apply mask
+        Q_vecs = Q_vecs[:, mask]
+        lamda = lamda[mask]
+        h, k, l = h[mask], k[mask], l[mask]
 
-        h, k, l, lamda = h[mask], k[mask], l[mask], lamda[mask]
+        # 5. Calculate Outgoing Beam Direction (kf)
+        # kf_vector = Q_vector + ki_vector
+        # Magnitude of ki is k = 2pi / lambda
+        k_mag = 2 * np.pi / lamda
 
-        # Inverses of scattering_vector_from_angles, essentially
-        tt = -2 * np.arcsin(Qz / Q)
-        az = np.arctan2(Qy, Qx)
+        # kf_vec = Q + (2pi/lambda)*ki_hat
+        kf_vecs = Q_vecs + k_mag * ki_hat[:, None]
 
-        x = np.sin(tt) * np.cos(az)
-        y = np.sin(tt) * np.sin(az)
-        z = np.cos(tt)
+        # Normalize to get direction cosines (x, y, z)
+        # This replaces the old tt/az conversion logic
+        kf_norms = np.linalg.norm(kf_vecs, axis=0)
+        kf_dirs = kf_vecs / kf_norms # Shape (3, N_filtered)
 
+        x, y, z = kf_dirs[0], kf_dirs[1], kf_dirs[2]
+
+        # 6. Remove Duplicates (Overlap check)
         coords = np.vstack((x, y, z)).T
         rounded = np.round(coords / tol).astype(int)
-
         _, ind, mult = np.unique(rounded, axis=0, return_index=True, return_counts=True)
 
-        return [x[ind], y[ind], z[ind]], [h[ind], k[ind], l[ind]], lamda[ind], mult
+        # Return unique directions and indices
+        return (np.vstack((x[ind], y[ind], z[ind])),
+                (h[ind], k[ind], l[ind]),
+                lamda[ind],
+                mult)
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, UB, space_group="P 1", sample_offset=None):
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, UB, space_group="P 1", sample_offset=None, ki_vec=None):
+        """
+        Predicts peak positions on the detector banks.
+        Now accepts ki_vec for beam tilt correction.
+        """
         h, k, l = self.reflections(a, b, c, alpha, beta, gamma, space_group=space_group, d_min=d_min)
         wavelength = [self.wavelength_min, self.wavelength_max]
-        xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
+
+        # Pass ki_vec to coverage
+        xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength, ki_vec=ki_vec)
         h, k, l = hkl
 
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
             det = self.get_detector(bank)
-            
-            # Use updated reflections_mask which now supports sample_offset
+
+            # xyz contains the normalized k_f direction vectors.
+            # det.reflections_mask handles the ray tracing to the panel
             mask, row, col = det.reflections_mask(xyz[0], xyz[1], xyz[2], sample_offset=sample_offset)
-            
+
             peak_dict[bank] = [row[mask], col[mask], h[mask], k[mask], l[mask], wl[mask]]
 
         return peak_dict

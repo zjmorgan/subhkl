@@ -100,6 +100,7 @@ class VectorizedObjectiveJAX:
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  goniometer_refine_mask=None, 
                  refine_sample=False, sample_bound_meters=0.002,
+                 refine_beam=False, beam_bound_deg=1.0,
                  peak_radii=None, loss_method='gaussian', 
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
                  space_group="P 1"):
@@ -119,6 +120,9 @@ class VectorizedObjectiveJAX:
 
         self.refine_sample = refine_sample
         self.sample_bound = sample_bound_meters
+
+        self.refine_beam = refine_beam
+        self.beam_bound_deg = beam_bound_deg
 
         self.softness = softness
         self.loss_method = loss_method
@@ -481,7 +485,7 @@ class VectorizedObjectiveJAX:
         effective_sigma = softness + (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
         score = -jnp.sum(self.weights * probs, axis=1)
-        return score, probs, best_hkl.transpose((0, 2, 1)), best_lamb
+        return score, probs, best_hkl, best_lamb
 
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
@@ -505,19 +509,40 @@ class VectorizedObjectiveJAX:
                 s_norm = x[:, idx:idx+3]
                 idx += 3
                 sample_offset = (s_norm - 0.5) * 2.0 * self.sample_bound
-        
+
+        if self.refine_beam:
+            # x, y components of beam vector (z is roughly 1)
+            # Map 0..1 to -bound..+bound (radians)
+            bound_rad = jnp.deg2rad(self.beam_bound_deg)
+            tx = (x[:, idx] - 0.5) * 2.0 * bound_rad
+            ty = (x[:, idx+1] - 0.5) * 2.0 * bound_rad
+            idx += 2
+
+            # Construct ki = [tx, ty, 1] normalized
+            ones = jnp.ones_like(tx)
+            ki_vec = jnp.stack([tx, ty, ones], axis=1)
+            ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
+            ki = ki_vec[:, :, None] # (Batch, 3, 1)
+        else:
+            ki = jnp.array([0.0, 0.0, 1.0])[None, :, None]
+
         if self.refine_sample:
             s = sample_offset[:, :, None]
             p = self.peak_xyz[None, :, :]
-            v = p - s 
+            v = p - s
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
             kf = v / dist
-            ki = jnp.array([0.0, 0.0, 1.0])[None, :, None]
+            # ki is now DYNAMIC
             q_lab = kf - ki
-            k_sq_dyn = jnp.sum(q_lab**2, axis=1) 
+            k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
-            q_lab = self.kf_ki_dir_init[None, ...].repeat(x.shape[0], axis=0)
-            k_sq_dyn = self.k_sq_init[None, :].repeat(x.shape[0], axis=0)
+            # If we don't refine sample but do refine beam, we need to adjust the q_lab
+            # This path is less common in your workflow but implemented for completeness
+            # Original kf_ki_dir_init assumed ki=(0,0,1)
+            # Reconstruct kf from q_init + (0,0,1)
+            kf_fixed = self.kf_ki_dir_init[None, ...] + jnp.array([0., 0., 1.])[None, :, None]
+            q_lab = kf_fixed - ki
+            k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         if self.refine_goniometer:
             n_active = self.num_active_gonio
@@ -633,6 +658,8 @@ class FindUB:
         refine_goniometer_axes: list = None,
         refine_sample: bool = False,
         sample_bound_meters: float = 2.0,
+        refine_beam: bool = False,
+        beam_bound_deg: float = 1.0,
         d_min: float = None,
         d_max: float = None,
         hkl_search_range: int = 20,
@@ -726,6 +753,8 @@ class FindUB:
             goniometer_refine_mask=goniometer_refine_mask,
             refine_sample=refine_sample,
             sample_bound_meters=sample_bound_meters,
+            refine_beam=refine_beam,
+            beam_bound_deg=beam_bound_deg,
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
             d_min=d_min,
@@ -743,6 +772,12 @@ class FindUB:
                 refine_sample = False
             else:
                 num_dims += 3
+        if refine_beam:
+            if self.peak_xyz is None:
+                print("Warning: refine_beam requested but peaks/xyz not found. Disabling beam refinement.")
+                refine_sample = False
+            else:
+                num_dims += 2
         if refine_goniometer:
             if goniometer_refine_mask is not None:
                 num_dims += np.sum(goniometer_refine_mask)
@@ -935,6 +970,37 @@ class FindUB:
              print(f"--- Refined Sample Offset (mm) ---")
              print(f"X: {1000*self.sample_offset[0]:.4f}, Y: {1000*self.sample_offset[1]:.4f}, Z: {1000*self.sample_offset[2]:.4f}")
 
+        if refine_beam:
+            bound_rad = np.deg2rad(beam_bound_deg)
+            tx = (self.x[idx] - 0.5) * 2.0 * bound_rad
+            ty = (self.x[idx+1] - 0.5) * 2.0 * bound_rad
+            idx += 2
+
+            # Construct ki = [tx, ty, 1] normalized
+            self.ki_vec = np.array([tx, ty, 1.0])
+            self.ki_vec = self.ki_vec / np.linalg.norm(self.ki_vec)
+            print("-- Refined Beam Direction ---")
+            print(f"(ki_x, ki_y, ki_z): ({self.ki_vec[0]:.3f}, {self.ki_vec[1]:.3f}, {self.ki_vec[2]:.3f})")
+        else:
+            self.ki_vec = np.array([0.0, 0.0, 1.0])
+
+        k_sq_dyn = None
+        kf_ki_vec = np.array(kf_ki_input)
+        if refine_beam or refine_sample:
+            if refine_sample:
+                s = self.sample_offset
+                p = self.peak_xyz.T # (3, M)
+                v = p - s[:, None]
+                dist = np.linalg.norm(v, axis=0)
+                kf = v / dist
+                # ki is now DYNAMIC
+                kf_ki_vec = kf - self.ki_vec[:, None]
+                k_sq_dyn = np.sum(kf_ki_vec**2, axis=0)[None, :]
+            else:
+                kf_fixed = (kf_ki_input + np.array([0., 0., 1.]))[:, None]
+                kf_ki_vec = kf_fixed - self.ki_vec[:, None]
+                k_sq_dyn = np.sum(kf_ki_vec**2, axis=0)[None,:]
+
         if refine_goniometer:
             n_active = np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
             if n_active > 0:
@@ -947,7 +1013,6 @@ class FindUB:
             else:
                 gonio_norm = np.full((1, len(goniometer_axes)), 0.5)
 
-        kf_ki_vec = np.array(kf_ki_input)
         if refine_goniometer:
             R_refined = objective.compute_goniometer_R_jax(gonio_norm)[0]
             self.R = np.array(R_refined)
@@ -963,33 +1028,20 @@ class FindUB:
                  kf_ki_vec = np.einsum("mji,jm->im", self.R, kf_ki_vec)
             else:
                  kf_ki_vec = np.einsum("ji,jm->im", self.R, kf_ki_vec)
-        else:
-            kf_ki_vec = kf_ki_input
 
         UB_final = U @ B
 
         if loss_method == 'forward':
-            # Need to re-calculate Q magnitude if sample offset changed
-            k_sq_dyn = None
-            if refine_sample:
-                s = self.sample_offset # (3,)
-                p = self.peak_xyz.T # (3, M)
-                v = p - s[:, None]
-                dist = np.linalg.norm(v, axis=0)
-                kf = v / dist
-                ki = np.array([0, 0, 1])[:, None]
-                q_lab = kf - ki
-                k_sq_dyn = np.sum(q_lab**2, axis=0)[None, :]
-                
+
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(
                 UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=softness, window_batch_size=window_batch_size
             )
         elif loss_method == 'cosine':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
         else:
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
 
-        num_peaks_soft = float(jnp.sum(accum_probs[0]))
+        num_peaks_soft = float(np.sum(accum_probs[0]))
         print(f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count).")
 
         return num_peaks_soft, hkl[0], lamb[0], U
