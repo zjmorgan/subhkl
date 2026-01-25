@@ -683,7 +683,6 @@ class FindUB:
 
             # Heuristic: Boost high-angle peaks.
             # Adjust 'B_sharpen' to control aggressiveness (try 50.0).
-            B_sharpen = 50.0
             wilson_correction = np.exp(B_sharpen * sin_sq_theta)
 
             weights = snr * wilson_correction
