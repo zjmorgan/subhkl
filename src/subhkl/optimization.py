@@ -640,6 +640,7 @@ class FindUB:
         window_batch_size: int = 32,
         batch_size: int = None,
         sigma_init: float = None,
+        B_sharpen: float = 50,
     ):
         if goniometer_axes is None and self.goniometer_axes is not None:
              goniometer_axes = self.goniometer_axes
@@ -669,8 +670,27 @@ class FindUB:
                 goniometer_refine_mask = np.array(mask, dtype=bool)
                 print(f"Goniometer Mask: {goniometer_refine_mask} (Names: {self.goniometer_names})")
 
-        weights = self.intensity / (self.sigma_intensity + 1e-6)
-        weights = weights / np.mean(weights)
+        # 1. Calculate base SNR weights
+        snr = self.intensity / (self.sigma_intensity + 1e-6)
+
+        if B_sharpen is not None:
+            # 2. Apply "Wilson" Boost (Inverse B-factor)
+            # We use sin(theta)^2 as a proxy for resolution (1/d^2)
+            # B_est is an estimated B-factor (e.g., 20-50 for proteins) to flatten the decay.
+            # Since we deal with Laue/Pink, lambda varies, but 2theta is strongly correlated with d-spacing.
+            theta_rad = np.deg2rad(self.two_theta) / 2.0
+            sin_sq_theta = np.sin(theta_rad)**2
+
+            # Heuristic: Boost high-angle peaks.
+            # Adjust 'B_sharpen' to control aggressiveness (try 50.0).
+            B_sharpen = 50.0
+            wilson_correction = np.exp(B_sharpen * sin_sq_theta)
+
+            weights = snr * wilson_correction
+
+            # 3. Normalize and Clip
+            weights = weights / np.mean(weights)
+
         weights = np.clip(weights, 0, 10.0)
 
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])

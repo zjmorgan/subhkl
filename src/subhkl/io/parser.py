@@ -40,6 +40,7 @@ def index(
     search_window_size: int = 256,
     batch_size: int = None,
     window_batch_size: int = 32,
+    B_sharpen: float = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -105,6 +106,7 @@ def index(
         search_window_size=search_window_size,
         batch_size=batch_size,
         window_batch_size=window_batch_size,
+        B_sharpen=B_sharpen,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -391,6 +393,7 @@ def indexer(
     search_window_size: int = typer.Option(256, "--search-window-size"),
     batch_size: int = typer.Option(None, "--batch-size"),
     window_batch_size: int = typer.Option(32, "--window-batch-size"),
+    B_sharpen: float = typer.Option(None, "--b-sharpen", help="Wilson B-factor for peak sharpening (~50 for protein crystals)"),
 ) -> None:
     # Logic to resolve SG
     sg_to_use = "P 1"
@@ -494,6 +497,7 @@ def indexer(
         search_window_size=search_window_size,
         batch_size=batch_size,
         window_batch_size=window_batch_size,
+        B_sharpen=B_sharpen,
     )
 
 
