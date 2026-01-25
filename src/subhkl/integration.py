@@ -24,7 +24,7 @@ from subhkl.config import (
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.detector import Detector
-
+from subhkl.spacegroup import is_systematically_absent
 
 DetectorPeaks = namedtuple(
     "DetectorPeaks",
@@ -396,30 +396,6 @@ class Peaks:
 
         return new_a, new_b, new_theta
 
-    def allow_centering(self, h, k, l, centering="P"):
-        if centering == "P":
-            mask = np.full(l.shape, True, dtype=bool)
-        elif centering == "A":
-            mask = (k + l) % 2 == 0
-        elif centering == "B":
-            mask = (h + l) % 2 == 0
-        elif centering == "C":
-            mask = (h + k) % 2 == 0
-        elif centering == "I":
-            mask = (h + k + l) % 2 == 0
-        elif centering == "F":
-            mask = ((h + k) % 2 == 0) & ((h + l) % 2 == 0) & ((k + l) % 2 == 0)
-        elif centering == "R":
-            mask = (h + k + l) % 3 == 0
-        elif centering == "R_obv":
-            mask = (-h + k + l) % 3 == 0
-        elif centering == "R_rev":
-            mask = (h - k + l) % 3 == 0
-        else:
-            raise ValueError("Invalid centering")
-
-        return h[mask], k[mask], l[mask]
-
     def cartesian_matrix_metric_tensor(self, a, b, c, alpha, beta, gamma):
         G = np.array(
             [
@@ -435,7 +411,7 @@ class Peaks:
 
         return B, Gstar
 
-    def reflections(self, a, b, c, alpha, beta, gamma, centering="P", d_min=2):
+    def reflections(self, a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2):
         constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
         B, Gstar = self.cartesian_matrix_metric_tensor(*constants)
 
@@ -452,15 +428,24 @@ class Peaks:
             indexing="ij",
         )
 
-        hkl = [h.flatten(), k.flatten(), l.flatten()]
-        h, k, l = hkl
+        # New: Use Gemmi via spacegroup.py
+        h_flat = h.flatten()
+        k_flat = k.flatten()
+        l_flat = l.flatten()
 
+        # 1. Resolution Filter
+        hkl_sq = np.einsum("ij,jl,il->l", Gstar, [h_flat, k_flat, l_flat], [h_flat, k_flat, l_flat])
         with np.errstate(divide="ignore"):
-            d = 1 / np.sqrt(np.einsum("ij,jl,il->l", Gstar, hkl, hkl))
+            d = 1 / np.sqrt(hkl_sq)
+        res_mask = (d > d_min) & (d < np.inf)
 
-        mask = (d > d_min) & (d < np.inf)
+        # 2. Space Group Filter
+        absent_mask = is_systematically_absent(h_flat, k_flat, l_flat, space_group)
 
-        return self.allow_centering(h[mask], k[mask], l[mask], centering)
+        # Combine: Allowed = Valid Resolution AND NOT Absent
+        final_mask = res_mask & (~absent_mask)
+
+        return h_flat[final_mask], k_flat[final_mask], l_flat[final_mask]
 
     def peak(self, x, y, A, B, mu_x, mu_y, sigma_1, sigma_2, theta):
         """
@@ -1096,8 +1081,8 @@ class Peaks:
 
         return [x[ind], y[ind], z[ind]], [h[ind], k[ind], l[ind]], lamda[ind], mult
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, centering, d_min, UB, sample_offset=None):
-        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, centering, d_min)
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, UB, space_group="P 1", sample_offset=None):
+        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, space_group=space_group, d_min=d_min)
         wavelength = [self.wavelength_min, self.wavelength_max]
         xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength)
         h, k, l = hkl

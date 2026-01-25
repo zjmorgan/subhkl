@@ -14,6 +14,7 @@ import jax.scipy.linalg as jscipy_linalg
 from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
 from subhkl.detector import scattering_vector_from_angles
+from subhkl.spacegroup import generate_hkl_mask, get_centering
 
 try:
     from tqdm import trange
@@ -94,13 +95,14 @@ class VectorizedObjectiveJAX:
     """
     JAX-compatible vectorized objective function for evosax.
     """
-    def __init__(self, B, centering, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
+    def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  goniometer_refine_mask=None, 
                  refine_sample=False, sample_bound_meters=0.002,
                  peak_radii=None, loss_method='gaussian', 
-                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32):
+                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
+                 space_group="P 1"):
         
         self.B = jnp.array(B)
         
@@ -120,10 +122,11 @@ class VectorizedObjectiveJAX:
 
         self.softness = softness
         self.loss_method = loss_method
-        self.centering = centering
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
-        
+       
+        self.space_group = space_group
+
         self.refine_lattice = refine_lattice
         self.lattice_system = lattice_system
         self.refine_goniometer = refine_goniometer
@@ -193,6 +196,18 @@ class VectorizedObjectiveJAX:
         sort_idx = jnp.argsort(phis)
         self.pool_phi_sorted = phis[sort_idx]
         self.pool_hkl_sorted = hkl_pool[:, sort_idx] 
+
+        # --- Generate Space Group Mask ---
+        # Mask covers range [-range, +range]
+        # Size is (2*range+1)^3
+        self.mask_range = hkl_search_range
+        print(f"Generating HKL mask for Space Group: {self.space_group} (Range: +/-{self.mask_range})")
+
+        # Generate on CPU via gemmi
+        mask_cpu = generate_hkl_mask(self.mask_range, self.mask_range, self.mask_range, self.space_group)
+
+        # Move to JAX/GPU
+        self.valid_hkl_mask = jnp.array(mask_cpu)
 
     def reconstruct_cell_params(self, params_norm):
         p_free = self.lat_min + params_norm * (self.lat_max - self.lat_min)
@@ -283,8 +298,28 @@ class VectorizedObjectiveJAX:
             prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            valid_sym = jnp.full_like(h, True, dtype=bool) 
-            prob = jnp.where(valid_cand, prob, 0.0)
+
+            r = self.mask_range
+            in_bounds = (h >= -r) & (h <= r) & \
+                        (k >= -r) & (k <= r) & \
+                        (l >= -r) & (l <= r)
+
+            # 2. Lookup in Mask
+            # Shift indices: -r maps to 0, 0 maps to r, +r maps to 2r
+            idx_h = h + r
+            idx_k = k + r
+            idx_l = l + r
+
+            # Use 'clip' to be safe for lookup, but 'in_bounds' ensures we ignore invalid ones
+            safe_h = jnp.clip(idx_h, 0, 2*r).astype(jnp.int32)
+            safe_k = jnp.clip(idx_k, 0, 2*r).astype(jnp.int32)
+            safe_l = jnp.clip(idx_l, 0, 2*r).astype(jnp.int32)
+
+            # Lookup: (S, M)
+            is_allowed = self.valid_hkl_mask[safe_h, safe_k, safe_l]
+            valid_sym = in_bounds & is_allowed
+
+            prob = jnp.where(valid_cand & valid_sym, prob, 0.0)
             new_sum = curr_sum + prob
             update_mask = prob > curr_max
             new_max = jnp.where(update_mask, prob, curr_max)
@@ -326,13 +361,28 @@ class VectorizedObjectiveJAX:
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            valid_sym = jnp.full_like(h, True, dtype=bool)
-            if self.centering == "A": valid_sym = (k + l) % 2 == 0
-            elif self.centering == "B": valid_sym = (h + l) % 2 == 0
-            elif self.centering == "C": valid_sym = (h + k) % 2 == 0
-            elif self.centering == "I": valid_sym = (h + k + l) % 2 == 0
-            elif self.centering == "F": valid_sym = ((h + k)%2==0) & ((l+h)%2==0) & ((k+l)%2==0)
-            elif self.centering == "R": valid_sym = (-h + k + l) % 3 == 0 
+
+            r = self.mask_range
+            in_bounds = (h >= -r) & (h <= r) & \
+                        (k >= -r) & (k <= r) & \
+                        (l >= -r) & (l <= r)
+
+            # 2. Lookup in Mask
+            # Shift indices: -r maps to 0, 0 maps to r, +r maps to 2r
+            idx_h = h + r
+            idx_k = k + r
+            idx_l = l + r
+
+            # Use 'clip' to be safe for lookup, but 'in_bounds' ensures we ignore invalid ones
+            safe_h = jnp.clip(idx_h, 0, 2*r).astype(jnp.int32)
+            safe_k = jnp.clip(idx_k, 0, 2*r).astype(jnp.int32)
+            safe_l = jnp.clip(idx_l, 0, 2*r).astype(jnp.int32)
+
+            # Lookup: (S, M)
+            is_allowed = self.valid_hkl_mask[safe_h, safe_k, safe_l]
+
+            valid_sym = in_bounds & is_allowed
+
             prob = jnp.where(valid_cand & valid_sym, prob, 0.0)
             new_sum = curr_sum + prob
             score_tracked = jnp.where(valid_cand & valid_sym, log_prob, -1e9)
@@ -391,11 +441,27 @@ class VectorizedObjectiveJAX:
             d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
             valid_mask = valid_lamb & valid_res
-            
+
+            h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]
+            # 2. Lookup in Mask
+            # Shift indices: -r maps to 0, 0 maps to r, +r maps to 2r
+            r = self.mask_range
+            idx_h = h + r
+            idx_k = k + r
+            idx_l = l + r
+
+            # Use 'clip' to be safe for lookup, but 'in_bounds' ensures we ignore invalid ones
+            safe_h = jnp.clip(idx_h, 0, 2*r).astype(jnp.int32)
+            safe_k = jnp.clip(idx_k, 0, 2*r).astype(jnp.int32)
+            safe_l = jnp.clip(idx_l, 0, 2*r).astype(jnp.int32)
+
+            # Lookup: (S, M, W)
+            valid_sym = self.valid_hkl_mask[safe_h, safe_k, safe_l]
+
             q_obs_opt = k_obs / jnp.where(lambda_opt==0, 1.0, lambda_opt)[..., None]
             diff = q_obs_opt - q_pred
             dist_sq = jnp.sum(diff**2, axis=3)
-            dist_sq_masked = jnp.where(valid_mask, dist_sq, 1e9)
+            dist_sq_masked = jnp.where(valid_mask & valid_sym, dist_sq, 1e9)
             
             batch_min_dist = jnp.min(dist_sq_masked, axis=2)
             batch_best_local_idx = jnp.argmin(dist_sq_masked, axis=2)
@@ -470,7 +536,7 @@ class VectorizedObjectiveJAX:
             else:
                  kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
         else:
-            if self.R.ndim == 3:
+            if R.ndim == 3:
                  kf_ki_vec = jnp.einsum("mji,sjm->sim", self.R, q_lab)
             else:
                  kf_ki_vec = jnp.einsum("ji,sjm->sim", self.R, q_lab)
@@ -522,7 +588,7 @@ class FindUB:
             self.intensity = f["peaks/intensity"][()]
             self.sigma_intensity = f["peaks/sigma"][()]
             self.radii = f["peaks/radius"][()]
-            self.centering = f["sample/centering"][()].decode("utf-8")
+            self.space_group = f["sample/space_group"][()].decode("utf-8")
             
             if "peaks/xyz" in f:
                 self.peak_xyz = f["peaks/xyz"][()]
@@ -609,7 +675,7 @@ class FindUB:
 
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
         lattice_system, num_lattice_params = get_lattice_system(
-            self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.centering
+            self.a, self.b, self.c, self.alpha, self.beta, self.gamma, get_centering(self.space_group),
         )
         
         if refine_lattice:
@@ -621,7 +687,6 @@ class FindUB:
 
         objective = VectorizedObjectiveJAX(
             self.reciprocal_lattice_B(),
-            self.centering,
             kf_ki_input,
             self.peak_xyz,
             np.array(self.wavelength),
@@ -629,6 +694,7 @@ class FindUB:
             self._angle_t,
             weights=weights,
             softness=softness,
+            space_group=self.space_group,
             loss_method=loss_method,
             cell_params=cell_params_init,
             peak_radii=self.radii,

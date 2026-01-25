@@ -117,7 +117,7 @@ def index(
     refined_R = opt.R
 
     copy_keys = [
-        "sample/centering",
+        "sample/space_group",
         "instrument/wavelength",
         "peaks/intensity",
         "peaks/sigma",
@@ -278,7 +278,7 @@ def finder_merger(
     gamma: float,
     wavelength_min: float,
     wavelength_max: float,
-    sample_centering: str
+    space_group: str
 ):
     with open(finder_h5_txt_list_filename) as f:
         finder_h5_files = f.read().splitlines()
@@ -293,7 +293,7 @@ def finder_merger(
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
         f["sample/gamma"] = gamma
-        f["sample/centering"] = sample_centering
+        f["sample/space_group"] = space_group
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
 
@@ -309,7 +309,7 @@ def indexer(
     gamma: float,
     wavelength_min: float,
     wavelength_max: float,
-    sample_centering: str,
+    space_group: str,
     goniometer_csv_filename: typing.Optional[str] = None,
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,
@@ -392,6 +392,11 @@ def indexer(
     batch_size: int = typer.Option(None, "--batch-size"),
     window_batch_size: int = typer.Option(32, "--window-batch-size"),
 ) -> None:
+    # Logic to resolve SG
+    sg_to_use = "P 1"
+    if space_group:
+        sg_to_use = space_group
+
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename) as f:
         two_theta = np.array(f["peaks/two_theta"])
@@ -437,7 +442,7 @@ def indexer(
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
         f["sample/gamma"] = gamma
-        f["sample/centering"] = sample_centering
+        f["sample/space_group"] = sg_to_use
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
         f["goniometer/R"] = rotations
         f["peaks/two_theta"] = two_theta
@@ -535,7 +540,7 @@ def peak_predictor(
     integration_peaks_filename: str,
     d_min: float = 1.0,
     create_visualizations: bool = False,
-    centering: str = None,
+    space_group: str = None,
     wavel_min: float = None,
     wavel_max: float = None,
 ):
@@ -546,8 +551,8 @@ def peak_predictor(
         alpha = float(np.array(f_indexed["sample/alpha"]))
         beta = float(np.array(f_indexed["sample/beta"]))
         gamma = float(np.array(f_indexed["sample/gamma"]))
-        if centering is None:
-            centering = np.array(f_indexed["sample/centering"]).item().decode('utf-8')
+        if space_group is None:
+            space_group = np.array(f_indexed["sample/space_group"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
         if wavel_min is not None:
             wavelength[0] = wavel_min
@@ -582,7 +587,7 @@ def peak_predictor(
     UB = R_used @ U @ B
 
     peak_dict = peaks.predict_peaks(
-        a, b, c, alpha, beta, gamma, centering, d_min, UB, sample_offset=sample_offset
+        a, b, c, alpha, beta, gamma, d_min, UB, space_group=space_group, sample_offset=sample_offset
     )
 
     if create_visualizations:
@@ -601,7 +606,7 @@ def peak_predictor(
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
         f["sample/gamma"] = gamma
-        f["sample/centering"] = centering
+        f["sample/space_group"] = space_group
         f["sample/U"] = U
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
@@ -683,7 +688,7 @@ def integrator(
         "sample/alpha",
         "sample/beta",
         "sample/gamma",
-        "sample/centering",
+        "sample/space_group",
         "sample/U",
         "sample/B",
         "sample/offset", # Copy offset
