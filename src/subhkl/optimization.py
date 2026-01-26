@@ -410,7 +410,12 @@ class VectorizedObjectiveJAX:
         recip_len_sq = jnp.sum(UB**2, axis=1)
         kappa = recip_len_sq / ((softness + 1e-9)**2 * 4 * jnp.pi**2)
         kappa = kappa[:, :, None]
-        initial_carry = (jnp.zeros(max_v_val.shape), jnp.full(max_v_val.shape, -1e9), jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), jnp.zeros(max_v_val.shape))
+        initial_carry = (
+            jnp.zeros(max_v_val.shape),         
+            jnp.full(max_v_val.shape, -1e9),    
+            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), 
+            jnp.zeros(max_v_val.shape)          
+        )
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
             n = start_int + i
@@ -420,7 +425,20 @@ class VectorizedObjectiveJAX:
             cos_terms = kappa * (jnp.cos(2 * jnp.pi * hkl_float) - 1.0)
             log_prob = jnp.sum(cos_terms, axis=1) 
             prob = jnp.exp(log_prob)
+            
+            # --- VALIDATION LOGIC ---
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
+            
+            # 1. ADDED: Resolution Filter (Crystallographic convention d = 1/|Q|)
+            # hkl_float is the fractional HKL estimate. We need |B * hkl|
+            # Approx: Use integer HKL for speed, or float for accuracy. 
+            # Using float is safer for the filter.
+            q_vecs = jnp.einsum("sij,sjm->sim", UB, hkl_float)
+            q_sq = jnp.sum(q_vecs**2, axis=1) # |Q|^2 = 1/d^2
+            d_est = 1.0 / jnp.sqrt(q_sq + 1e-9)
+            valid_res = (d_est >= self.d_min) & (d_est <= self.d_max)
+
+            # 2. Symmetry Mask
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
             r = self.mask_range
@@ -428,14 +446,20 @@ class VectorizedObjectiveJAX:
             idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
             idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
             is_allowed = self.valid_hkl_mask[idx_h, idx_k, idx_l]
-            prob = jnp.where(valid_cand & is_allowed, prob, 0.0)
+            
+            # Combine all masks
+            final_mask = valid_cand & valid_res & is_allowed
+            
+            prob = jnp.where(final_mask, prob, 0.0)
             new_sum = curr_sum + prob
-            score_tracked = jnp.where(valid_cand & is_allowed, log_prob, -1e9)
+            score_tracked = jnp.where(final_mask, log_prob, -1e9)
+            
             update_mask = score_tracked > curr_max
             new_max = jnp.where(update_mask, score_tracked, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
+        
         final_carry, _ = jax.lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
         accum_probs, _, best_hkl, best_lamb = final_carry
         score = -jnp.sum(self.weights * accum_probs, axis=1)
