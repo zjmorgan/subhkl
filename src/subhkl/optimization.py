@@ -1,4 +1,5 @@
 import os
+import warnings
 from functools import partial
 
 import h5py
@@ -22,7 +23,9 @@ except ImportError:
     trange = None
 
 
-# --- Helper Functions for Parameter Mapping ---
+# ==============================================================================
+# 1. HELPER FUNCTIONS: Parameter Mapping
+# ==============================================================================
 
 def _inverse_map_param(value, bound):
     if bound < 1e-12: return 0.5
@@ -92,6 +95,10 @@ def rotation_matrix_from_rodrigues_jax(w):
     R = I + jnp.sin(theta) * K + (1 - jnp.cos(theta)) * (K @ K)
     return R
 
+# ==============================================================================
+# 2. VECTORIZED OBJECTIVE (JAX)
+# ==============================================================================
+
 class VectorizedObjectiveJAX:
     def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
@@ -106,11 +113,17 @@ class VectorizedObjectiveJAX:
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
+        
+        # Fixed Detector Vectors (kf) from input Q (assuming ideal beam)
+        # Note: self.kf_ki_dir_init was calculated as (Pixel - IdealBeam).
+        # So kf_lab = kf_ki_dir_init + IdealBeam.
         self.kf_lab_fixed = self.kf_ki_dir_init + jnp.array([0., 0., 1.])[:, None]
         self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
         
-        if peak_xyz_lab is not None: self.peak_xyz = jnp.array(peak_xyz_lab.T) 
-        else: self.peak_xyz = None
+        if peak_xyz_lab is not None:
+            self.peak_xyz = jnp.array(peak_xyz_lab.T) 
+        else:
+            self.peak_xyz = None
 
         self.refine_sample = refine_sample
         self.sample_bound = sample_bound_meters
@@ -152,8 +165,10 @@ class VectorizedObjectiveJAX:
             if goniometer_refine_mask is not None: self.gonio_mask = np.array(goniometer_refine_mask, dtype=bool)
             else: self.gonio_mask = np.ones(self.num_gonio_axes, dtype=bool)
             self.num_active_gonio = np.sum(self.gonio_mask)
+            
             if goniometer_nominal_offsets is None: self.gonio_nominal_offsets = jnp.zeros(self.num_gonio_axes)
             else: self.gonio_nominal_offsets = jnp.array(goniometer_nominal_offsets)
+            
             self.gonio_min = jnp.full(self.num_gonio_axes, -goniometer_bound_deg) 
             self.gonio_max = jnp.full(self.num_gonio_axes, goniometer_bound_deg)
         else:
@@ -164,16 +179,40 @@ class VectorizedObjectiveJAX:
         self.wl_min_val = wavelength[0]
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
+        
         if weights is None: self.weights = jnp.ones(self.kf_ki_dir_init.shape[1])
         else: self.weights = jnp.array(weights)
         if peak_radii is None: self.peak_radii = jnp.zeros(self.kf_ki_dir_init.shape[1])
         else: self.peak_radii = jnp.array(peak_radii)
+        
         self.max_score = jnp.sum(self.weights)
         self.d_min = d_min
         self.d_max = d_max
         self.search_window_size = search_window_size
         self.window_batch_size = window_batch_size
 
+        # --- Search Window Heuristic Warning ---
+        if self.loss_method == 'forward':
+            # Calculate Volume (Real Space) from B matrix (Reciprocal Basis, 2pi included)
+            # V_real = (2pi)^3 / det(B)
+            det_B = float(np.abs(np.linalg.det(self.B)))
+            if det_B > 1e-9:
+                vol_real = 1.0 / det_B
+                # Peak Density Heuristic: N approx Vol / d^3
+                # Factor 0.0025 empirically determined for +/- 2 deg coverage on MANDI
+                heuristic_win = int((vol_real / (self.d_min**3)) * 0.0025)
+                # Clamp for sanity in warning logic
+                heuristic_win = max(64, heuristic_win)
+                
+                if self.search_window_size < (heuristic_win * 0.75):
+                    warnings.warn(
+                        f"\n[WARNING] search_window_size ({self.search_window_size}) is likely too small "
+                        f"for resolution {self.d_min:.2f}A and Volume {vol_real:.0f}A^3.\n"
+                        f"Binary search indexer may miss valid peaks.\n"
+                        f"RECOMMENDED SIZE: >= {heuristic_win}\n"
+                    )
+
+        # --- HKL Mask Generation ---
         r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
         h, k, l = jnp.meshgrid(r, r, r, indexing='ij')
         hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
@@ -188,6 +227,69 @@ class VectorizedObjectiveJAX:
         print(f"Generating HKL mask for Space Group: {self.space_group} (Range: +/-{self.mask_range})")
         mask_cpu = generate_hkl_mask(self.mask_range, self.mask_range, self.mask_range, self.space_group)
         self.valid_hkl_mask = jnp.array(mask_cpu)
+
+    def _get_physical_params_jax(self, x):
+        """Reconstruct physical parameters (Base + Delta) for a batch of solutions x."""
+        idx = 0
+        rot_params = x[:, idx:idx+3]
+        U = self.orientation_U_jax(rot_params) 
+        idx += 3
+
+        if self.refine_lattice:
+            n_lat = self.free_params_init.size
+            cell_params_norm = x[:, idx:idx+n_lat]
+            B = self.compute_B_jax(cell_params_norm) 
+            idx += n_lat
+            UB = jnp.einsum("sij,sjk->sik", U, B)
+        else:
+            B = self.B 
+            UB = jnp.einsum("sij,jk->sik", U, B)
+
+        if self.refine_sample:
+            s_norm = x[:, idx:idx+3]
+            idx += 3
+            sample_delta = _forward_map_param(s_norm, self.sample_bound)
+            sample_total = self.sample_nominal + sample_delta
+        else:
+            sample_total = self.sample_nominal[None, :].repeat(x.shape[0], axis=0)
+
+        if self.refine_beam:
+            bound_rad = jnp.deg2rad(self.beam_bound_deg)
+            tx = _forward_map_param(x[:, idx], bound_rad)
+            ty = _forward_map_param(x[:, idx+1], bound_rad)
+            idx += 2
+            ki_vec = jnp.tile(self.beam_nominal[None, :], (x.shape[0], 1))
+            ki_vec = ki_vec.at[:, 0].add(tx)
+            ki_vec = ki_vec.at[:, 1].add(ty)
+            ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
+        else:
+            ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
+
+        if self.refine_goniometer:
+            n_active = self.num_active_gonio
+            if n_active > 0:
+                active_params = x[:, idx:idx+n_active]
+                idx += n_active
+                batch_size = x.shape[0]
+                gonio_norm = jnp.full((batch_size, self.num_gonio_axes), 0.5)
+                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(active_params)
+            else:
+                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+            
+            offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
+            offsets_total = self.gonio_nominal_offsets + offsets_delta
+            R = self.compute_goniometer_R_jax(gonio_norm) # Helper assumes input is norm
+        else:
+            if self.gonio_axes is not None:
+                offsets_total = self.gonio_nominal_offsets[None, :].repeat(x.shape[0], axis=0)
+                # To calculate R from Nominal (fixed), we pass 0.5 to helper
+                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+                R = self.compute_goniometer_R_jax(gonio_norm)
+            else:
+                offsets_total = None
+                R = None
+
+        return UB, B, sample_total, ki_vec, offsets_total, R
 
     def reconstruct_cell_params(self, params_norm):
         p_free = _forward_map_lattice(params_norm, self.free_params_init, self.lattice_bound_frac)
@@ -230,8 +332,10 @@ class VectorizedObjectiveJAX:
         return B
     
     def compute_goniometer_R_jax(self, gonio_offsets_norm):
+        # NOTE: This helper uses Norm to calc Delta, then adds Nominal from self.
         offsets_delta = _forward_map_param(gonio_offsets_norm, self.goniometer_bound_deg)
         total_offsets = self.gonio_nominal_offsets + offsets_delta
+        
         angles_deg = total_offsets[:, :, None] + self.gonio_angles[None, :, :]
         S, M = total_offsets.shape[0], self.gonio_angles.shape[1]
         R = jnp.eye(3)[None, None, ...].repeat(S, axis=0).repeat(M, axis=1)
@@ -249,6 +353,7 @@ class VectorizedObjectiveJAX:
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
+    # ... (Indexers: indexer_dynamic_soft_jax, cosine, binary) ...
     def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
@@ -258,7 +363,6 @@ class VectorizedObjectiveJAX:
         start_int = jnp.ceil(n_start)
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
-        
         initial_carry = (jnp.zeros(max_v_val.shape), jnp.zeros(max_v_val.shape), jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), jnp.zeros(max_v_val.shape))
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
@@ -306,12 +410,7 @@ class VectorizedObjectiveJAX:
         recip_len_sq = jnp.sum(UB**2, axis=1)
         kappa = recip_len_sq / ((softness + 1e-9)**2 * 4 * jnp.pi**2)
         kappa = kappa[:, :, None]
-        initial_carry = (
-            jnp.zeros(max_v_val.shape),         
-            jnp.full(max_v_val.shape, -1e9),    
-            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), 
-            jnp.zeros(max_v_val.shape)          
-        )
+        initial_carry = (jnp.zeros(max_v_val.shape), jnp.full(max_v_val.shape, -1e9), jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), jnp.zeros(max_v_val.shape))
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
             n = start_int + i
@@ -399,71 +498,6 @@ class VectorizedObjectiveJAX:
         score = -jnp.sum(self.weights * probs, axis=1)
         return score, probs, best_hkl, best_lamb
 
-    def _get_physical_params_jax(self, x):
-        """Reconstruct physical parameters (Base + Delta) for a batch of solutions x."""
-        idx = 0
-        rot_params = x[:, idx:idx+3]
-        U = self.orientation_U_jax(rot_params) 
-        idx += 3
-
-        if self.refine_lattice:
-            n_lat = self.free_params_init.size
-            cell_params_norm = x[:, idx:idx+n_lat]
-            B = self.compute_B_jax(cell_params_norm) 
-            idx += n_lat
-            UB = jnp.einsum("sij,sjk->sik", U, B)
-        else:
-            B = self.B 
-            UB = jnp.einsum("sij,jk->sik", U, B)
-
-        if self.refine_sample:
-            s_norm = x[:, idx:idx+3]
-            idx += 3
-            sample_delta = _forward_map_param(s_norm, self.sample_bound)
-            sample_total = self.sample_nominal + sample_delta
-        else:
-            sample_total = self.sample_nominal[None, :].repeat(x.shape[0], axis=0)
-
-        if self.refine_beam:
-            bound_rad = jnp.deg2rad(self.beam_bound_deg)
-            tx = _forward_map_param(x[:, idx], bound_rad)
-            ty = _forward_map_param(x[:, idx+1], bound_rad)
-            idx += 2
-            
-            ki_vec = jnp.tile(self.beam_nominal[None, :], (x.shape[0], 1))
-            ki_vec = ki_vec.at[:, 0].add(tx)
-            ki_vec = ki_vec.at[:, 1].add(ty)
-            ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
-        else:
-            ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
-
-        if self.refine_goniometer:
-            n_active = self.num_active_gonio
-            if n_active > 0:
-                active_params = x[:, idx:idx+n_active]
-                idx += n_active
-                batch_size = x.shape[0]
-                gonio_norm = jnp.full((batch_size, self.num_gonio_axes), 0.5)
-                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(active_params)
-            else:
-                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
-            
-            offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
-            offsets_total = self.gonio_nominal_offsets + offsets_delta
-            
-            R = self.compute_goniometer_R_jax(gonio_norm)
-        else:
-            if self.gonio_axes is not None:
-                offsets_total = self.gonio_nominal_offsets[None, :].repeat(x.shape[0], axis=0)
-                # Compute R from nominal (norm=0.5 corresponds to zero delta)
-                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
-                R = self.compute_goniometer_R_jax(gonio_norm)
-            else:
-                offsets_total = None
-                R = None
-
-        return UB, B, sample_total, ki_vec, offsets_total, R
-
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
@@ -478,7 +512,6 @@ class VectorizedObjectiveJAX:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
-            # FIX: Use kf_lab_fixed (Ideal Beam) + refined ki
             kf = self.kf_lab_fixed[None, :, :].repeat(x.shape[0], axis=0)
             ki = ki_vec[:, :, None]
             q_lab = kf - ki
@@ -498,6 +531,10 @@ class VectorizedObjectiveJAX:
             score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
 
         return score
+
+# ==============================================================================
+# 3. MAIN CLASS
+# ==============================================================================
 
 class FindUB:
     def __init__(self, filename=None):
@@ -592,7 +629,7 @@ class FindUB:
         if refine_sample:
             if self.peak_xyz is not None:
                 print(f"  > Setting Base Sample Offset: {b_offset}")
-                self.base_sample_offset = b_offset # FIX: Store base, DO NOT MODIFY peak_xyz
+                self.base_sample_offset = b_offset # Store only
                 new_params.append(np.full(3, 0.5)) 
             else:
                 new_params.append(np.full(3, 0.5))
@@ -613,7 +650,7 @@ class FindUB:
             
             if b_gonio_offsets is not None:
                 print(f"  > Setting Base Goniometer Offsets: {b_gonio_offsets}")
-                self.base_gonio_offset = b_gonio_offsets # FIX: Store base, DO NOT MODIFY gonio_angles
+                self.base_gonio_offset = b_gonio_offsets # Store only
                 n_active = sum(active_mask)
                 new_params.append(np.full(n_active, 0.5))
             else:
@@ -664,7 +701,6 @@ class FindUB:
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
         num_obs = kf_ki_dir_lab.shape[1]
         
-        # FIX: Logic for kf_ki_input passed to Objective (irrelevant if gonio present, but good for fallback)
         if goniometer_axes is not None:
             kf_ki_input = kf_ki_dir_lab
         else:
@@ -735,10 +771,10 @@ class FindUB:
             beam_nominal=self.ki_vec, 
             goniometer_bound_deg=goniometer_bound_deg,
             hkl_search_range=hkl_search_range,
-            search_window_size=search_window_size,
             d_min=d_min,
             d_max=d_max,
-            window_batch_size=window_batch_size
+            window_batch_size=window_batch_size,
+            search_window_size=search_window_size # PASSED CORRECTLY
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
@@ -757,9 +793,7 @@ class FindUB:
         start_sol_processed = None
         if init_params is not None:
             start_sol = jnp.array(init_params)
-            # (Truncate/Pad logic omitted for brevity, assuming standard bootstrap fits)
             if start_sol.shape[0] != num_dims:
-                # Simple truncation/pad
                 if start_sol.shape[0] < num_dims:
                     n_new = num_dims - start_sol.shape[0]
                     start_sol_processed = jnp.concatenate([start_sol, jnp.full((n_new,), 0.5)])
@@ -771,11 +805,6 @@ class FindUB:
         sample_solution = jnp.zeros(num_dims)
         target_sigma = sigma_init if sigma_init else (0.01 if start_sol_processed is not None else 3.14)
         print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
-
-        # DEBUG: Validate the initial score
-        if start_sol_processed is not None:
-            init_score_batch = objective(start_sol_processed[None, :])
-            print(f"\nDEBUG: Initial Bootstrapped Score (unweighted peaks): {-init_score_batch[0]:.2f}")
 
         if strategy_name.lower() == "cma_es":
             strategy = CMA_ES(solution=sample_solution, population_size=population_size)
