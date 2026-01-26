@@ -750,8 +750,8 @@ def peak_predictor(
     if create_visualizations:
         import matplotlib.pyplot as plt
         for bank, predicted_peaks in peak_dict.items():
-            plt.imshow(peaks.ims[bank].T + 1, cmap="binary", norm="log")
-            plt.scatter(predicted_peaks[0], predicted_peaks[1], edgecolors='r', facecolors='none')
+            plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log")
+            plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
             plt.title(str(bank))
             plt.savefig(filename + str(bank) + "_pred.png")
             plt.show()
