@@ -469,7 +469,7 @@ class VectorizedObjectiveJAX:
             lambda_opt = k_sq[..., None] / jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             valid_lamb = (lambda_opt >= self.wl_min_val) & (lambda_opt <= self.wl_max_val)
             q_sq = jnp.sum(q_pred**2, axis=3)
-            d_spacings = 2 * jnp.pi / jnp.sqrt(q_sq + 1e-9)
+            d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9) # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
             h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]
             r = self.mask_range
