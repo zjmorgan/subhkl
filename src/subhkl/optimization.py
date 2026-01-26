@@ -808,8 +808,15 @@ class FindUB:
         target_sigma = sigma_init if sigma_init else (0.01 if start_sol_processed is not None else 3.14)
         print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
 
-        if strategy_name.lower() == "cma_es":
+        if strategy_name.lower() == "de":
+            strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
+            strategy_type = 'population_based'
+        elif strategy_name.lower() == "pso":
+            strategy = PSO(solution=sample_solution, population_size=population_size)
+            strategy_type = 'population_based'
+        elif strategy_name.lower() == "cma_es":
             strategy = CMA_ES(solution=sample_solution, population_size=population_size)
+            strategy_type = 'distribution_based'
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
@@ -817,13 +824,32 @@ class FindUB:
         
         def init_single_run(rng, start_sol):
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
+            
             if start_sol is not None:
-                state = strategy.init(rng_init, start_sol, es_params)
-                state = state.replace(std=target_sigma)
+                if strategy_type == 'population_based':
+                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                    p_orient = start_sol[:3] + noise[:, :3]
+                    p_rest = jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)
+                    population_init = jnp.concatenate([p_orient, p_rest], axis=1)
+                    fitness_init = objective(population_init)
+                    state = strategy.init(rng_init, population_init, fitness_init, es_params)
+                else:
+                    state = strategy.init(rng_init, start_sol, es_params)
+                    state = state.replace(std=target_sigma)
             else:
-                solution_init = jnp.zeros(num_dims) # Simplified
-                state = strategy.init(rng_init, solution_init, es_params)
-                state = state.replace(std=target_sigma)
+                if strategy_type == 'population_based':
+                    pop_orient = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+                    rng_rest, _ = jax.random.split(rng_pop)
+                    pop_rest = jax.random.uniform(rng_rest, (population_size, max(0, num_dims-3)))
+                    population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
+                    fitness_init = objective(population_init)
+                    state = strategy.init(rng_init, population_init, fitness_init, es_params)
+                else:
+                    mean_orient = jnp.zeros(3)
+                    mean_rest = jnp.full((max(0, num_dims-3),), 0.5)
+                    solution_init = jnp.concatenate([mean_orient, mean_rest])
+                    state = strategy.init(rng_init, solution_init, es_params)
+                    state = state.replace(std=target_sigma)
             return state
 
         def step_single_run(rng, state):
