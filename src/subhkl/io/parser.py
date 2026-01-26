@@ -563,6 +563,128 @@ def indexer_using_file(
 
 
 @app.command()
+def metrics(filename: str):
+    """
+    Calculate and print D-spacing and Angular errors for an indexed solution.
+    Output Format: METRICS: median_d mean_d max_d median_ang mean_ang max_ang
+    """
+    try:
+        # 1. LOAD DATA
+        with h5py.File(filename, "r") as f:
+            if "peaks/xyz" not in f:
+                # Fallback or error if XYZ not present
+                print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+                return
+
+            xyz_det = f["peaks/xyz"][()] # Lab coordinates (N, 3)
+            h = f["peaks/h"][()]
+            k = f["peaks/k"][()]
+            l = f["peaks/l"][()]
+            lam = f["peaks/lambda"][()]
+
+            # Geometry
+            ub_helper = FindUB()
+            ub_helper.a = f["sample/a"][()]
+            ub_helper.b = f["sample/b"][()]
+            ub_helper.c = f["sample/c"][()]
+            ub_helper.alpha = f["sample/alpha"][()]
+            ub_helper.beta = f["sample/beta"][()]
+            ub_helper.gamma = f["sample/gamma"][()]
+
+            if "beam/ki_vec" in f:
+                ki_vec = f["beam/ki_vec"][()]
+            else:
+                ki_vec = np.array([0.0, 0.0, 1.0])
+
+            if "goniometer/R" in f:
+                R_all = f["goniometer/R"][()]
+            else:
+                R_all = np.eye(3)[None, ...].repeat(len(h), axis=0)
+
+            if "sample/U" in f:
+                U = f["sample/U"][()]
+            else:
+                U = np.eye(3)
+
+            if "sample/offset" in f:
+                sample_offset = f["sample/offset"][()]
+            else:
+                sample_offset = np.zeros(3)
+
+        # Filter Indexed
+        mask = (h != 0) | (k != 0) | (l != 0)
+        if np.sum(mask) == 0:
+            print("METRICS: 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000")
+            return
+
+        h, k, l = h[mask], k[mask], l[mask]
+        lam = lam[mask]
+        xyz_det = xyz_det[mask]
+        R_all = R_all[mask]
+
+        # --- PHYSICS CALCULATION ---
+
+        # 1. B Matrix (subhkl units: 1/d)
+        B_mat = ub_helper.reciprocal_lattice_B()
+
+        # 2. Geometric Q (Unitless, just directions)
+        # Correct for Sample Offset: v = P_raw - S_total
+        v = xyz_det - sample_offset
+        dist = np.linalg.norm(v, axis=1, keepdims=True)
+        kf_dir = v / dist
+
+        # Incident Beam (Normalized)
+        ki_dir = ki_vec / np.linalg.norm(ki_vec)
+
+        # Vector Difference: |kf - ki| = 2*sin(theta)
+        delta_k = kf_dir - ki_dir[None, :]
+        two_sin_theta = np.linalg.norm(delta_k, axis=1)
+
+        # 3. METRIC 1: D-SPACING ERROR
+        # d_obs = lambda / 2sin(theta)
+        # Avoid divide by zero
+        d_obs = np.divide(lam, two_sin_theta, where=two_sin_theta!=0)
+
+        # d_calc = 1 / |B * hkl|
+        hkl = np.stack([h, k, l]).T
+        q_cryst_simple = hkl @ B_mat.T
+        q_cryst_mag = np.linalg.norm(q_cryst_simple, axis=1)
+        d_calc = np.divide(1.0, q_cryst_mag, where=q_cryst_mag!=0)
+
+        d_err = np.abs(d_obs - d_calc)
+
+        # 4. METRIC 2: ANGULAR ERROR
+        # Q_calc (Lab Frame Direction)
+        # q_lab = R * U * B * h
+        # Note: Code uses row vector convention: h @ B.T @ U.T
+        q_cryst = hkl @ B_mat.T
+        q_phi = q_cryst @ U.T
+
+        # Rotate by Goniometer R
+        # R_all shape (N, 3, 3), q_phi shape (N, 3)
+        # We need (R @ q_phi.T).T -> (N, 3)
+        # Einstein sum: n=batch, i=row, j=col. R[n,i,j] * q[n,j] -> out[n,i]
+        q_lab = np.einsum('nij,nj->ni', R_all, q_phi)
+
+        q_calc_norm = q_lab / np.linalg.norm(q_lab, axis=1, keepdims=True)
+
+        # Q_obs (Lab Frame Direction)
+        # Direction of scattering vector is same as delta_k
+        q_obs_norm = delta_k / two_sin_theta[:, None]
+
+        dot = np.sum(q_obs_norm * q_calc_norm, axis=1)
+        dot = np.clip(dot, -1.0, 1.0)
+        ang_err = np.rad2deg(np.arccos(dot))
+
+        # 5. PRINT RESULTS
+        print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
+              f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
+
+    except Exception:
+        # Silently fail to standard error format for the pipeline
+        print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+
+@app.command()
 def peak_predictor(
     filename: str,
     instrument: str,
