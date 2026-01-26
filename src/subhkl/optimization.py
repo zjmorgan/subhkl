@@ -727,6 +727,8 @@ class FindUB:
             wilson_correction = np.exp(B_sharpen * sin_sq_theta)
             weights = snr * wilson_correction
             weights = weights / np.mean(weights)
+        else:
+            weights = snr
 
         weights = np.clip(weights, 0, 10.0)
 
