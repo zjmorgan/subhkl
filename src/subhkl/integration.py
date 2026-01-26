@@ -1013,7 +1013,19 @@ class Peaks:
                 axes[0].set_title("Predicted peaks")
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
-                    axes[0].text(p_j, p_i, f"({p_h}, {p_k}, {p_l})")
+                    # 1. Zone Axis Filter: Reflections on the main axes (h00, 0k0, 00l) or planes (hk0, etc.)
+                    is_zone_axis = (p_h == 0) or (p_k == 0) or (p_l == 0)
+
+                    # 2. Nodal Filter: Low-order reflections near the beam center
+                    is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
+
+                    # Apply Filter
+                    if is_zone_axis or is_nodal:
+                        # Use smaller font and color for clarity
+                        color = 'red' if is_nodal else 'black'
+                        weight = 'bold' if is_nodal else 'normal'
+                        axes[0].text(p_j, p_i, f"({p_h},{p_k},{p_l})",
+                                     color=color, fontsize=6, fontweight=weight, clip_on=True)
 
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
 
