@@ -79,12 +79,19 @@ def index(
 
     init_params = None
     if bootstrap_filename:
-        print(f"Bootstrapping from solution in: {bootstrap_filename}")
-        with h5py.File(bootstrap_filename, "r") as f:
-            if "optimization/best_params" in f:
-                init_params = f["optimization/best_params"][()]
-            else:
-                print("WARNING: No optimization params found in bootstrap file. Starting random.")
+        # Call the reconstruction method
+        init_params = opt.get_bootstrap_params(
+            bootstrap_filename,
+            refine_lattice=refine_lattice,
+            lattice_bound_frac=lattice_bound_frac,
+            refine_sample=refine_sample,
+            sample_bound_meters=sample_bound_meters,
+            refine_beam=refine_beam,
+            beam_bound_deg=beam_bound_deg,
+            refine_goniometer=refine_goniometer,
+            goniometer_bound_deg=goniometer_bound_deg,
+            refine_goniometer_axes=refine_goniometer_axes
+        )
 
     num, hkl, lamda, U = opt.minimize_evosax(
         strategy_name=strategy_name,
