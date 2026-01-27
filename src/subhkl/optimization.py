@@ -353,7 +353,6 @@ class VectorizedObjectiveJAX:
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
-    # ... (Indexers: indexer_dynamic_soft_jax, cosine, binary) ...
     def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
@@ -363,6 +362,7 @@ class VectorizedObjectiveJAX:
         start_int = jnp.ceil(n_start)
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
+        
         initial_carry = (jnp.zeros(max_v_val.shape), jnp.zeros(max_v_val.shape), jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32), jnp.zeros(max_v_val.shape))
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
@@ -380,21 +380,35 @@ class VectorizedObjectiveJAX:
             safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
             effective_sigma = softness + (k_norm / safe_lamb) * self.peak_radii[None, :]
             prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
+            
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
+            
+            # --- FIX: ADDED RESOLUTION FILTER (d_min / d_max) ---
+            # 1. Calc |Q|^2 for predicted HKL
+            q_sq_pred = jnp.sum(q_int**2, axis=1)
+            # 2. Convert to d = 1/|Q| (Crystallographic units)
+            d_pred = 1.0 / jnp.sqrt(q_sq_pred + 1e-9)
+            valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
+
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
             r = self.mask_range
             idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
             idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
             idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
             is_allowed = self.valid_hkl_mask[idx_h, idx_k, idx_l]
-            valid_sym = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r) & is_allowed
-            prob = jnp.where(valid_cand & valid_sym, prob, 0.0)
+            
+            # Combine masks
+            final_mask = valid_cand & is_allowed & valid_res
+            
+            prob = jnp.where(final_mask, prob, 0.0)
+            
             new_sum = curr_sum + prob
             update_mask = prob > curr_max
             new_max = jnp.where(update_mask, prob, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
+        
         final_carry, _ = jax.lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
         accum_probs, _, best_hkl, best_lamb = final_carry
         score = -jnp.sum(self.weights * accum_probs, axis=1)
