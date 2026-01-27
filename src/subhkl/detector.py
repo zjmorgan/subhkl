@@ -26,52 +26,28 @@ def scattering_vector_from_angles(two_theta: npt.ArrayLike, az_phi: npt.ArrayLik
 def angles_from_kf(kf_vectors):
     """
     Converts outgoing wavevectors (kf) to Lab Frame detector angles.
-
-    Physics:
-      The detector pixels are defined by spherical coordinates (2theta, az)
-      relative to the MECHANICAL Lab axes (Z=Optical Axis), regardless of
-      where the beam is actually pointing.
     """
-    # 1. Normalize (just in case)
     norms = np.linalg.norm(kf_vectors, axis=1, keepdims=True)
     kf_dir = kf_vectors / norms
-
-    # 2. Lab Coordinate Calculation
-    # Z is along the beam pipe. Y is vertical. X is horizontal.
-    # 2theta = angle from Z axis
-    # azimuth = angle in XY plane from X axis
-
-    # cos(2theta) = z
     two_theta = np.arccos(kf_dir[:, 2])
-
-    # tan(az) = y / x
     azimuth = np.arctan2(kf_dir[:, 1], kf_dir[:, 0])
-
     return two_theta, azimuth
 
 def angles_from_scattering_vector(q_vectors, ki_vec=None):
-    """
-    Legacy wrapper for backward compatibility, now aware of beam tilt.
-    """
     if ki_vec is None:
         ki_vec = np.array([0.0, 0.0, 1.0])
-
-    # Broadcast ki if q is (N,3)
     if q_vectors.ndim == 2 and ki_vec.ndim == 1:
         ki = ki_vec[None, :]
     else:
         ki = ki_vec
-
-    # k_f = Q + k_i
     kf = q_vectors + ki
-
     return angles_from_kf(kf)
 
 class Detector:
     def __init__(self, config: dict):
         self.config = config
-        self.m = config["m"]
-        self.n = config["n"]
+        self.m = config["m"] # Rows
+        self.n = config["n"] # Cols
         self.width = config["width"]
         self.height = config["height"]
         
@@ -92,9 +68,9 @@ class Detector:
         """
         Convert detector pixel coordinates (row, col) to lab frame (x, y, z).
         
-        TRANSPOSED MAPPING:
-        row (Dim 0) -> u (Width)
-        col (Dim 1) -> v (Height)
+        STANDARD MAPPING:
+        col (Dim 1) -> u (Width)
+        row (Dim 0) -> v (Height)
         """
         row = np.asarray(row)
         col = np.asarray(col)
@@ -102,15 +78,11 @@ class Detector:
         phys_row_idx = row
         phys_col_idx = col
 
-        # 2. Map to Physical Dimensions (TRANSPOSED)
-        # Row Index -> u (Width)
-        # Col Index -> v (Height)
+        # u scales with Width (n columns)
+        u = phys_col_idx / (self.n - 1) * self.width
 
-        # Note: We use self.m (Row count) for u scaling
-        u = phys_row_idx / (self.m - 1) * self.width
-
-        # Note: We use self.n (Col count) for v scaling
-        v = phys_col_idx / (self.n - 1) * self.height
+        # v scales with Height (m rows)
+        v = phys_row_idx / (self.m - 1) * self.height
 
         dv = np.einsum("...,d->...d", v, self.vhat)
 
@@ -136,20 +108,19 @@ class Detector:
         """
         p = np.array([x, y, z])
         
-        # Scale factors match the transpose above
-        dw = self.width / (self.m - 1)  # Width / Rows (m)
-        dh = self.height / (self.n - 1) # Height / Cols (n)
+        dw = self.width / (self.n - 1)  # Width / Cols (n)
+        dh = self.height / (self.m - 1) # Height / Rows (m)
 
         vec = p.T - self.center
         
-        # Projection onto vertical axis (v)
+        # Projection onto vertical axis (v) -> Rows
         if vec.ndim == 1:
             dot_v = np.dot(vec, self.vhat)
         else:
             dot_v = np.dot(vec, self.vhat)
 
-        # v -> Col Index (phys_col)
-        phys_col = np.clip(dot_v / dh, 0, self.n)
+        # v -> Row Index
+        phys_row = np.clip(dot_v / dh, 0, self.m)
 
         if self.panel_type == DetectorShape.flat_panel:
             if vec.ndim == 1:
@@ -157,8 +128,8 @@ class Detector:
             else:
                 dot_u = np.dot(vec, self.uhat)
             
-            # u -> Row Index (phys_row)
-            phys_row = np.clip(dot_u / dw, 0, self.m)
+            # u -> Col Index
+            phys_col = np.clip(dot_u / dw, 0, self.n)
 
         else:
             # Curved logic
@@ -178,8 +149,7 @@ class Detector:
             dt = 2 * np.arctan(val)
             dt = np.mod(dt, 2 * np.pi)
 
-            # u -> Row Index
-            phys_row = np.clip(dt * (self.radius / dw), 0, self.m)
+            phys_col = np.clip(dt * (self.radius / dw), 0, self.n)
 
         row = phys_row
         col = phys_col
@@ -203,53 +173,29 @@ class Detector:
     def reflections_mask(self, x: npt.ArrayLike, y: npt.ArrayLike, z: npt.ArrayLike, sample_offset: npt.ArrayLike = None) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Determine which reflections intersect this detector.
-        Accounts for an optional sample offset (mm).
-        
-        Args:
-            x, y, z: Direction vector of the scattered ray (reciprocal space or real space direction).
-            sample_offset: (3,) array [ox, oy, oz] in mm indicating sample displacement from origin.
-            
-        Returns:
-            (mask, row, col) in Image Coordinates.
+        Returns: (mask, row, col) in Image Coordinates.
         """
         dir_vec = np.array([x, y, z]) # Shape (3, N)
         if dir_vec.ndim == 1:
             dir_vec = dir_vec[:, np.newaxis]
             
-        # Default sample offset is zero
         if sample_offset is None:
             s = np.zeros(3)
         else:
             s = np.array(sample_offset)
 
         if self.panel_type == DetectorShape.flat_panel:
-            # Ray: r(t) = s + t * d
-            # Plane: (r - c) . n = 0  => (s + t*d - c) . n = 0
-            # t = (c - s) . n / (d . n)
-            
             norm = np.cross(self.uhat, self.vhat)
             c_minus_s_dot_n = np.dot(self.center - s, norm)
-            
-            # d . n
             d_dot_n = np.einsum("i,in->n", norm, dir_vec)
             
             with np.errstate(divide='ignore', invalid='ignore'):
                 t = c_minus_s_dot_n / d_dot_n
                 
         else:
-            # Curved Panel (Cylinder aligned with vhat)
-            # Ray: r(t) = s + t * d
-            # Cylinder: |(r - origin) x vhat|^2 = R^2  (Assuming cylinder axis passes through origin)
-            
-            # r x v = (s + t*d) x v = (s x v) + t(d x v)
-            # Let B = s x v, D = d x v
-            # |B + tD|^2 = R^2
-            # |B|^2 + t^2 |D|^2 + 2t (B.D) - R^2 = 0
-            # At^2 + Bt + C = 0
-            
             v = self.vhat
-            B_vec = np.cross(s, v) # (3,)
-            D_vec = np.cross(dir_vec.T, v).T # (3, N)
+            B_vec = np.cross(s, v)
+            D_vec = np.cross(dir_vec.T, v).T
             
             QA = np.sum(D_vec**2, axis=0)
             QB = 2 * np.dot(B_vec, D_vec)
@@ -257,34 +203,18 @@ class Detector:
             
             delta = QB**2 - 4*QA*QC
             
-            # We want positive t. 
-            # t = (-B +/- sqrt(delta)) / 2A
-            # Usually the smaller positive root is the intersection (entering the cylinder?)
-            # Or the larger? For a detector, we likely want the forward intersection.
-            # Assuming detector is "in front" of scatterer.
-            
             with np.errstate(invalid='ignore'):
                 sqrt_delta = np.sqrt(delta)
                 t1 = (-QB + sqrt_delta) / (2*QA)
                 t2 = (-QB - sqrt_delta) / (2*QA)
-                
-                # Pick valid positive t
-                # If both positive, pick smaller? (First hit)
                 t = np.where((t2 > 0), t2, t1)
                 t = np.where(delta < 0, -1.0, t)
 
-        # Calculate intersection point in Lab Frame
-        # X = s + t * d
         X = s[0] + t * dir_vec[0]
         Y = s[1] + t * dir_vec[1]
         Z = s[2] + t * dir_vec[2]
         
-        # Convert Intersection to Pixel Coordinates
-        # Returns Image Coordinates (Row, Col)
         row, col = self.lab_to_pixel(X, Y, Z)
-        
-        # Mask valid pixels
         mask = (row > 0) & (col > 0) & (row < self.m - 1) & (col < self.n - 1) & (t > 0)
         
         return mask, row, col
-
