@@ -177,6 +177,7 @@ class ThresholdingPeakFinder:
                 bg_im = (255 - (log_im / log_im.max()) * 255).astype(np.uint8)
             bg_color = cv2.cvtColor(bg_im, cv2.COLOR_GRAY2BGR)
 
+            # opencv returns (col, row) contours (last column swapped)
             im_contours = cv2.drawContours(bg_color, contours, -1, (0, 255, 0))
             plt.imshow(im_contours)
             if len(contours) > 0:
@@ -267,6 +268,8 @@ class ThresholdingPeakFinder:
             else:
                 # Fallback to geometric center if moment fails (flat zero intensity)
                 mean_pos = np.mean(c[:, 0, :], axis=0)
+
+                # mean_pos is (col, row)
                 refined_centers.append([mean_pos[1], mean_pos[0]])
 
         if self.show_steps:

@@ -52,11 +52,15 @@ class Detector:
         self.height = config["height"]
         
         self.center = np.array(config["center"])
+        # vhat is the direction from the lower left (0,0)
+        # to the upper left (n-1, 0) corner (Y axis)
         self.vhat = np.array(config["vhat"])
         
         self.panel_type = DetectorShape(config["panel"])
         
         if self.panel_type == DetectorShape.flat_panel:
+            # uhat is the direction from the lower left (0,0)
+            # to the lower right (0,m-1) corner (X axis)
             self.uhat = np.array(config["uhat"])
         elif self.panel_type == DetectorShape.curved_panel:
             self.radius = config["radius"]
@@ -67,22 +71,18 @@ class Detector:
     def pixel_to_lab(self, row: npt.ArrayLike, col: npt.ArrayLike) -> npt.NDArray:
         """
         Convert detector pixel coordinates (row, col) to lab frame (x, y, z).
-        
-        STANDARD MAPPING:
+
         col (Dim 1) -> u (Width)
         row (Dim 0) -> v (Height)
         """
         row = np.asarray(row)
         col = np.asarray(col)
 
-        phys_row_idx = row
-        phys_col_idx = col
+        # u scales with Width (m columns)
+        u = col / (self.m - 1) * self.width
 
-        # u scales with Width (n columns)
-        u = phys_col_idx / (self.n - 1) * self.width
-
-        # v scales with Height (m rows)
-        v = phys_row_idx / (self.m - 1) * self.height
+        # v scales with Height (n rows)
+        v = row / (self.n - 1) * self.height
 
         dv = np.einsum("...,d->...d", v, self.vhat)
 
@@ -108,8 +108,8 @@ class Detector:
         """
         p = np.array([x, y, z])
         
-        dw = self.width / (self.n - 1)  # Width / Cols (n)
-        dh = self.height / (self.m - 1) # Height / Rows (m)
+        dw = self.width / (self.m - 1)  # Width / Cols (n)
+        dh = self.height / (self.n - 1) # Height / Rows (m)
 
         vec = p.T - self.center
         
@@ -120,7 +120,7 @@ class Detector:
             dot_v = np.dot(vec, self.vhat)
 
         # v -> Row Index
-        phys_row = np.clip(dot_v / dh, 0, self.m)
+        row_f = np.clip(dot_v / dh, 0, self.n)
 
         if self.panel_type == DetectorShape.flat_panel:
             if vec.ndim == 1:
@@ -129,7 +129,7 @@ class Detector:
                 dot_u = np.dot(vec, self.uhat)
             
             # u -> Col Index
-            phys_col = np.clip(dot_u / dw, 0, self.n)
+            col_f = np.clip(dot_u / dw, 0, self.m)
 
         else:
             # Curved logic
@@ -149,12 +149,9 @@ class Detector:
             dt = 2 * np.arctan(val)
             dt = np.mod(dt, 2 * np.pi)
 
-            phys_col = np.clip(dt * (self.radius / dw), 0, self.n)
+            col_f = np.clip(dt * (self.radius / dw), 0, self.m)
 
-        row = phys_row
-        col = phys_col
-
-        return row, col
+        return row_f, col_f
 
     def pixel_to_angles(self, row: npt.ArrayLike, col: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
         """
@@ -215,6 +212,6 @@ class Detector:
         Z = s[2] + t * dir_vec[2]
         
         row, col = self.lab_to_pixel(X, Y, Z)
-        mask = (row > 0) & (col > 0) & (row < self.m - 1) & (col < self.n - 1) & (t > 0)
+        mask = (row > 0) & (col > 0) & (row < self.n - 1) & (col < self.m - 1) & (t > 0)
         
         return mask, row, col

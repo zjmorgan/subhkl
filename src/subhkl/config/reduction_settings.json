@@ -147,6 +147,7 @@
         "Groupings": ["1x1", "2x2", "4x4"],
         "RawFile": "nexus/MANDI_{}.nxs.h5",
         "BankPixels": [256, 256],
+        "YAxisIsFastVaryingIndex": true,
         "DeltaTheta": 0.0420,
         "Processes": 8
     },

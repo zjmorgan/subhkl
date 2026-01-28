@@ -126,9 +126,8 @@ class Peaks:
                 self.goniometer_axes_raw = axes
                 self.goniometer_angles_raw = angles
                 self.goniometer_names_raw = names
-                
         else:
-            self.ims = {0: np.array(Image.open(filename)).T}
+            self.ims = {0: np.array(Image.open(filename))}
             self.wavelength_min, self.wavelength_max = (
                 self.get_wavelength_from_settings()
             )
@@ -184,6 +183,7 @@ class Peaks:
         """
 
         detectors = beamlines[self.instrument]
+        settings = reduction_settings[self.instrument]
 
         ims = {}
 
@@ -210,7 +210,12 @@ class Peaks:
 
                     # skip "empty" detector data
                     if np.sum(bc) > 0:
-                        ims[bank] = bc.reshape(m, n)
+                        if settings.get('YAxisIsFastVaryingIndex'):
+                            # ims uses row major (C-) ordering with \hat u
+                            # along the cols
+                            ims[bank] = bc.reshape(m, n).T
+                        else:
+                            ims[bank] = bc.reshape(n, m)
 
         return ims
 
@@ -316,6 +321,8 @@ class Peaks:
         )
 
         coords = alg.find_peaks(self.ims[bank])
+
+        # return (row, col)
         return coords[:, 0], coords[:, 1]
 
     def get_detector(self, bank: int) -> Detector:
@@ -765,6 +772,7 @@ class Peaks:
             if finder_algorithm == "peak_local_max":
                 i, j = self.harvest_peaks(bank, **harvest_peaks_kwargs)
             elif finder_algorithm == "thresholding":
+                # harvest_peaks_thresholding returns image (row, col) coordinates
                 i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
             else:
                 raise ValueError("Invalid finder algorithm")
@@ -773,7 +781,8 @@ class Peaks:
 
             if visualize:
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+                # origin='lower' aligns mpl image with detector face
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
                 axes[0].scatter(j, i, marker="1", c="blue")
                 axes[0].set_title("Candidate peaks")
             else:
@@ -806,12 +815,15 @@ class Peaks:
             keep = [peak_in is not None for peak_in in bank_intensity]
 
             if visualize:
-                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+                # by default, imshow scans from top (row 0) to bottom (row n-1)
+                # and left (col 0) to right (col m-1), origin == 'lower' changes this
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary",
+                                        origin='lower')
 
                 forbidden = ~mask
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
-                axes[1].imshow(overlay)
+                axes[1].imshow(overlay, origin='lower')
 
                 if show_progress:
                     for peak_in, peak_sigma in zip(bank_intensity[keep], bank_sigma[keep]):
@@ -820,6 +832,7 @@ class Peaks:
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
+                            # x=col y=row
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
                 axes[1].set_title("Convex hulls")
                 fig.subplots_adjust(right=0.8)
@@ -945,12 +958,16 @@ class Peaks:
         xyz = []
 
         for bank, peaks in peak_dict.items():
+            # bank_i (row) and bank_j (colO) are in image coordinates
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
             centers = np.stack([bank_i, bank_j], axis=-1)
             
             det = self.get_detector(bank)
+
+            # pixel_to_angles expects (row, col)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
 
+            # pixel_to_lab expects (row, col)
             lab_coords_T = det.pixel_to_lab(bank_i, bank_j)
             lab_coords_T = np.atleast_2d(lab_coords_T)
             if lab_coords_T.shape[0] != 3:
@@ -1009,8 +1026,12 @@ class Peaks:
                 import matplotlib.pyplot as plt
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+
+                # imshow origin='lower' means image (0,0) is at lower left
+                axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
                 axes[0].set_title("Predicted peaks")
+
+                # x=col=j, y=i=row
                 axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     # 1. Zone Axis Filter: Reflections on the main axes (h00, 0k0, 00l) or planes (hk0, etc.)
@@ -1027,12 +1048,12 @@ class Peaks:
                         axes[0].text(p_j, p_i, f"({p_h},{p_k},{p_l})",
                                      color=color, fontsize=6, fontweight=weight, clip_on=True)
 
-                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary")
+                plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
 
                 forbidden = ~mask
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
-                axes[1].imshow(overlay)
+                axes[1].imshow(overlay, origin='lower')
 
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
@@ -1042,6 +1063,7 @@ class Peaks:
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
+                            # hull points are [row, col] = (y, x)
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
 
                 output_file = str(bank) + "_int.png"
