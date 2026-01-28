@@ -42,6 +42,9 @@ def index(
     search_window_size: int = 256,
     batch_size: int = None,
     window_batch_size: int = 32,
+    chunk_size: int = 256,
+    num_iters: int = 20,
+    top_k: int = 32,
     B_sharpen: float = None,
 ):
     """
@@ -119,6 +122,9 @@ def index(
         search_window_size=search_window_size,
         batch_size=batch_size,
         window_batch_size=window_batch_size,
+        chunk_size=chunk_size,
+        num_iters=num_iters,
+        top_k=top_k,
         B_sharpen=B_sharpen,
     )
 
@@ -417,6 +423,9 @@ def indexer(
     search_window_size: int = typer.Option(256, "--search-window-size"),
     batch_size: int = typer.Option(None, "--batch-size"),
     window_batch_size: int = typer.Option(32, "--window-batch-size"),
+    chunk_size: int = typer.Option(256, "--chunk-size"),
+    num_iters: int = typer.Option(20, "--num-iters"),
+    top_k: int = typer.Option(32, "--top-k"),
     B_sharpen: float = typer.Option(None, "--b-sharpen", help="Wilson B-factor for peak sharpening (~50 for protein crystals)"),
 ) -> None:
     # Logic to resolve SG
@@ -523,6 +532,9 @@ def indexer(
         search_window_size=search_window_size,
         batch_size=batch_size,
         window_batch_size=window_batch_size,
+        chunk_size=chunk_size,
+        num_iters=num_iters,
+        top_k=top_k,
         B_sharpen=B_sharpen,
     )
 

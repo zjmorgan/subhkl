@@ -108,6 +108,7 @@ class VectorizedObjectiveJAX:
                  refine_beam=False, beam_bound_deg=1.0, beam_nominal=None,
                  peak_radii=None, loss_method='gaussian', 
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
+                 chunk_size=4096, num_iters=20, top_k=32,
                  space_group="P 1"):
         
         self.B = jnp.array(B)
@@ -191,6 +192,10 @@ class VectorizedObjectiveJAX:
         self.search_window_size = search_window_size
         self.window_batch_size = window_batch_size
 
+        self.chunk_size = chunk_size
+        self.num_iters = num_iters
+        self.top_k = top_k
+
         # --- Search Window Heuristic Warning ---
         if self.loss_method == 'forward':
             # Calculate Volume (Real Space) from B matrix (Reciprocal Basis, 2pi included)
@@ -219,6 +224,10 @@ class VectorizedObjectiveJAX:
         zero_mask = ~jnp.all(hkl_pool == 0, axis=0)
         hkl_pool = hkl_pool[:, zero_mask]
         q_cart = self.B @ hkl_pool 
+
+        # NOTE: For Sinkhorn, we keep the flat pool available directly
+        self.pool_hkl_flat = hkl_pool
+
         phis = jnp.arctan2(q_cart[1], q_cart[0])
         sort_idx = jnp.argsort(phis)
         self.pool_phi_sorted = phis[sort_idx]
@@ -536,6 +545,138 @@ class VectorizedObjectiveJAX:
         score = -jnp.sum(self.weights * probs, axis=1)
         return score, probs, best_hkl, best_lamb
 
+    # ==========================================================================
+    # OPTIMIZED SINKHORN-EM INDEXER (Memory Efficient + Rotation Trick)
+    # ==========================================================================
+    def indexer_sinkhorn_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01, num_iters=20, epsilon=1.0, top_k=32,
+                             chunk_size=256):
+        """
+        Robust Memory-Efficient Sinkhorn with Rotated-Observer Optimization.
+        
+        Args:
+            UB: (Batch, 3, 3) Orientation Matrix
+            kf_ki_sample: (Batch, 3, N_obs) Observed directions
+            top_k: Number of nearest neighbors to keep (sparsity factor).
+            softness: vMF sigma (controls kernel width).
+            epsilon: Sinkhorn entropy regularizer (kept at 1.0 due to internal scaling).
+        """
+        # 1. Setup Data
+        hkl_pool = self.pool_hkl_flat # (3, N_hkl)
+        
+        # --- Observer Rotation Trick ---
+        # Instead of q_theory = UB @ h, we project Obs into Crystal frame:
+        # Cost = r_obs . (UB h) = (r_obs @ UB) . h
+        # kf_ki_sample shape is (Batch, 3, N_obs) -> Axis 1 is spatial (x,y,z)
+        
+        # Normalize Obs
+        norm_obs = jnp.linalg.norm(kf_ki_sample, axis=1, keepdims=True)
+        r_obs_unit = kf_ki_sample / (norm_obs + 1e-9)
+        
+        # Re-project Unit Obs: (Batch, 3, N_obs) x (Batch, 3, 3) -> (Batch, N_obs, 3)
+        # We contract spatial dim 'i' (size 3)
+        r_obs_proj_unit = jnp.einsum("sin,sij->snj", r_obs_unit, UB)
+        
+        k_sq_obs = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
+        
+        batch_size, _, n_obs = kf_ki_sample.shape
+        _, n_hkl = hkl_pool.shape
+        
+        # 2. Block-wise Top-K Search
+        # Chunk size significantly reduced to prevent OOM / thrashing
+        num_chunks = (n_hkl + chunk_size - 1) // chunk_size
+        
+        def scan_topk(carry, i):
+            curr_vals, curr_idxs = carry 
+            idx_start = i * chunk_size
+            
+            # Slice HKL Pool (Static, small)
+            # Use dynamic_slice to handle last chunk boundary gracefully
+            # (If last chunk < 256, JAX will pad or error depending on implementation, 
+            # here we use simple slicing assuming hkl_pool is sufficient or padding isn't critical for top-k)
+            hkl_chunk = jax.lax.dynamic_slice(hkl_pool, (0, idx_start), (3, chunk_size))
+            
+            # 1. Compute Norms |UB h| for this chunk
+            # q_chunk = UB @ h_chunk. Shape (Batch, 3, Chunk).
+            q_chunk = jnp.einsum("sij,jk->sik", UB, hkl_chunk)
+            q_sq_chunk = jnp.sum(q_chunk**2, axis=1)
+            norm_q_chunk = jnp.sqrt(q_sq_chunk + 1e-9) # (Batch, Chunk)
+            
+            # 2. Dot Product using Rotated Observer
+            # (Batch, N_obs, 3) @ (3, Chunk) -> (Batch, N_obs, Chunk)
+            dot_raw = jnp.matmul(r_obs_proj_unit, hkl_chunk)
+            
+            # 3. Apply Norm
+            # cosine = dot_raw / |UB h|
+            dots_chunk = dot_raw / (norm_q_chunk[:, None, :] + 1e-9)
+            
+            # 4. Top-K Selection
+            global_idxs = jnp.arange(chunk_size) + idx_start
+            global_idxs_broadcast = jnp.tile(global_idxs[None, None, :], (batch_size, n_obs, 1))
+            
+            combined_vals = jnp.concatenate([curr_vals, dots_chunk], axis=2)
+            combined_idxs = jnp.concatenate([curr_idxs, global_idxs_broadcast], axis=2)
+            
+            vals, top_k_indices = jax.lax.top_k(combined_vals, top_k)
+            idxs = jnp.take_along_axis(combined_idxs, top_k_indices, axis=2)
+            return (vals, idxs), None
+
+        init_vals = jnp.full((batch_size, n_obs, top_k), -1e9)
+        init_idxs = jnp.zeros((batch_size, n_obs, top_k), dtype=jnp.int32)
+        
+        (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (init_vals, init_idxs), jnp.arange(num_chunks))
+        
+        # 3. Robust Scaling
+        max_possible_L = 1.0 / (softness**2)
+        scale_factor = 50.0 / max_possible_L
+        log_K = (1.0 / softness**2) * top_vals * scale_factor
+        
+        # 4. Filter Logic (Re-calculate norms for Top-K only)
+        # Gather HKL vectors: (Batch, N_obs, K, 3)
+        hkl_selected = jnp.take(hkl_pool.T, top_idxs, axis=0) 
+        
+        # Compute q_selected = UB @ hkl_selected
+        # (Batch, 3, 3) @ (Batch, N_obs, K, 3) -> (Batch, N_obs, K, 3)
+        hkl_flat_sel = hkl_selected.reshape(batch_size, -1, 3)
+        q_flat_sel = jnp.einsum("sij,smj->smi", UB, hkl_flat_sel)
+        q_selected = q_flat_sel.reshape(batch_size, n_obs, top_k, 3)
+        
+        q_sq_selected = jnp.sum(q_selected**2, axis=3)
+        
+        # Lambda & Resolution Checks
+        lambda_sparse = jnp.sqrt(k_sq_obs)[:, :, None] / (jnp.sqrt(q_sq_selected) + 1e-9)
+        mask_lambda = (lambda_sparse >= self.wl_min_val) & (lambda_sparse <= self.wl_max_val)
+        
+        d_sparse = 1.0 / jnp.sqrt(q_sq_selected + 1e-9)
+        mask_res = (d_sparse >= self.d_min) & (d_sparse <= self.d_max)
+        
+        valid_mask = mask_lambda & mask_res
+        log_K = jnp.where(valid_mask, log_K, -100.0)
+
+        # 5. Outlier (Dustbin) & Softmax
+        log_K_dustbin = jnp.full((batch_size, n_obs, 1), -5.0)
+        log_K_extended = jnp.concatenate([log_K, log_K_dustbin], axis=2)
+        
+        # Row Normalization (Softmax)
+        log_P = log_K_extended - jax.nn.logsumexp(log_K_extended, axis=2, keepdims=True)
+        P = jnp.exp(log_P)
+        
+        # 6. Score
+        P_match = P[:, :, :-1]
+        log_K_match = log_K 
+        
+        matched_scores = jnp.sum(P_match * log_K_match, axis=2)
+        weighted_score = jnp.sum(self.weights * matched_scores, axis=1)
+
+        # Metrics
+        probs = jnp.max(P_match, axis=2)
+        best_k_idx = jnp.argmax(P_match, axis=2)
+        best_hkl_idx = jnp.take_along_axis(top_idxs, best_k_idx[:, :, None], axis=2).squeeze(2)
+        best_hkl = jnp.take(hkl_pool.T, best_hkl_idx, axis=0)
+        best_lamb = jnp.take_along_axis(lambda_sparse, best_k_idx[:, :, None], axis=2).squeeze(2)
+
+        return -weighted_score, probs, best_hkl, best_lamb
+
+
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
@@ -565,6 +706,9 @@ class VectorizedObjectiveJAX:
             score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness, window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
             score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
+        elif self.loss_method == 'sinkhorn':
+            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness,
+                                                       chunk_size=self.chunk_size, num_iters=self.num_iters, top_k=self.top_k)
         else:
             score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
 
@@ -725,6 +869,9 @@ class FindUB:
         hkl_search_range: int = 20,
         search_window_size: int = 256,
         window_batch_size: int = 32,
+        chunk_size: int = 2048,
+        num_iters: int = 20,
+        top_k: int = 32,
         batch_size: int = None,
         sigma_init: float = None,
         B_sharpen: float = 50,
@@ -814,7 +961,10 @@ class FindUB:
             d_min=d_min,
             d_max=d_max,
             window_batch_size=window_batch_size,
-            search_window_size=search_window_size # PASSED CORRECTLY
+            search_window_size=search_window_size,
+            chunk_size=chunk_size,
+            num_iters=num_iters,
+            top_k=top_k,
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
@@ -1022,6 +1172,8 @@ class FindUB:
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=softness, window_batch_size=window_batch_size)
         elif loss_method == 'cosine':
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
+        elif loss_method == 'sinkhorn':
+            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
         else:
             score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
 
