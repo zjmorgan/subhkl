@@ -11,6 +11,7 @@ import scipy.interpolate
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jscipy_linalg
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
@@ -58,24 +59,116 @@ def _get_active_lattice_indices(lattice_system):
     elif lattice_system == 'Monoclinic': return [0, 1, 2, 4]
     else: return [0, 1, 2, 3, 4, 5]
 
-def get_lattice_system(a, b, c, alpha, beta, gamma, centering, atol_len=0.05, atol_ang=0.5):
+def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0.05, atol_ang=0.5):
+    """
+    Determine the Lattice System for refinement based on Space Group and Geometry.
+    
+    Logic:
+    1. Determine 'Expected' system from Space Group (Bravais Lattice).
+    2. Determine 'Geometric' system from parameter values (e.g. 90 deg, a=b).
+    3. Constraint Check: If Geometry violates Space Group (e.g. 88 deg for Cubic), WARN.
+    4. Override: If Expected symmetry is LOWER than Geometric (e.g. P1 SG but 90-90-90 params),
+       force LOWER symmetry (Triclinic) to allow full refinement.
+    """
+    
+    # --- 1. Determine Expected System from Space Group ---
+    try:
+        sg = get_space_group_object(space_group_name)
+        # Gemmi CrystalSystem: triclinic, monoclinic, orthorhombic, tetragonal, trigonal, hexagonal, cubic
+        sys_str = str(sg.crystal_system()).split('.')[-1].lower() 
+        centering = sg.centring_type() # 'P', 'F', 'I', 'R', etc.
+    except Exception:
+        sys_str = 'triclinic' # Fallback
+        centering = 'P'
+
+    # Map to internal types
+    expected = 'Triclinic'
+    if sys_str == 'cubic': expected = 'Cubic'
+    elif sys_str == 'hexagonal': expected = 'Hexagonal'
+    elif sys_str == 'trigonal': 
+        expected = 'Rhombohedral' if centering == 'R' else 'Hexagonal'
+    elif sys_str == 'tetragonal': expected = 'Tetragonal'
+    elif sys_str == 'orthorhombic': expected = 'Orthorhombic'
+    elif sys_str == 'monoclinic': expected = 'Monoclinic'
+
+    # --- 2. Check Constraints & Warn ---
     is_90 = lambda x: np.isclose(x, 90.0, atol=atol_ang)
     is_120 = lambda x: np.isclose(x, 120.0, atol=atol_ang)
     eq = lambda x, y: np.isclose(x, y, atol=atol_len)
-    if centering == 'R':
-        if is_90(alpha) and is_90(beta) and is_120(gamma) and eq(a, b): return 'Hexagonal', 2 
-        elif eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma): return 'Rhombohedral', 2 
-    if centering == 'H': return 'Hexagonal', 2
+
+    violation_msg = []
+    
+    if expected == 'Cubic':
+        if not (eq(a, b) and eq(b, c)): violation_msg.append("a=b=c")
+        if not (is_90(alpha) and is_90(beta) and is_90(gamma)): violation_msg.append("angles=90")
+    elif expected == 'Hexagonal':
+        if not eq(a, b): violation_msg.append("a=b")
+        if not (is_90(alpha) and is_90(beta) and is_120(gamma)): violation_msg.append("angles=90,90,120")
+    elif expected == 'Rhombohedral':
+        if not (eq(a, b) and eq(b, c)): violation_msg.append("a=b=c")
+        if not (eq(alpha, beta) and eq(beta, gamma)): violation_msg.append("alpha=beta=gamma")
+    elif expected == 'Tetragonal':
+        if not eq(a, b): violation_msg.append("a=b")
+        if not (is_90(alpha) and is_90(beta) and is_90(gamma)): violation_msg.append("angles=90")
+    elif expected == 'Orthorhombic':
+        if not (is_90(alpha) and is_90(beta) and is_90(gamma)): violation_msg.append("angles=90")
+    elif expected == 'Monoclinic':
+        # Assuming b-unique or c-unique depending on settings, roughly check if at least two are 90
+        count90 = sum([is_90(alpha), is_90(beta), is_90(gamma)])
+        if count90 < 2: violation_msg.append("at least two angles=90")
+
+    if violation_msg:
+        warnings.warn(
+            f"\n[Lattice System] Input parameters violate {space_group_name} ({expected}) constraints: {', '.join(violation_msg)}.\n"
+            f"optimization will enforce {expected} constraints, which may cause a jump in parameters."
+        )
+
+    # --- 3. Geometric Inference (Legacy Logic) ---
+    geometric = 'Triclinic'
     if is_90(alpha) and is_90(beta) and is_90(gamma):
-        if eq(a, b) and eq(b, c): return 'Cubic', 1  
-        elif eq(a, b): return 'Tetragonal', 2 
-        elif eq(a, c) or eq(b, c): return 'Orthorhombic', 3 
-        else: return 'Orthorhombic', 3 
+        if eq(a, b) and eq(b, c): geometric = 'Cubic'
+        elif eq(a, b): geometric = 'Tetragonal'
+        else: geometric = 'Orthorhombic'
     elif is_90(alpha) and is_90(beta) and is_120(gamma):
-        if eq(a, b): return 'Hexagonal', 2 
-    elif eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma): return 'Rhombohedral', 2 
-    if is_90(alpha) and is_90(gamma) and not is_90(beta): return 'Monoclinic', 4 
-    return 'Triclinic', 6
+        if eq(a, b): geometric = 'Hexagonal'
+    elif centering == 'R' and eq(a, b) and eq(b, c) and eq(alpha, beta) and eq(beta, gamma):
+        geometric = 'Rhombohedral'
+    elif sum([is_90(alpha), is_90(beta), is_90(gamma)]) >= 2:
+        geometric = 'Monoclinic'
+
+    # --- 4. Hierarchy and Override ---
+    # Rank symmetries: Lower number = Lower Symmetry (More free params)
+    ranks = {
+        'Triclinic': 0, 'Monoclinic': 1, 'Orthorhombic': 2, 
+        'Tetragonal': 3, 'Rhombohedral': 4, 'Hexagonal': 4, 'Cubic': 5
+    }
+    
+    rank_exp = ranks.get(expected, 0)
+    rank_geo = ranks.get(geometric, 0)
+
+    # Decision Rule:
+    # 1. If Expected is LOWER symmetry than Geometric (e.g. P1 SG, but 90-90-90 params),
+    #    we MUST use Expected (Triclinic) to allow refinement of angles away from 90.
+    # 2. If Expected is HIGHER symmetry (e.g. Cubic SG, but wonky params),
+    #    we MUST use Expected (Cubic) to enforce Space Group symmetry (despite the warning).
+    
+    final_system = expected
+    
+    # Calculate free params count
+    # Triclinic(6), Mono(4), Ortho(3), Tet(2), Hex(2), Rho(2), Cub(1)
+    if final_system == 'Triclinic': num = 6
+    elif final_system == 'Monoclinic': num = 4
+    elif final_system == 'Orthorhombic': num = 3
+    elif final_system == 'Tetragonal': num = 2
+    elif final_system == 'Hexagonal': num = 2
+    elif final_system == 'Rhombohedral': num = 2
+    elif final_system == 'Cubic': num = 1
+    else: num = 6
+
+    if rank_exp < rank_geo:
+        print(f"Lattice System Override: Geometry suggests {geometric}, but Space Group {space_group_name} requires {expected}. Enforcing {expected} (Lower Symmetry).")
+    
+    return final_system, num
 
 def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
     u = axis / jnp.linalg.norm(axis)
@@ -919,7 +1012,7 @@ class FindUB:
 
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
         lattice_system, num_lattice_params = get_lattice_system(
-            self.a, self.b, self.c, self.alpha, self.beta, self.gamma, get_centering(self.space_group),
+            self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group,
         )
         
         if refine_lattice:
@@ -1040,6 +1133,8 @@ class FindUB:
                     state = state.replace(std=target_sigma)
             return state
 
+        mesh = Mesh(np.array(jax.devices()), ('i'))
+
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
@@ -1047,6 +1142,10 @@ class FindUB:
             x_rest = jnp.clip(x[:, 3:], 0.0, 1.0)
             x_valid = jnp.concatenate([x_orient, x_rest], axis=1)
             fitness = objective(x_valid)
+
+            # parallelize population across GPUs
+            x_valid = jax.lax.with_sharding_constraint(x_valid, NamedSharding(mesh, P('i')))
+
             state_tell, metrics = strategy.tell(rng_tell, x_valid, fitness, state_ask, es_params)
             return rng, state_tell, metrics
 
