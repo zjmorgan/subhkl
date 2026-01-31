@@ -217,8 +217,14 @@ def finder(
     peak_smoothing_window_size: int = 15,
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0
+    peak_pixel_outlier_threshold: float = 2.0,
+    sparse_rbf_alpha: float = 0.1,      # Regularization (Higher = fewer, stronger peaks)
+    sparse_rbf_gamma: float = 2.01,     # Kernel scaling (Theoretical constant)
+    sparse_rbf_min_sigma: float = 1.0,  # Min spot size (pixels)
+    sparse_rbf_max_sigma: float = 10.0, # Max spot size (pixels)
+    sparse_rbf_max_peaks: int = 500,    # Max peaks per bank
 ):
+
     print(f"Creating peaks from {filename} for instrument {instrument}")
 
     wavelength_kwargs = {}
@@ -246,6 +252,16 @@ def finder(
             "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
             "show_steps": show_steps,
             "show_scale": "log"
+        })
+    elif finder_algorithm == "sparse_rbf":
+        peak_kwargs.update({
+            "alpha": sparse_rbf_alpha,
+            "gamma": sparse_rbf_gamma,
+            "min_sigma": sparse_rbf_min_sigma,
+            "max_sigma": sparse_rbf_max_sigma,
+            "max_peaks": sparse_rbf_max_peaks,
+            "show_steps": show_steps,
+            "show_scale": "linear"
         })
     else:
         raise ValueError("Invalid finder algorithm")

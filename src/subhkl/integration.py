@@ -23,6 +23,7 @@ from subhkl.config import (
 )
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
+from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
 from subhkl.spacegroup import is_systematically_absent
 
@@ -264,6 +265,34 @@ class Peaks:
             exclude_border=min_pix * 3,
         )
 
+        return coords[:, 0], coords[:, 1]
+
+    def harvest_peaks_sparse_rbf(
+        self,
+        bank: int,
+        alpha: float = 0.1,
+        gamma: float = 2.01,
+        min_sigma: float = 1.0,
+        max_sigma: float = 10.0,
+        max_peaks: int = 500,
+        show_steps: bool = False,
+        show_scale: str = "linear"
+    ) -> tuple[npt.NDArray, npt.NDArray]:
+        """
+        Find peaks using Sparse RBF Network Pursuit (Shao et al. 2025).
+        Resolves overlapping peaks ('necklaces') via constructive function approximation.
+        """
+        alg = SparseRBFPeakFinder(
+            alpha=alpha,
+            gamma=gamma,
+            min_sigma=min_sigma,
+            max_sigma=max_sigma,
+            max_peaks=max_peaks,
+            show_steps=show_steps,
+            show_scale=show_scale
+        )
+        # Returns (row, col) coordinates
+        coords = alg.find_peaks(self.ims[bank])
         return coords[:, 0], coords[:, 1]
 
     def harvest_peaks_thresholding(
@@ -764,6 +793,33 @@ class Peaks:
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
 
+        # --- NEW BATCH LOGIC ---
+        if finder_algorithm == "sparse_rbf":
+            # 1. Gather all bank images into a batch stack
+            bank_ids = sorted(self.ims.keys())
+            images_list = [self.ims[b] for b in bank_ids]
+
+            # Ensure shapes match (pad if necessary, but usually detector banks are uniform)
+            # Assuming uniform shape for vmap:
+            img_stack = np.stack(images_list)
+
+            # 2. Instantiate Solver
+            alg = SparseRBFPeakFinder(
+                alpha=harvest_peaks_kwargs.get('alpha', 0.1),
+                gamma=harvest_peaks_kwargs.get('gamma', 2.01),
+                min_sigma=harvest_peaks_kwargs.get('min_sigma', 1.0),
+                max_sigma=harvest_peaks_kwargs.get('max_sigma', 10.0),
+                max_peaks=harvest_peaks_kwargs.get('max_peaks', 500),
+                show_steps=harvest_peaks_kwargs.get('show_steps', False)
+            )
+
+            # 3. Run Parallel Solver
+            batch_coords = alg.find_peaks_batch(img_stack)
+
+            # 4. Distribute results back to the loop structure
+            # We create a mapping so the existing loop works with pre-computed results
+            precomputed_peaks = {b: c for b, c in zip(bank_ids, batch_coords)}
+
         # Calculate angles (two theta and phi), rotation, and wavelength
         for bank in sorted(self.ims.keys()):
             print(f"Processing bank {bank}")
@@ -774,6 +830,9 @@ class Peaks:
             elif finder_algorithm == "thresholding":
                 # harvest_peaks_thresholding returns image (row, col) coordinates
                 i, j = self.harvest_peaks_thresholding(bank, **harvest_peaks_kwargs)
+            elif finder_algorithm == "sparse_rbf":
+                # Fetch precomputed result
+                i, j = precomputed_peaks[bank][:, 0], precomputed_peaks[bank][:, 1]
             else:
                 raise ValueError("Invalid finder algorithm")
             if show_progress:
@@ -842,7 +901,7 @@ class Peaks:
                 if file_prefix is not None:
                     output_file = file_prefix + "_" + output_file
                 fig.savefig(output_file)
-                plt.show()
+                plt.close(fig)
 
             # Only add integrated peaks to data
             if sum(keep) > 0:
