@@ -271,7 +271,6 @@ class Peaks:
         self,
         bank: int,
         alpha: float = 0.1,
-        gamma: float = 2.01,
         min_sigma: float = 1.0,
         max_sigma: float = 10.0,
         max_peaks: int = 500,
@@ -284,7 +283,6 @@ class Peaks:
         """
         alg = SparseRBFPeakFinder(
             alpha=alpha,
-            gamma=gamma,
             min_sigma=min_sigma,
             max_sigma=max_sigma,
             max_peaks=max_peaks,
@@ -806,7 +804,6 @@ class Peaks:
             # 2. Instantiate Solver
             alg = SparseRBFPeakFinder(
                 alpha=harvest_peaks_kwargs.get('alpha', 0.1),
-                gamma=harvest_peaks_kwargs.get('gamma', 2.01),
                 min_sigma=harvest_peaks_kwargs.get('min_sigma', 1.0),
                 max_sigma=harvest_peaks_kwargs.get('max_sigma', 10.0),
                 max_peaks=harvest_peaks_kwargs.get('max_peaks', 500),
