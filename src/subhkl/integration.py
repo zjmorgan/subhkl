@@ -91,6 +91,7 @@ class Peaks:
         """
 
         name, ext = os.path.splitext(filename)
+        self.filename = filename  # store for lookup
 
         self.instrument = instrument
         
@@ -1003,7 +1004,8 @@ class Peaks:
         integration_method="free_fit",
         create_visualizations=False,
         show_progress=False,
-        file_prefix=None
+        file_prefix=None,
+        found_peaks_file=None 
     ):
         integrator = PeakIntegrator.build_from_dictionary(integration_params)
 
@@ -1014,17 +1016,57 @@ class Peaks:
         banks = []
         xyz = []
 
+        # --- NEW: Pre-load FILTERED found peaks (Lab Coordinates) ---
+        found_peaks_xyz = None
+        if found_peaks_file is not None and create_visualizations:
+            try:
+                import h5py
+                print(f"Loading found peaks from: {found_peaks_file}")
+                with h5py.File(found_peaks_file, "r") as f:
+                    # Check if multi-file structure exists
+                    if "files" in f and "file_offsets" in f and "peaks/xyz" in f:
+                        files_db = f["files"][()]
+                        offsets = f["file_offsets"][()]
+                        
+                        # Match current filename against DB
+                        target_name = os.path.basename(self.filename)
+                        match_idx = -1
+                        
+                        print(f"Scanning {len(files_db)} files in merged index for '{target_name}'...")
+                        for i, fname_bytes in enumerate(files_db):
+                            fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
+                            # Loose matching: check if target is in the stored path
+                            if target_name in fname_str:
+                                match_idx = i
+                                print(f"  > Match found at index {i}: {fname_str}")
+                                break
+                        
+                        if match_idx >= 0:
+                            start = int(offsets[match_idx])
+                            # Handle last element or next offset
+                            end = int(offsets[match_idx+1]) if match_idx < len(files_db) - 1 else f["peaks/xyz"].shape[0]
+                            
+                            found_peaks_xyz = f["peaks/xyz"][start:end]
+                            print(f"Overlaying {len(found_peaks_xyz)} found peaks matching '{target_name}'")
+                        else:
+                            print(f"Warning: Current file '{target_name}' not found in {found_peaks_file}. No overlay.")
+                    
+                    # Fallback: Single-file structure or missing index
+                    elif "peaks/xyz" in f:
+                        print("Warning: 'files' index not found. Loading ALL peaks (may cause overlap).")
+                        found_peaks_xyz = f["peaks/xyz"][()]
+                    else:
+                        print(f"Warning: {found_peaks_file} missing 'peaks/xyz'. Cannot overlay.")
+            except Exception as e:
+                print(f"Failed to load found peaks for overlay: {e}")
+        # ---------------------------------------------
+
         for bank, peaks in peak_dict.items():
-            # bank_i (row) and bank_j (colO) are in image coordinates
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
             centers = np.stack([bank_i, bank_j], axis=-1)
             
             det = self.get_detector(bank)
-
-            # pixel_to_angles expects (row, col)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
-
-            # pixel_to_lab expects (row, col)
             lab_coords_T = det.pixel_to_lab(bank_i, bank_j)
             lab_coords_T = np.atleast_2d(lab_coords_T)
             if lab_coords_T.shape[0] != 3:
@@ -1044,14 +1086,10 @@ class Peaks:
                 std = np.std(self.ims[bank][mask])
                 n_sigma = integration_params["region_growth_minimum_sigma"]
                 integrator.region_grower.min_intensity = mean + n_sigma * std
-                print(f"Using override region-growth-minimum-intensity: {integrator.region_grower.min_intensity:.02f}")
 
-            # FILTER STEP: Only keep centers that are inside the valid mask region
-            # centers is (N, 2) array of [row, col]
             valid_indices = []
             for idx, (r, c) in enumerate(centers):
                 r_int, c_int = int(r), int(c)
-                # Check bounds and mask (mask is True for Valid, False for Masked/Forbidden)
                 if (0 <= r_int < mask.shape[0] and
                     0 <= c_int < mask.shape[1] and
                     mask[r_int, c_int]):
@@ -1084,33 +1122,49 @@ class Peaks:
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-                # imshow origin='lower' means image (0,0) is at lower left
+                # Restore origin='lower' to fix axis direction
                 axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
-                axes[0].set_title("Predicted peaks")
+                axes[0].set_title(f"Bank {bank}: Predicted (Blue) vs Found (Green)")
 
-                # x=col=j, y=i=row
-                axes[0].scatter(bank_j, bank_i, marker="1", c="blue")
+                # PREDICTED: x=col=j, y=i=row
+                # Standard matplotlib scatter: (x, y) = (col, row)
+                axes[0].scatter(bank_j, bank_i, marker="1", c="blue", label="Predicted", s=40)
+                
+                # --- OVERLAY LOGIC ---
+                if found_peaks_xyz is not None:
+                    # Project FILTERED peaks onto THIS detector
+                    f_row, f_col = det.lab_to_pixel(found_peaks_xyz[:,0], found_peaks_xyz[:,1], found_peaks_xyz[:,2], clip=False)
+                    
+                    # --- NEW: VISUALIZATION-TIME FILTER ---
+                    # Filter: Only plot points that LAND ON THE SENSOR
+                    # This hides the "ghost peaks" from other detectors or back-projection artifacts
+                    in_bounds = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                    
+                    if np.any(in_bounds):
+                        f_row_valid = f_row[in_bounds]
+                        f_col_valid = f_col[in_bounds]
+                        # Plot Found: Green Circles
+                        axes[0].scatter(f_col_valid, f_row_valid, s=60, facecolors='none', edgecolors='lime', linewidths=1.5, label='Found')
+                # -------------------------------------
+                
+                axes[0].legend(loc='upper right', fontsize='x-small')
+
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
-                    # 1. Zone Axis Filter: Reflections on the main axes (h00, 0k0, 00l) or planes (hk0, etc.)
                     is_zone_axis = (p_h == 0) or (p_k == 0) or (p_l == 0)
-
-                    # 2. Nodal Filter: Low-order reflections near the beam center
                     is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
-
-                    # Apply Filter
                     if is_zone_axis or is_nodal:
-                        # Use smaller font and color for clarity
                         color = 'red' if is_nodal else 'black'
                         weight = 'bold' if is_nodal else 'normal'
                         axes[0].text(p_j, p_i, f"({p_h},{p_k},{p_l})",
                                      color=color, fontsize=6, fontweight=weight, clip_on=True)
 
+                # Restore origin='lower'
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
 
                 forbidden = ~mask
                 overlay = np.zeros((*forbidden.shape, 4))
-                overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan, semi-transparent
-                axes[1].imshow(overlay, origin='lower')
+                overlay[forbidden] = [0, 1, 1, 0.3]
+                axes[1].imshow(overlay, origin='lower') # Restore origin='lower'
 
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
@@ -1120,14 +1174,13 @@ class Peaks:
                 for _, hull, _, _ in hulls:
                     if hull is not None:
                         for simplex in hull.simplices:
-                            # hull points are [row, col] = (y, x)
                             axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
 
                 output_file = str(bank) + "_int.png"
                 if file_prefix is not None:
                     output_file = file_prefix + output_file
                 fig.savefig(output_file)
-                plt.show()
+                plt.close(fig)
 
             h.extend(bank_h[keep])
             k.extend(bank_k[keep])
@@ -1141,7 +1194,6 @@ class Peaks:
             banks.extend([bank] * sum(keep))
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
-
 
     def coverage(self, h, k, l, UB, wavelength, ki_vec=None, tol=1e-5):
         """

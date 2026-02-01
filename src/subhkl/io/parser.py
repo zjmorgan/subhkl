@@ -834,7 +834,8 @@ def integrator(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     create_visualizations: bool = False,
-    show_progress: bool = False
+    show_progress: bool = False,
+    found_peaks_file: str = None,
 ):
     peak_dict = {}
     with h5py.File(integration_peaks_filename) as f:
@@ -869,7 +870,8 @@ def integrator(
         create_visualizations=create_visualizations,
         show_progress=show_progress,
         integration_method=integration_method,
-        file_prefix=filename
+        file_prefix=filename,
+        found_peaks_file=found_peaks_file,
     )
 
     copy_keys = [

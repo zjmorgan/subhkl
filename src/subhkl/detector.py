@@ -101,10 +101,13 @@ class Detector:
         xyz = self.center + du + dv
         return xyz.T if xyz.ndim > 1 else xyz
 
-    def lab_to_pixel(self, x: float, y: float, z: float) -> tuple[npt.NDArray, npt.NDArray]:
+    def lab_to_pixel(self, x: float, y: float, z: float, clip: bool = False) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Convert lab frame coordinates (x, y, z) to detector pixel coordinates.
         Returns (row, col) in Image Space.
+        
+        If clip=False (default), returns raw coordinates which may be negative 
+        or larger than detector dimensions.
         """
         p = np.array([x, y, z])
         
@@ -119,8 +122,8 @@ class Detector:
         else:
             dot_v = np.dot(vec, self.vhat)
 
-        # v -> Row Index
-        row_f = np.clip(dot_v / dh, 0, self.n)
+        # v -> Row Index (No Clipping)
+        row_f = dot_v / dh
 
         if self.panel_type == DetectorShape.flat_panel:
             if vec.ndim == 1:
@@ -128,8 +131,8 @@ class Detector:
             else:
                 dot_u = np.dot(vec, self.uhat)
             
-            # u -> Col Index
-            col_f = np.clip(dot_u / dw, 0, self.m)
+            # u -> Col Index (No Clipping)
+            col_f = dot_u / dw
 
         else:
             # Curved logic
@@ -149,7 +152,11 @@ class Detector:
             dt = 2 * np.arctan(val)
             dt = np.mod(dt, 2 * np.pi)
 
-            col_f = np.clip(dt * (self.radius / dw), 0, self.m)
+            col_f = dt * (self.radius / dw)
+
+        if clip:
+            row_f = np.clip(row_f, 0, self.n)
+            col_f = np.clip(col_f, 0, self.m)
 
         return row_f, col_f
 
