@@ -219,7 +219,8 @@ def finder(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     sparse_rbf_alpha: float = 0.1,      # Regularization (Higher = fewer, stronger peaks)
-    sparse_rbf_min_sigma: float = 1.0,  # Min spot size (pixels)
+    sparse_rbf_gamma: float = 2.0,      # Besov space coefficient (shape prior)
+    sparse_rbf_min_sigma: float = 0.5,  # Min spot size (pixels)
     sparse_rbf_max_sigma: float = 10.0, # Max spot size (pixels)
     sparse_rbf_max_peaks: int = 500,    # Max peaks per bank
     sparse_rbf_tile_rows: int = 2,      # NEW: Number of row divisions for tiling
@@ -257,6 +258,7 @@ def finder(
     elif finder_algorithm == "sparse_rbf":
         peak_kwargs.update({
             "alpha": sparse_rbf_alpha,
+            "gamma": sparse_rbf_gamma,
             "min_sigma": sparse_rbf_min_sigma,
             "max_sigma": sparse_rbf_max_sigma,
             "max_peaks": sparse_rbf_max_peaks,
