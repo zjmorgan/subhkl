@@ -6,20 +6,17 @@ from functools import partial
 import jax.scipy.optimize
 import jax.scipy.signal
 import sys
+from scipy.spatial.distance import pdist, squareform
 
 class SparseRBFPeakFinder:
     """
-    JAX-Native Sparse RBF Peak Finder (Overlapping Window Pursuit).
+    JAX-Native Recursive Window Sparse RBF Peak Finder.
     
-    Strategy:
-    1. Divide image into OVERLAPPING windows (e.g. 32x32, stride 16).
-    2. Run Robust Sequential Greedy Pursuit on all windows in parallel.
-    3. Merge results to remove duplicates (peaks found in multiple windows).
-    
-    Benefits:
-    - No downsampling artifacts (Full Resolution).
-    - No edge artifacts (Overlapping windows cover edges).
-    - Massive parallelism.
+    Fixed: Implements "Halo" extraction.
+    - Base Level: Dense search on overlapping windows.
+    - Recursive Levels: Patchy refinement on larger windows, but extracting 
+      an extra "Halo" of pixels around each window to ensure edge seeds 
+      have full context.
     """
     def __init__(
         self,
@@ -27,7 +24,7 @@ class SparseRBFPeakFinder:
         gamma: float = 0.0,             # Unused
         min_sigma: float = 1.0,
         max_sigma: float = 10.0,
-        max_peaks: int = 500,           # Max peaks per bank (output buffer)
+        max_peaks: int = 500,           # Max peaks per bank
         tiles: tuple = None,            # Unused
         show_steps: bool = False,
         show_scale: str = "linear"
@@ -38,12 +35,12 @@ class SparseRBFPeakFinder:
         self.max_peaks = max_peaks
         self.show_steps = show_steps
         
-        # Window Settings
-        self.window_size = 32           # Size of sliding window
-        self.stride = 16                # Overlap factor (Stride < Size)
-        self.max_peaks_per_window = 5   # Peaks to find per window
+        # Settings
+        self.base_window_size = 32      # Start dense search here
+        self.refine_patch_size = 15     # Size of patches for refinement
+        self.max_seeds_per_window = 20  # Max seeds to refine in one window
         
-        # Pre-calc sigmas
+        # Pre-calc sigmas for grid search
         self.candidate_sigmas = jnp.geomspace(min_sigma, max_sigma, num=5)
 
     @staticmethod
@@ -94,65 +91,51 @@ class SparseRBFPeakFinder:
         return mse + reg
 
     # =========================================================================
-    # THE SOLVER (Sequential Greedy on a Window)
+    # KERNEL 1: DENSE SOLVER (Base Case)
     # =========================================================================
-    @partial(jit, static_argnames=['self', 'H', 'W'])
-    def _solve_window(self, window, H, W):
-        """
-        Runs Robust Sequential Greedy Pursuit on a single window.
-        """
+    @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local'])
+    def _solve_dense(self, image, H, W, max_peaks_local):
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
-        
         yy, xx = jnp.indices((H, W))
         x_grid = jnp.array([yy, xx])
         
-        # Static Kernel
         max_k_rad = int(3.0 * self.max_sigma)
         max_k_rad = min(max_k_rad, H // 2)
         k_grid = jnp.arange(-max_k_rad, max_k_rad + 1)
         ky, kx = jnp.meshgrid(k_grid, k_grid)
         
-        init_params = jnp.zeros((self.max_peaks_per_window, 4))
+        init_params = jnp.zeros((max_peaks_local, 4))
         init_state = (init_params, 0)
 
         def step_fn(state, _):
             params, idx = state
-            
-            # 1. Residual
             recon = self._predict_batch_physical(params, x_grid)
-            residual = window - recon
+            residual = image - recon
             
-            # 2. Greedy Search
             def check_sigma(s):
                 kernel = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
                 corr = jax.scipy.signal.correlate2d(residual, kernel, mode='same')
-                
                 flat_idx = jnp.argmax(jnp.abs(corr))
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 val = jnp.abs(corr[r_idx, c_idx])
-                
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
-                # Return array directly (JAX promotes int->float automatically)
                 return val, jnp.array([c_init, r_idx, c_idx, s])
 
             vals, candidates = vmap(check_sigma)(self.candidate_sigmas)
             best_idx = jnp.argmax(vals)
             new_peak = candidates[best_idx]
             
-            # 3. Threshold
             is_strong = new_peak[0] > self.alpha
             new_peak = jnp.where(is_strong, new_peak, jnp.zeros(4))
             
-            # 4. Insert
             params = params.at[idx].set(new_peak)
             
-            # 5. Quick Relax
             def run_opt(p):
                 p_raw = self._to_unconstrained(p, *bounds)
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, window, self.alpha, bounds),
+                    args=(x_grid, image, self.alpha, bounds),
                     method='BFGS',
                     options={'maxiter': 5}
                 )
@@ -161,149 +144,263 @@ class SparseRBFPeakFinder:
             params = run_opt(params)
             return (params, idx + 1), None
 
-        final_state, _ = lax.scan(step_fn, init_state, None, length=self.max_peaks_per_window)
+        final_state, _ = lax.scan(step_fn, init_state, None, length=max_peaks_local)
         final_params, _ = final_state
-        
-        # Final Polish
-        params_raw = self._to_unconstrained(final_params, *bounds)
-        res_final = jax.scipy.optimize.minimize(
-            fun=self._loss_fn,
-            x0=params_raw,
-            args=(x_grid, window, self.alpha, bounds),
-            method='BFGS',
-            options={'maxiter': 20}
-        )
-        return self._to_physical(res_final.x, *bounds)
+        return final_params
 
-    def _progress_callback(self, current_step, total_steps):
-        percent = (current_step / total_steps) * 100
-        sys.stdout.write(f"\rSparseRBF (Window): {percent:.1f}%")
+    # =========================================================================
+    # KERNEL 2: PATCHY SOLVER w/ HALO
+    # =========================================================================
+    @partial(jit, static_argnames=['self', 'Win_H', 'Win_W', 'Halo_P', 'Refine_P'])
+    def _solve_patchy_window(self, window_with_halo, seeds, Win_H, Win_W, Halo_P, Refine_P):
+        """
+        Refines seeds using a window that includes a Halo of extra context.
+        window_with_halo: (Win_H + 2*Halo, Win_W + 2*Halo)
+        seeds: Coords relative to the 'valid' window (0..Win_H).
+        """
+        # We need to shift seeds to account for the halo in the image
+        # seeds are [Int, R, C, Sig]
+        
+        seeds_halo_shifted = seeds.copy()
+        seeds_halo_shifted = seeds_halo_shifted.at[:, 1].add(Halo_P)
+        seeds_halo_shifted = seeds_halo_shifted.at[:, 2].add(Halo_P)
+        
+        half_p = Refine_P // 2
+        # window_with_halo is already big enough, no extra padding needed 
+        # unless patch size > halo size. Halo_P is usually Refine_P/2.
+        # Let's assume Halo_P >= half_p.
+        
+        def process_one_seed(seed):
+            valid = seed[0] > 1e-6
+            r_c = seed[1].astype(int)
+            c_c = seed[2].astype(int)
+            
+            # Extract Patch from window_with_halo
+            # Start: r_c - half_p. (r_c already includes Halo shift)
+            start_r = r_c - half_p
+            start_c = c_c - half_p
+            
+            patch = lax.dynamic_slice(window_with_halo, (start_r, start_c), (Refine_P, Refine_P))
+            
+            # Solve Patch
+            res = self._solve_dense(patch, Refine_P, Refine_P, 2)
+            
+            # Convert back to 'valid' window coords (remove Halo shift)
+            # Patch TopLeft in halo-shifted system: r_c - half_p
+            # To get back to non-halo system: subtract Halo_P
+            
+            shift_r = (r_c - half_p) - Halo_P
+            shift_c = (c_c - half_p) - Halo_P
+            
+            res = res.at[:, 1].add(shift_r)
+            res = res.at[:, 2].add(shift_c)
+            
+            mask = valid & (res[:, 0] > self.alpha)
+            return jnp.where(mask[:, None], res, jnp.zeros_like(res))
+
+        results = vmap(process_one_seed)(seeds_halo_shifted)
+        return results.reshape(-1, 4)
+
+    def _progress_callback(self, current, total, label):
+        pct = (current / total) * 100
+        sys.stdout.write(f"\rSparseRBF ({label}): {pct:.1f}%")
         sys.stdout.flush()
 
+    # =========================================================================
+    # MAIN LOOP
+    # =========================================================================
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
-
+        
         # 1. Pre-process
         medians = np.median(images_batch, axis=(1, 2), keepdims=True)
         images_bg_corr = np.maximum(images_batch - medians, 0)
         global_max = images_bg_corr.max() + 1e-9
         images_norm = images_bg_corr / global_max
-
+        
         print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
-
+        
         img_jax = jnp.array(images_norm)
+        
+        # Pad image once globally to handle edge cases for lazy extraction
+        # We need padding to support extracting windows + halo at image edges
+        PAD_GLOBAL = 32 # Arbitrary safety padding
+        img_jax_padded = jnp.pad(img_jax, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+        
+        current_peaks = [np.zeros((0, 4)) for _ in range(B)]
+        
+        win_size = self.base_window_size
+        max_dim = max(H, W)
+        loop_sizes = []
+        w = win_size
+        while w < max_dim:
+            loop_sizes.append(w)
+            w *= 2
+        loop_sizes.append(max_dim)
+        loop_sizes = sorted(list(set(loop_sizes)))
+        
+        for level_idx, w_curr in enumerate(loop_sizes):
+            w_h = min(w_curr, H)
+            w_w = min(w_curr, W)
+            stride_h = w_h // 2
+            stride_w = w_w // 2
+            
+            print(f"\n[Level {level_idx}] Processing Windows: {w_h}x{w_w} (Stride {stride_h})")
+            
+            # --- Grid Generation ---
+            grid_h_indices = list(range(0, H - w_h + 1, stride_h))
+            if grid_h_indices[-1] + w_h < H: grid_h_indices.append(H - w_h)
+            
+            grid_w_indices = list(range(0, W - w_w + 1, stride_w))
+            if grid_w_indices[-1] + w_w < W: grid_w_indices.append(W - w_w)
+            
+            window_coords = []
+            for b in range(B):
+                for r in grid_h_indices:
+                    for c in grid_w_indices:
+                        window_coords.append((b, r, c))
+            
+            total_wins_all = len(window_coords)
+            window_coords_arr = np.array(window_coords, dtype=np.int32)
+            
+            # --- Halo Setup ---
+            # Halo size: Enough to cover the refinement patch radius
+            HALO = self.refine_patch_size // 2 + 1
+            
+            # JIT Extractor: Extracts windows with HALO from padded global image
+            @jit
+            def extract_chunk_with_halo(b_idx, r_idx, c_idx):
+                # Global coords need to be shifted by PAD_GLOBAL
+                r_pad = r_idx + PAD_GLOBAL - HALO
+                c_pad = c_idx + PAD_GLOBAL - HALO
+                
+                # Extract W + 2*HALO
+                h_extract = w_h + 2 * HALO
+                w_extract = w_w + 2 * HALO
+                
+                def slice_one(bi, ri, ci):
+                    return lax.dynamic_slice(img_jax_padded[bi], (ri, ci), (h_extract, w_extract))
+                return vmap(slice_one)(b_idx, r_pad, c_pad)
 
-        # --- 2. Extract Overlapping Windows ---
-        img_nchw = img_jax[:, None, :, :]
-
-        win_size = self.window_size
-        stride = self.stride
-
-        # Output Shape: (B, Depth=1024, Out_H, Out_W)
-        patches_conv = lax.conv_general_dilated_patches(
-            lhs=img_nchw,
-            filter_shape=(win_size, win_size),
-            window_strides=(stride, stride),
-            padding='VALID',
-            dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-        )
-
-        # --- FIX: Correct Shape Unpacking ---
-        B, Depth, Out_H, Out_W = patches_conv.shape
-
-        # We need to move Depth (1024) to the end: (B, Out_H, Out_W, Depth)
-        patches_t = patches_conv.transpose(0, 2, 3, 1)
-
-        total_wins = B * Out_H * Out_W
-        print(f"  > Extracted {total_wins} overlapping windows (Grid: {Out_H}x{Out_W}).")
-
-        # Now reshape to (Total_Windows, 32, 32)
-        patches_reshaped = patches_t.reshape(total_wins, win_size, win_size)
-
-        # --- 3. Parallel Solve ---
-        solver = jit(vmap(
-            lambda w: self._solve_window(w, win_size, win_size)
-        ))
-
-        chunk_size = 512
-        all_results = []
-
-        print("Running Window Pursuit...")
-        for i in range(0, total_wins, chunk_size):
-            chunk = patches_reshaped[i:i+chunk_size]
-            res = solver(chunk)
-            all_results.append(np.array(res))
-            self._progress_callback(i + len(chunk), total_wins)
-
-        print("\nMerging results...")
-
-        flat_results = np.concatenate(all_results, axis=0) # (Total_Win, Peaks_Per_Win, 4)
-
-        # Reshape back to grid structure to recover coordinates
-        # (B, Out_H, Out_W, Peaks, 4)
-        grid_results = flat_results.reshape(B, Out_H, Out_W, self.max_peaks_per_window, 4)
-
-        final_peaks_list = []
-        total_kept = 0
-
-        # Import scipy distance for deduplication
-        from scipy.spatial.distance import pdist, squareform
-
-        for b in range(B):
-            bank_peaks = []
-            for hg in range(Out_H):
-                for wg in range(Out_W):
-                    local_peaks = grid_results[b, hg, wg]
-
-                    # Filter
-                    mask = (local_peaks[:, 0] > self.alpha) & \
-                           (local_peaks[:, 3] > (self.min_sigma * 0.95))
-                    valid = local_peaks[mask]
-
-                    if len(valid) > 0:
-                        # Convert Local to Global
-                        start_r = hg * stride
-                        start_c = wg * stride
-
-                        shifted = valid.copy()
-                        shifted[:, 1] += start_r
-                        shifted[:, 2] += start_c
-
-                        bank_peaks.append(shifted)
-
-            if len(bank_peaks) > 0:
-                merged = np.vstack(bank_peaks)
-
-                # --- DEDUPLICATION ---
-                # 1. Sort descending intensity (Keep brightest)
-                order = np.argsort(merged[:, 0])[::-1]
-                sorted_peaks = merged[order]
-
-                keep_mask = np.ones(len(sorted_peaks), dtype=bool)
-                r_coords = sorted_peaks[:, 1]
-                c_coords = sorted_peaks[:, 2]
-                sigmas   = sorted_peaks[:, 3]
-
-                coords = np.column_stack([r_coords, c_coords])
-
-                if len(coords) > 1:
-                    dists = squareform(pdist(coords))
-                    np.fill_diagonal(dists, 9999.0)
-
-                    for i in range(len(coords)):
-                        if keep_mask[i]:
-                            # If neighbor is closer than its sigma radius, kill it
-                            radius = max(2.0, sigmas[i])
-                            neighbors = np.where(dists[i] < radius)[0]
-                            neighbors = neighbors[neighbors > i] # Only kill strictly fainter ones
-                            keep_mask[neighbors] = False
-
-                final_peaks = sorted_peaks[keep_mask]
-
-                final_peaks_list.append(final_peaks[:, 1:3])
-                total_kept += len(final_peaks)
+            chunk_size = 128
+            all_results = []
+            
+            if level_idx == 0:
+                # --- BASE CASE ---
+                # For base case, we don't strictly need Halo, but using it 
+                # and cropping ensures consistency. Or just solve dense on exact window.
+                # Let's solve dense on EXACT window for Base to match logic.
+                
+                @jit
+                def extract_chunk_exact(b_idx, r_idx, c_idx):
+                    r_pad = r_idx + PAD_GLOBAL
+                    c_pad = c_idx + PAD_GLOBAL
+                    def slice_one(bi, ri, ci):
+                        return lax.dynamic_slice(img_jax_padded[bi], (ri, ci), (w_h, w_w))
+                    return vmap(slice_one)(b_idx, r_pad, c_pad)
+                
+                print(f"  > Dense Search on {total_wins_all} windows...")
+                
+                solver = jit(vmap(lambda w: self._solve_dense(w, w_h, w_w, 10)))
+                
+                for i in range(0, total_wins_all, chunk_size):
+                    chunk_coords = window_coords_arr[i:i+chunk_size]
+                    c_win = extract_chunk_exact(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
+                    res = solver(c_win)
+                    all_results.append(np.array(res))
+                    self._progress_callback(i + len(c_win), total_wins_all, "Dense")
+                    
             else:
-                final_peaks_list.append(np.empty((0, 2)))
+                # --- PATCHY REFINE ---
+                print(f"  > Refining seeds on {total_wins_all} windows (w/ Halo)...")
+                
+                M_S = self.max_seeds_per_window
+                P = self.refine_patch_size
+                
+                solver = jit(vmap(
+                    lambda w, s: self._solve_patchy_window(w, s, w_h, w_w, HALO, P)
+                ))
+                
+                for i in range(0, total_wins_all, chunk_size):
+                    chunk_coords = window_coords_arr[i:i+chunk_size]
+                    
+                    # 1. Prepare Seeds (CPU)
+                    chunk_seeds = np.zeros((len(chunk_coords), M_S, 4), dtype=np.float32)
+                    
+                    for k, (b, r, c) in enumerate(chunk_coords):
+                        cp = current_peaks[b]
+                        if len(cp) == 0: continue
+                        valid_cp = cp[cp[:, 0] > 1e-6]
+                        r_end = r + w_h
+                        c_end = c + w_w
+                        
+                        # Find seeds strictly inside current window
+                        in_r = (valid_cp[:, 1] >= r) & (valid_cp[:, 1] < r_end)
+                        in_c = (valid_cp[:, 2] >= c) & (valid_cp[:, 2] < c_end)
+                        seeds = valid_cp[in_r & in_c]
+                        
+                        if len(seeds) > 0:
+                            seeds_local = seeds.copy()
+                            seeds_local[:, 1] -= r
+                            seeds_local[:, 2] -= c
+                            if len(seeds_local) > M_S:
+                                order = np.argsort(seeds_local[:, 0])[::-1]
+                                seeds_local = seeds_local[order[:M_S]]
+                            chunk_seeds[k, :len(seeds_local), :] = seeds_local
+                    
+                    # 2. Extract Windows WITH HALO
+                    c_win_halo = extract_chunk_with_halo(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
+                    
+                    # 3. Solve
+                    res = solver(c_win_halo, jnp.array(chunk_seeds))
+                    all_results.append(np.array(res))
+                    self._progress_callback(i + len(c_win_halo), total_wins_all, "Patchy")
 
-        print(f"  > Total peaks found: {total_kept}")
-        return final_peaks_list
+            # --- Merge & Deduplicate ---
+            print("\n  > Merging & Deduplicating...")
+            flat_results = np.concatenate(all_results, axis=0)
+            new_current_peaks = [[] for _ in range(B)]
+            
+            for k, (b, r, c) in enumerate(window_coords):
+                local_p = flat_results[k]
+                mask = (local_p[:, 0] > self.alpha)
+                valid = local_p[mask]
+                
+                if len(valid) > 0:
+                    global_p = valid.copy()
+                    global_p[:, 1] += r
+                    global_p[:, 2] += c
+                    new_current_peaks[b].append(global_p)
+            
+            final_peaks_next = []
+            for b in range(B):
+                if len(new_current_peaks[b]) > 0:
+                    merged = np.vstack(new_current_peaks[b])
+                    order = np.argsort(merged[:, 0])[::-1]
+                    sorted_p = merged[order]
+                    keep_mask = np.ones(len(sorted_p), dtype=bool)
+                    coords = sorted_p[:, 1:3]
+                    sigmas = sorted_p[:, 3]
+                    if len(coords) > 1:
+                        dists = squareform(pdist(coords))
+                        np.fill_diagonal(dists, 9999.0)
+                        for idx in range(len(coords)):
+                            if keep_mask[idx]:
+                                radius = max(2.0, sigmas[idx])
+                                neighbors = np.where(dists[idx] < radius)[0]
+                                neighbors = neighbors[neighbors > idx]
+                                keep_mask[neighbors] = False
+                    final_peaks_next.append(sorted_p[keep_mask])
+                else:
+                    final_peaks_next.append(np.zeros((0, 4)))
+            current_peaks = final_peaks_next
+            print(f"  > Level Complete. Found {sum(len(x) for x in current_peaks)} peaks total.")
+
+        final_output = []
+        for b in range(B):
+            cp = current_peaks[b]
+            if len(cp) > 0:
+                final_output.append(cp[:, 1:3])
+            else:
+                final_output.append(np.empty((0, 2)))
+        return final_output
