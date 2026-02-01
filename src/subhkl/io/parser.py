@@ -715,6 +715,7 @@ def metrics(filename: str):
         # Silently fail to standard error format for the pipeline
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
 
+
 @app.command()
 def peak_predictor(
     filename: str,
@@ -747,7 +748,7 @@ def peak_predictor(
         refined_offsets = None
         if "optimization/goniometer_offsets" in f_indexed:
             refined_offsets = np.array(f_indexed["optimization/goniometer_offsets"])
-            
+
         sample_offset = None
         if "sample/offset" in f_indexed:
             sample_offset = np.array(f_indexed["sample/offset"])
@@ -757,11 +758,14 @@ def peak_predictor(
             ki_vec = np.array(f_indexed["beam/ki_vec"])
             print(f"Using refined beam direction {ki_vec} in peak prediction.")
 
+    # 1. Initialize Peaks with Nominal Data from NeXus
     peaks = Peaks(filename,
                   instrument,
                   wavelength_min=wavelength[0],
                   wavelength_max=wavelength[1])
 
+    # 2. Prioritize: Refined Offsets + Nominal Angles -> R
+    # If offsets exist, we use them. If not, we fall back to nominal R.
     if refined_offsets is not None:
         if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
             new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
@@ -770,7 +774,8 @@ def peak_predictor(
             print("Applied refined goniometer offsets to peak prediction.")
         else:
             print("Warning: Refined offsets found but raw goniometer data not available. Using default R.")
-    
+
+    # 3. Construct Lab-Frame UB using the resolved R
     R_used = peaks.goniometer_rotation
     UB = R_used @ U @ B
 
@@ -781,7 +786,9 @@ def peak_predictor(
     if create_visualizations:
         import matplotlib.pyplot as plt
         for bank, predicted_peaks in peak_dict.items():
-            plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log")
+            # Matches integration.py plotting logic (origin='lower')
+            plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log", origin='lower')
+            # Consistent scatter: (x=col, y=row)
             plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
             plt.title(str(bank))
             plt.savefig(filename + str(bank) + "_pred.png")
@@ -798,7 +805,7 @@ def peak_predictor(
         f["sample/U"] = U
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = R_used 
+        f["goniometer/R"] = R_used
 
         if sample_offset is not None:
             f["sample/offset"] = sample_offset
@@ -813,7 +820,6 @@ def peak_predictor(
             f[f"banks/{bank}/k"] = k
             f[f"banks/{bank}/l"] = l
             f[f"banks/{bank}/wavelength"] = wl
-
 
 @app.command()
 def integrator(
