@@ -26,6 +26,7 @@ from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
 from subhkl.spacegroup import is_systematically_absent
+from subhkl.utils import predict_reflections_on_panel
 
 DetectorPeaks = namedtuple(
     "DetectorPeaks",
@@ -1308,27 +1309,29 @@ class Peaks:
                 lamda[ind],
                 mult)
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, UB, space_group="P 1", sample_offset=None, ki_vec=None):
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None):
         """
-        Predicts peak positions on the detector banks.
-        Now accepts ki_vec for beam tilt correction.
+        Predicts peak positions using the composite RUB matrix.
         """
+        # 1. Generate candidate HKLs (Needs B internally for d-spacing check)
         h, k, l = self.reflections(a, b, c, alpha, beta, gamma, space_group=space_group, d_min=d_min)
-        wavelength = [self.wavelength_min, self.wavelength_max]
-
-        # Pass ki_vec to coverage
-        xyz, hkl, wl, mult = self.coverage(h, k, l, UB, wavelength, ki_vec=ki_vec)
-        h, k, l = hkl
-
+        
         peak_dict = {}
         for bank in sorted(self.ims.keys()):
             det = self.get_detector(bank)
-
-            # xyz contains the normalized k_f direction vectors.
-            # det.reflections_mask handles the ray tracing to the panel
-            mask, row, col = det.reflections_mask(xyz[0], xyz[1], xyz[2], sample_offset=sample_offset)
-
-            peak_dict[bank] = [row[mask], col[mask], h[mask], k[mask], l[mask], wl[mask]]
+            
+            row, col, h_found, k_found, l_found, wl_found = predict_reflections_on_panel(
+                detector=det,
+                h=h, k=k, l=l,
+                RUB=RUB,
+                wavelength_min=self.wavelength_min,
+                wavelength_max=self.wavelength_max,
+                sample_offset=sample_offset,
+                ki_vec=ki_vec
+            )
+            
+            if len(row) > 0:
+                peak_dict[bank] = [row, col, h_found, k_found, l_found, wl_found]
 
         return peak_dict
 

@@ -10,6 +10,7 @@ from subhkl.export import FinderConcatenateMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
+from subhkl.utils import calculate_angular_error
 
 app = typer.Typer()
 
@@ -619,7 +620,6 @@ def metrics(filename: str):
         # 1. LOAD DATA
         with h5py.File(filename, "r") as f:
             if "peaks/xyz" not in f:
-                # Fallback or error if XYZ not present
                 print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
                 return
 
@@ -669,68 +669,28 @@ def metrics(filename: str):
         xyz_det = xyz_det[mask]
         R_all = R_all[mask]
 
-        # --- PHYSICS CALCULATION ---
-
-        # 1. B Matrix (subhkl units: 1/d)
+        # --- PHYSICS CALCULATION via UTILS ---
         B_mat = ub_helper.reciprocal_lattice_B()
+        
+        # Construct RUB (R @ U @ B)
+        UB = U @ B_mat
+        
+        # Handle Broadcasting: R is (N,3,3), UB is (3,3)
+        if R_all.ndim == 3:
+            RUB = np.matmul(R_all, UB) # (N, 3, 3)
+        else:
+            RUB = R_all @ UB # (3, 3)
 
-        # 2. Geometric Q (Unitless, just directions)
-        # Correct for Sample Offset: v = P_raw - S_total
-        v = xyz_det - sample_offset
-        dist = np.linalg.norm(v, axis=1, keepdims=True)
-        kf_dir = v / dist
-
-        # Incident Beam (Normalized)
-        ki_dir = ki_vec / np.linalg.norm(ki_vec)
-
-        # Vector Difference: |kf - ki| = 2*sin(theta)
-        delta_k = kf_dir - ki_dir[None, :]
-        two_sin_theta = np.linalg.norm(delta_k, axis=1)
-
-        # 3. METRIC 1: D-SPACING ERROR
-        # d_obs = lambda / 2sin(theta)
-        # Avoid divide by zero
-        d_obs = np.divide(lam, two_sin_theta, where=two_sin_theta!=0)
-
-        # d_calc = 1 / |B * hkl|
-        hkl = np.stack([h, k, l]).T
-        q_cryst_simple = hkl @ B_mat.T
-        q_cryst_mag = np.linalg.norm(q_cryst_simple, axis=1)
-        d_calc = np.divide(1.0, q_cryst_mag, where=q_cryst_mag!=0)
-
-        d_err = np.abs(d_obs - d_calc)
-
-        # 4. METRIC 2: ANGULAR ERROR
-        # Q_calc (Lab Frame Direction)
-        # q_lab = R * U * B * h
-        # Note: Code uses row vector convention: h @ B.T @ U.T
-        q_cryst = hkl @ B_mat.T
-        q_phi = q_cryst @ U.T
-
-        # Rotate by Goniometer R
-        # R_all shape (N, 3, 3), q_phi shape (N, 3)
-        # We need (R @ q_phi.T).T -> (N, 3)
-        # Einstein sum: n=batch, i=row, j=col. R[n,i,j] * q[n,j] -> out[n,i]
-        q_lab = np.einsum('nij,nj->ni', R_all, q_phi)
-
-        q_calc_norm = q_lab / np.linalg.norm(q_lab, axis=1, keepdims=True)
-
-        # Q_obs (Lab Frame Direction)
-        # Direction of scattering vector is same as delta_k
-        q_obs_norm = delta_k / two_sin_theta[:, None]
-
-        dot = np.sum(q_obs_norm * q_calc_norm, axis=1)
-        dot = np.clip(dot, -1.0, 1.0)
-        ang_err = np.rad2deg(np.arccos(dot))
+        d_err, ang_err = calculate_angular_error(
+            xyz_det, h, k, l, lam, RUB, sample_offset, ki_vec
+        )
 
         # 5. PRINT RESULTS
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
 
-    except Exception:
-        # Silently fail to standard error format for the pipeline
+    except Exception as e:
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
-
 
 @app.command()
 def peak_predictor(
@@ -754,34 +714,15 @@ def peak_predictor(
         if space_group is None:
             space_group = np.array(f_indexed["sample/space_group"]).item().decode('utf-8')
         wavelength = np.array(f_indexed["instrument/wavelength"])
-        if wavel_min is not None:
-            wavelength[0] = wavel_min
-        if wavel_max is not None:
-            wavelength[1] = wavel_max
+        if wavel_min is not None: wavelength[0] = wavel_min
+        if wavel_max is not None: wavelength[1] = wavel_max
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
-
-        # --- FIX: Match by FILENAME Logic ---
-        # 1. Load Filename Metadata
-        files_db = None
-        offsets = None
-        if "files" in f_indexed and "file_offsets" in f_indexed:
-            files_db = f_indexed["files"][()]
-            offsets = f_indexed["file_offsets"][()]
-        
-        # 2. Load ALL angles and Rs (for fallback)
-        indexed_angles = None
-        if "goniometer/angles" in f_indexed:
-            indexed_angles = np.array(f_indexed["goniometer/angles"])
-        
-        all_Rs = None
-        if "goniometer/R" in f_indexed:
-            all_Rs = np.array(f_indexed["goniometer/R"])
 
         refined_offsets = None
         if "optimization/goniometer_offsets" in f_indexed:
             refined_offsets = np.array(f_indexed["optimization/goniometer_offsets"])
-            
+
         sample_offset = None
         if "sample/offset" in f_indexed:
             sample_offset = np.array(f_indexed["sample/offset"])
@@ -791,86 +732,42 @@ def peak_predictor(
             ki_vec = np.array(f_indexed["beam/ki_vec"])
             print(f"Using refined beam direction {ki_vec} in peak prediction.")
 
-    peaks = Peaks(filename,
-                  instrument,
-                  wavelength_min=wavelength[0],
-                  wavelength_max=wavelength[1])
-    
-    # 3. Try Matching by Filename (Gold Standard)
-    R_used = peaks.goniometer_rotation # Default
-    match_found = False
-    
-    if files_db is not None and all_Rs is not None:
-        target_name = os.path.basename(filename)
-        # Extract run number for safety (e.g. 13006)
-        match = re.search(r"(\d+)", target_name)
-        run_number = match.group(1) if match else target_name
-        
-        print(f"Attempting to match run number '{run_number}' in index file...")
-        
-        # DEBUG: Print first few files to see what we are matching against
-        print("DEBUG: Stored files in index (first 5):")
-        for i in range(min(5, len(files_db))):
-             fname_str = files_db[i].decode('utf-8') if isinstance(files_db[i], bytes) else str(files_db[i])
-             print(f"  [{i}]: {fname_str}")
+        # Load Stored R (Prioritized!)
+        stored_R = None
+        if "goniometer/R" in f_indexed:
+            stored_R = np.array(f_indexed["goniometer/R"])
+            if stored_R.ndim == 3:
+                stored_R = stored_R[0]
 
-        for i, fname_bytes in enumerate(files_db):
-            fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
-            # Match if run_number appears anywhere in stored filename
-            if run_number in fname_str:
-                start = int(offsets[i])
-                end = int(offsets[i+1]) if i < len(files_db) - 1 else len(all_Rs)
-                
-                if start < end:
-                    # Pick the middle peak in this file's range to represent the rotation
-                    mid_idx = start + (end - start) // 2
-                    R_used = all_Rs[mid_idx]
-                    match_found = True
-                    print(f"  > Match found! File index {i}, Peak range {start}-{end}. Using R from peak {mid_idx}.")
-                break
-    else:
-        print("Warning: 'files' or 'file_offsets' not found in index file. Filename matching disabled.")
-    
-    # 4. Fallback to Angle Matching (if Filename match failed)
-    if not match_found and indexed_angles is not None and all_Rs is not None:
-        print("Filename match failed. Falling back to Angle Matching...")
-        if peaks.goniometer_angles_raw is None:
-             _, target_angles, _ = get_rotation_data_from_nexus(filename, instrument)
-             target_angles = np.array(target_angles)
+    # 1. Initialize Peaks
+    peaks = Peaks(filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1])
+
+    # 2. Prioritize: Stored R > Refined Offsets > Nominal
+    if stored_R is not None:
+        peaks.goniometer_rotation = stored_R
+        print("Using stored goniometer R matrix from indexed file.")
+    elif refined_offsets is not None:
+        if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
+            new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
+            new_R = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
+            peaks.goniometer_rotation = new_R
+            print("Applied refined goniometer offsets to peak prediction.")
         else:
-             target_angles = np.array(peaks.goniometer_angles_raw)
-             
-        if indexed_angles.shape[0] == 3 and indexed_angles.ndim == 2 and indexed_angles.shape[1] > 3:
-             indexed_angles = indexed_angles.T # Ensure (N, 3)
-        
-        diff = np.linalg.norm(indexed_angles - target_angles, axis=1)
-        min_err_idx = np.argmin(diff)
-        min_err = diff[min_err_idx]
-        
-        if min_err < 0.2: 
-            R_used = all_Rs[min_err_idx]
-            print(f"Matched angles to index entry {min_err_idx} (Error: {min_err:.4f}).")
-        else:
-            print(f"Warning: No good angle match (Min Error: {min_err:.4f}).")
-            if refined_offsets is not None and peaks.goniometer_axes_raw is not None:
-                new_angles = target_angles + refined_offsets
-                R_used = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
-                print(f"  > Falling back to refined offsets.")
+            print("Warning: Refined offsets found but raw goniometer data not available. Using default R.")
 
-    # Update peaks object for consistency
-    peaks.goniometer_rotation = R_used
-    
-    UB = R_used @ U @ B
+    # 3. Construct RUB using the resolved R
+    R_used = peaks.goniometer_rotation
+    RUB = R_used @ U @ B
 
+    # Pass RUB directly to predict_peaks
     peak_dict = peaks.predict_peaks(
-        a, b, c, alpha, beta, gamma, d_min, UB, space_group=space_group, sample_offset=sample_offset, ki_vec=ki_vec,
+        a, b, c, alpha, beta, gamma, d_min, RUB, space_group=space_group, sample_offset=sample_offset, ki_vec=ki_vec,
     )
 
     if create_visualizations:
         import matplotlib.pyplot as plt
         for bank, predicted_peaks in peak_dict.items():
             plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log", origin='lower')
-            # Consistent scatter: (x=col, y=row)
             plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
             plt.title(str(bank))
             plt.savefig(filename + str(bank) + "_pred.png")
@@ -887,13 +784,9 @@ def peak_predictor(
         f["sample/U"] = U
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = R_used 
-
-        if sample_offset is not None:
-            f["sample/offset"] = sample_offset
-
-        if ki_vec is not None:
-            f["beam/ki_vec"] = ki_vec
+        f["goniometer/R"] = R_used
+        if sample_offset is not None: f["sample/offset"] = sample_offset
+        if ki_vec is not None: f["beam/ki_vec"] = ki_vec
 
         for bank, (i, j, h, k, l, wl) in peak_dict.items():
             f[f"banks/{bank}/i"] = i
