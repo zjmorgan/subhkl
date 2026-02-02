@@ -4,6 +4,7 @@ import numpy as np
 import typer
 import uuid
 import os
+import re
 
 from subhkl.export import FinderConcatenateMerger, MTZExporter
 from subhkl.integration import Peaks
@@ -148,7 +149,9 @@ def index(
         "peaks/xyz", # Copy XYZ
         "goniometer/axes", 
         "goniometer/angles",
-        "goniometer/names"
+        "goniometer/names",
+        "files",
+        "file_offsets",
     ]
 
     copied_data = {}
@@ -480,6 +483,13 @@ def indexer(
         if "goniometer/names" in f:
             gonio_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
 
+        files_db = None
+        file_offsets = None
+        if "files" in f:
+            files_db = f["files"][()]
+        if "file_offsets" in f:
+            file_offsets = f["file_offsets"][()]
+
     if goniometer_csv_filename is not None:
         print(f"Loading goniometer from: {goniometer_csv_filename}")
         R = np.loadtxt(goniometer_csv_filename, delimiter=",")
@@ -517,6 +527,12 @@ def indexer(
         if gonio_names is not None:
             dt = h5py.string_dtype(encoding='utf-8')
             f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
+        if files_db is not None:
+            f["files"] = files_db
+        if file_offsets is not None:
+            f["file_offsets"] = file_offsets
+
+    gonio_axes_list = None
 
     gonio_axes_list = None
     if refine_goniometer_axes:
@@ -745,10 +761,27 @@ def peak_predictor(
         U = np.array(f_indexed["sample/U"])
         B = np.array(f_indexed["sample/B"])
 
+        # --- FIX: Match by FILENAME Logic ---
+        # 1. Load Filename Metadata
+        files_db = None
+        offsets = None
+        if "files" in f_indexed and "file_offsets" in f_indexed:
+            files_db = f_indexed["files"][()]
+            offsets = f_indexed["file_offsets"][()]
+        
+        # 2. Load ALL angles and Rs (for fallback)
+        indexed_angles = None
+        if "goniometer/angles" in f_indexed:
+            indexed_angles = np.array(f_indexed["goniometer/angles"])
+        
+        all_Rs = None
+        if "goniometer/R" in f_indexed:
+            all_Rs = np.array(f_indexed["goniometer/R"])
+
         refined_offsets = None
         if "optimization/goniometer_offsets" in f_indexed:
             refined_offsets = np.array(f_indexed["optimization/goniometer_offsets"])
-
+            
         sample_offset = None
         if "sample/offset" in f_indexed:
             sample_offset = np.array(f_indexed["sample/offset"])
@@ -758,25 +791,75 @@ def peak_predictor(
             ki_vec = np.array(f_indexed["beam/ki_vec"])
             print(f"Using refined beam direction {ki_vec} in peak prediction.")
 
-    # 1. Initialize Peaks with Nominal Data from NeXus
     peaks = Peaks(filename,
                   instrument,
                   wavelength_min=wavelength[0],
                   wavelength_max=wavelength[1])
+    
+    # 3. Try Matching by Filename (Gold Standard)
+    R_used = peaks.goniometer_rotation # Default
+    match_found = False
+    
+    if files_db is not None and all_Rs is not None:
+        target_name = os.path.basename(filename)
+        # Extract run number for safety (e.g. 13006)
+        match = re.search(r"(\d+)", target_name)
+        run_number = match.group(1) if match else target_name
+        
+        print(f"Attempting to match run number '{run_number}' in index file...")
+        
+        # DEBUG: Print first few files to see what we are matching against
+        print("DEBUG: Stored files in index (first 5):")
+        for i in range(min(5, len(files_db))):
+             fname_str = files_db[i].decode('utf-8') if isinstance(files_db[i], bytes) else str(files_db[i])
+             print(f"  [{i}]: {fname_str}")
 
-    # 2. Prioritize: Refined Offsets + Nominal Angles -> R
-    # If offsets exist, we use them. If not, we fall back to nominal R.
-    if refined_offsets is not None:
-        if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
-            new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
-            new_R = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
-            peaks.goniometer_rotation = new_R
-            print("Applied refined goniometer offsets to peak prediction.")
+        for i, fname_bytes in enumerate(files_db):
+            fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
+            # Match if run_number appears anywhere in stored filename
+            if run_number in fname_str:
+                start = int(offsets[i])
+                end = int(offsets[i+1]) if i < len(files_db) - 1 else len(all_Rs)
+                
+                if start < end:
+                    # Pick the middle peak in this file's range to represent the rotation
+                    mid_idx = start + (end - start) // 2
+                    R_used = all_Rs[mid_idx]
+                    match_found = True
+                    print(f"  > Match found! File index {i}, Peak range {start}-{end}. Using R from peak {mid_idx}.")
+                break
+    else:
+        print("Warning: 'files' or 'file_offsets' not found in index file. Filename matching disabled.")
+    
+    # 4. Fallback to Angle Matching (if Filename match failed)
+    if not match_found and indexed_angles is not None and all_Rs is not None:
+        print("Filename match failed. Falling back to Angle Matching...")
+        if peaks.goniometer_angles_raw is None:
+             _, target_angles, _ = get_rotation_data_from_nexus(filename, instrument)
+             target_angles = np.array(target_angles)
         else:
-            print("Warning: Refined offsets found but raw goniometer data not available. Using default R.")
+             target_angles = np.array(peaks.goniometer_angles_raw)
+             
+        if indexed_angles.shape[0] == 3 and indexed_angles.ndim == 2 and indexed_angles.shape[1] > 3:
+             indexed_angles = indexed_angles.T # Ensure (N, 3)
+        
+        diff = np.linalg.norm(indexed_angles - target_angles, axis=1)
+        min_err_idx = np.argmin(diff)
+        min_err = diff[min_err_idx]
+        
+        if min_err < 0.2: 
+            R_used = all_Rs[min_err_idx]
+            print(f"Matched angles to index entry {min_err_idx} (Error: {min_err:.4f}).")
+        else:
+            print(f"Warning: No good angle match (Min Error: {min_err:.4f}).")
+            if refined_offsets is not None and peaks.goniometer_axes_raw is not None:
+                new_angles = target_angles + refined_offsets
+                R_used = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
+                print(f"  > Falling back to refined offsets.")
 
-    # 3. Construct Lab-Frame UB using the resolved R
-    R_used = peaks.goniometer_rotation
+    # Update peaks object for consistency
+    peaks.goniometer_rotation = R_used
+    
     UB = R_used @ U @ B
 
     peak_dict = peaks.predict_peaks(
@@ -786,7 +869,6 @@ def peak_predictor(
     if create_visualizations:
         import matplotlib.pyplot as plt
         for bank, predicted_peaks in peak_dict.items():
-            # Matches integration.py plotting logic (origin='lower')
             plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log", origin='lower')
             # Consistent scatter: (x=col, y=row)
             plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
@@ -805,7 +887,7 @@ def peak_predictor(
         f["sample/U"] = U
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = R_used
+        f["goniometer/R"] = R_used 
 
         if sample_offset is not None:
             f["sample/offset"] = sample_offset

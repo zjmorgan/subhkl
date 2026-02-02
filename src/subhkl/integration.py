@@ -997,6 +997,7 @@ class Peaks:
         # Return axes (global) and angles (per peak)
         return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, xyz_out, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
+
     def integrate(
         self,
         peak_dict,
@@ -1016,50 +1017,37 @@ class Peaks:
         banks = []
         xyz = []
 
-        # --- NEW: Pre-load FILTERED found peaks (Lab Coordinates) ---
+        # --- Pre-load FILTERED found peaks ---
         found_peaks_xyz = None
-        if found_peaks_file is not None and create_visualizations:
+        if found_peaks_file is not None:
             try:
                 import h5py
                 print(f"Loading found peaks from: {found_peaks_file}")
                 with h5py.File(found_peaks_file, "r") as f:
-                    # Check if multi-file structure exists
                     if "files" in f and "file_offsets" in f and "peaks/xyz" in f:
                         files_db = f["files"][()]
                         offsets = f["file_offsets"][()]
-                        
-                        # Match current filename against DB
                         target_name = os.path.basename(self.filename)
                         match_idx = -1
-                        
                         print(f"Scanning {len(files_db)} files in merged index for '{target_name}'...")
                         for i, fname_bytes in enumerate(files_db):
                             fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
-                            # Loose matching: check if target is in the stored path
                             if target_name in fname_str:
                                 match_idx = i
                                 print(f"  > Match found at index {i}: {fname_str}")
                                 break
-                        
                         if match_idx >= 0:
                             start = int(offsets[match_idx])
-                            # Handle last element or next offset
                             end = int(offsets[match_idx+1]) if match_idx < len(files_db) - 1 else f["peaks/xyz"].shape[0]
-                            
                             found_peaks_xyz = f["peaks/xyz"][start:end]
-                            print(f"Overlaying {len(found_peaks_xyz)} found peaks matching '{target_name}'")
+                            print(f"Loaded {len(found_peaks_xyz)} peaks for comparison.")
                         else:
-                            print(f"Warning: Current file '{target_name}' not found in {found_peaks_file}. No overlay.")
-                    
-                    # Fallback: Single-file structure or missing index
+                            print(f"Warning: Current file '{target_name}' not found in {found_peaks_file}.")
                     elif "peaks/xyz" in f:
-                        print("Warning: 'files' index not found. Loading ALL peaks (may cause overlap).")
+                        print("Warning: 'files' index not found. Loading ALL peaks.")
                         found_peaks_xyz = f["peaks/xyz"][()]
-                    else:
-                        print(f"Warning: {found_peaks_file} missing 'peaks/xyz'. Cannot overlay.")
             except Exception as e:
-                print(f"Failed to load found peaks for overlay: {e}")
-        # ---------------------------------------------
+                print(f"Failed to load found peaks: {e}")
 
         for bank, peaks in peak_dict.items():
             bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
@@ -1067,11 +1055,74 @@ class Peaks:
             
             det = self.get_detector(bank)
             bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
+            
+            # FIX 1: Remove clip=False from pixel_to_lab
             lab_coords_T = det.pixel_to_lab(bank_i, bank_j)
             lab_coords_T = np.atleast_2d(lab_coords_T)
             if lab_coords_T.shape[0] != 3:
                 lab_coords_T = lab_coords_T.T
-            lab_coords = lab_coords_T.T
+            lab_coords = lab_coords_T.T # (N, 3)
+
+            # --- NEW: METRIC CALCULATION BLOCK ---
+            metrics_str = ""
+            if found_peaks_xyz is not None and len(centers) > 0:
+                # 1. Project Found Peaks to this detector (Unclipped)
+                f_row, f_col = det.lab_to_pixel(found_peaks_xyz[:,0], found_peaks_xyz[:,1], found_peaks_xyz[:,2], clip=False)
+                
+                # 2. Filter: Keep only found peaks on this sensor
+                on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                
+                if np.sum(on_sensor) > 0:
+                    f_xyz_valid = found_peaks_xyz[on_sensor]
+                    f_row_valid = f_row[on_sensor]
+                    f_col_valid = f_col[on_sensor]
+                    
+                    # 3. Calculate Angular Errors & D-Errors
+                    p_xyz = lab_coords # FIX 2: Do not transpose. KDTree expects (N, 3).
+                    
+                    tree = scipy.spatial.KDTree(f_xyz_valid)
+                    dists, idxs = tree.query(p_xyz) 
+                    matched_f = f_xyz_valid[idxs]
+                    
+                    # Angle Error
+                    p_norm = p_xyz / np.linalg.norm(p_xyz, axis=1, keepdims=True)
+                    f_norm = matched_f / np.linalg.norm(matched_f, axis=1, keepdims=True)
+                    dots = np.sum(p_norm * f_norm, axis=1)
+                    dots = np.clip(dots, -1.0, 1.0)
+                    angles_deg = np.rad2deg(np.arccos(dots))
+                    
+                    # D-Spacing Error
+                    # Calculate theta for both
+                    # theta = 0.5 * angle(k_f, k_i). Assuming k_i approx (0,0,1) for quick check
+                    # Or better: use 2theta from position.
+                    # We have bank_wl (Predicted Wavelength).
+                    # d_pred = lambda / 2sin(theta_p). d_obs = lambda / 2sin(theta_f).
+                    
+                    # Calculate 2theta for Predicted and Found using Detector Logic
+                    # (Uses same beam origin assumption)
+                    theta_p, _ = det.pixel_to_angles(bank_i, bank_j) # degrees
+                    theta_f, _ = det.pixel_to_angles(f_row_valid[idxs], f_col_valid[idxs]) # degrees
+                    
+                    # Avoid 0
+                    sin_theta_p = np.sin(np.deg2rad(theta_p) / 2.0)
+                    sin_theta_f = np.sin(np.deg2rad(theta_f) / 2.0)
+                    
+                    # d = lambda / 2sin(theta)
+                    d_pred = bank_wl / (2 * sin_theta_p + 1e-9)
+                    d_obs = bank_wl / (2 * sin_theta_f + 1e-9)
+                    
+                    d_err = np.abs(d_pred - d_obs)
+                    
+                    med_ang = np.median(angles_deg)
+                    med_d = np.median(d_err)
+                    
+                    metrics_str = f" | Med $\\Delta\\theta$={med_ang:.2f}$^\\circ$, $\\Delta d$={med_d:.3f}$\\AA$"
+                    
+                    print(f"--- Visual Metrics for Bank {bank} ---")
+                    print(f"  Angular Error: Median={med_ang:.4f}°, Mean={np.mean(angles_deg):.4f}°")
+                    print(f"  D-Space Error: Median={med_d:.4f} A")
+                    print("-------------------------------------")
+            # -------------------------------------
 
             if integration_params.get("integration_mask_file") is not None:
                 mask = np.array(Image.open(integration_params["integration_mask_file"]))
@@ -1122,30 +1173,24 @@ class Peaks:
                 plt.rc("font", size=8)
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-                # Restore origin='lower' to fix axis direction
                 axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
-                axes[0].set_title(f"Bank {bank}: Predicted (Blue) vs Found (Green)")
+                axes[0].set_title(f"Bank {bank}: Predicted vs Found")
 
-                # PREDICTED: x=col=j, y=i=row
-                # Standard matplotlib scatter: (x, y) = (col, row)
-                axes[0].scatter(bank_j, bank_i, marker="1", c="blue", label="Predicted", s=40)
+                # Add metrics to label
+                label_pred = f"Predicted{metrics_str}"
+                axes[0].scatter(bank_j, bank_i, marker="1", c="blue", label=label_pred, s=40)
                 
                 # --- OVERLAY LOGIC ---
                 if found_peaks_xyz is not None:
-                    # Project FILTERED peaks onto THIS detector
+                    # Reuse calculated f_row, f_col, f_row_valid, f_col_valid from metric block if available
+                    # For safety, recalculate logic for plotting scope
                     f_row, f_col = det.lab_to_pixel(found_peaks_xyz[:,0], found_peaks_xyz[:,1], found_peaks_xyz[:,2], clip=False)
-                    
-                    # --- NEW: VISUALIZATION-TIME FILTER ---
-                    # Filter: Only plot points that LAND ON THE SENSOR
-                    # This hides the "ghost peaks" from other detectors or back-projection artifacts
                     in_bounds = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
                     
                     if np.any(in_bounds):
                         f_row_valid = f_row[in_bounds]
                         f_col_valid = f_col[in_bounds]
-                        # Plot Found: Green Circles
                         axes[0].scatter(f_col_valid, f_row_valid, s=60, facecolors='none', edgecolors='lime', linewidths=1.5, label='Found')
-                # -------------------------------------
                 
                 axes[0].legend(loc='upper right', fontsize='x-small')
 
@@ -1158,13 +1203,12 @@ class Peaks:
                         axes[0].text(p_j, p_i, f"({p_h},{p_k},{p_l})",
                                      color=color, fontsize=6, fontweight=weight, clip_on=True)
 
-                # Restore origin='lower'
                 plt_im = axes[1].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
 
                 forbidden = ~mask
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]
-                axes[1].imshow(overlay, origin='lower') # Restore origin='lower'
+                axes[1].imshow(overlay, origin='lower')
 
                 axes[1].set_title("Integrated peaks")
                 fig.subplots_adjust(right=0.8)
