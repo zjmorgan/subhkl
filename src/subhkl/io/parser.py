@@ -819,7 +819,14 @@ def integrator(
     found_peaks_file: str = None,
 ):
     peak_dict = {}
+    
+    # Initialize vars for physics
+    RUB = np.eye(3)
+    sample_offset = None
+    ki_vec = None
+
     with h5py.File(integration_peaks_filename) as f:
+        # Load peaks
         for bank in f["banks"].keys():
             peak_dict[int(bank)] = [
                 np.array(f[f"banks/{bank}/i"]),
@@ -829,6 +836,22 @@ def integrator(
                 np.array(f[f"banks/{bank}/l"]),
                 np.array(f[f"banks/{bank}/wavelength"])
             ]
+        
+        # Load Physics for Integration/Viz
+        if "sample/U" in f and "sample/B" in f and "goniometer/R" in f:
+            U = np.array(f["sample/U"])
+            B = np.array(f["sample/B"])
+            R = np.array(f["goniometer/R"])
+            if R.ndim == 3: 
+                R = R[0] # Assuming single gonio setting for image integration
+            
+            RUB = R @ U @ B
+            
+        if "sample/offset" in f:
+            sample_offset = np.array(f["sample/offset"])
+        
+        if "beam/ki_vec" in f:
+            ki_vec = np.array(f["beam/ki_vec"])
 
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
@@ -845,9 +868,13 @@ def integrator(
     }
 
     peaks = Peaks(filename, instrument)
+    
     result = peaks.integrate(
         peak_dict,
         integration_params,
+        RUB=RUB, # Pass Physics
+        sample_offset=sample_offset,
+        ki_vec=ki_vec,
         create_visualizations=create_visualizations,
         show_progress=show_progress,
         integration_method=integration_method,
@@ -856,19 +883,9 @@ def integrator(
     )
 
     copy_keys = [
-        "sample/a",
-        "sample/b",
-        "sample/c",
-        "sample/alpha",
-        "sample/beta",
-        "sample/gamma",
-        "sample/space_group",
-        "sample/U",
-        "sample/B",
-        "sample/offset",
-        "beam/ki_vec",
-        "instrument/wavelength",
-        "goniometer/R",
+        "sample/a", "sample/b", "sample/c", "sample/alpha", "sample/beta", "sample/gamma",
+        "sample/space_group", "sample/U", "sample/B", "sample/offset",
+        "beam/ki_vec", "instrument/wavelength", "goniometer/R",
     ]
 
     with h5py.File(output_filename, "w") as f:
@@ -886,7 +903,6 @@ def integrator(
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
-
 
 @app.command()
 def mtz_exporter(
