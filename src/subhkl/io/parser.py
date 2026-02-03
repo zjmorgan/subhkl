@@ -16,16 +16,15 @@ from subhkl.utils import calculate_angular_error
 
 app = typer.Typer()
 
-
 def index(
-    hdf5_peaks_filename: str,
-    output_peaks_filename: str,
-    strategy_name: str,
-    population_size: int,
-    gens: int,
-    n_runs: int,
-    seed: int,
-    softness: float,
+    hdf5_peaks_filename: str = None, # Made optional
+    output_peaks_filename: str = None,
+    strategy_name: str = "DE",
+    population_size: int = 1000,
+    gens: int = 100,
+    n_runs: int = 1,
+    seed: int = 0,
+    softness: float = 0.01,
     sigma_init: float = None,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
@@ -33,7 +32,7 @@ def index(
     refine_goniometer: bool = False,
     refine_goniometer_axes: list = None,
     goniometer_bound_deg: float = 5.0,
-    refine_sample: bool = False, # NEW
+    refine_sample: bool = False,
     sample_bound_meters: float = 0.002,
     refine_beam: bool = False,
     beam_bound_deg: float = 1.0,
@@ -50,13 +49,17 @@ def index(
     num_iters: int = 20,
     top_k: int = 32,
     B_sharpen: float = None,
+    input_data: dict = None, 
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
     """
 
-    # Index the peaks
-    opt = FindUB(hdf5_peaks_filename)
+    # 1. Initialize Optimizer with Data (No temp file)
+    if input_data is not None:
+        opt = FindUB(data=input_data)
+    else:
+        opt = FindUB(filename=hdf5_peaks_filename)
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
@@ -149,7 +152,7 @@ def index(
         "peaks/two_theta",
         "peaks/azimuthal",
         "peaks/radius",
-        "peaks/xyz", # Copy XYZ
+        "peaks/xyz", 
         "goniometer/axes", 
         "goniometer/angles",
         "goniometer/names",
@@ -158,26 +161,33 @@ def index(
     ]
 
     copied_data = {}
-
-    with h5py.File(hdf5_peaks_filename) as f:
+    
+    if input_data is not None:
         for key in copy_keys:
-            if key in f:
-                copied_data[key] = np.array(f[key])
+            if key in input_data:
+                copied_data[key] = input_data[key]
+    else:
+        with h5py.File(hdf5_peaks_filename, 'r') as f:
+            for key in copy_keys:
+                if key in f:
+                    copied_data[key] = np.array(f[key])
 
     print(f"Saving indexed peaks to {output_peaks_filename}...")
     with h5py.File(output_peaks_filename, "w") as f:
         for key, value in copied_data.items():
             f[key] = value
 
-        f["goniometer/R"] = refined_R
+        f["goniometer/R"] = opt.R
         
         if opt.goniometer_offsets is not None:
             f["optimization/goniometer_offsets"] = opt.goniometer_offsets
             
         if opt.sample_offset is not None:
             f["sample/offset"] = opt.sample_offset
+            
+        if opt.ki_vec is not None:
+            f["beam/ki_vec"] = opt.ki_vec
 
-        f["beam/ki_vec"] = opt.ki_vec
         f["sample/a"] = opt.a
         f["sample/b"] = opt.b
         f["sample/c"] = opt.c
@@ -185,15 +195,18 @@ def index(
         f["sample/beta"] = opt.beta
         f["sample/gamma"] = opt.gamma
 
-        f["sample/B"] = B
+        B_mat = opt.reciprocal_lattice_B()
+        f["sample/B"] = B_mat
         f["sample/U"] = U
-        f["peaks/h"] = h
-        f["peaks/k"] = k
-        f["peaks/l"] = l_list
+        
+        # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
+        # opt.minimize_evosax returns hkl (3, N).
+        f["peaks/h"] = hkl[0]
+        f["peaks/k"] = hkl[1]
+        f["peaks/l"] = hkl[2]
         f["peaks/lambda"] = lamda
         f["optimization/best_params"] = opt.x
     print("Done.")
-
 
 @app.command()
 def finder(
@@ -462,101 +475,41 @@ def indexer(
         sg_to_use = space_group
 
     print(f"Loading peaks from: {peaks_h5_filename}")
-    with h5py.File(peaks_h5_filename) as f:
-        two_theta = np.array(f["peaks/two_theta"])
-        az_phi = np.array(f["peaks/azimuthal"])
-        intensity = np.array(f["peaks/intensity"])
-        sigma = np.array(f["peaks/sigma"])
-        rotations = np.array(f["goniometer/R"])
-        
-        if "peaks/radius" in f:
-            radii = np.array(f["peaks/radius"])
-        else:
-            radii = None
-            
-        if "peaks/xyz" in f:
-            peak_xyz = np.array(f["peaks/xyz"])
-        else:
-            peak_xyz = None
-        
-        gonio_axes = None
-        gonio_angles = None
-        gonio_names = None
-        if "goniometer/axes" in f:
-            gonio_axes = np.array(f["goniometer/axes"])
-        if "goniometer/angles" in f:
-            gonio_angles = np.array(f["goniometer/angles"])
-        if "goniometer/names" in f:
-            gonio_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
-
-        files_db = None
-        file_offsets = None
-        if "files" in f:
-            files_db = f["files"][()]
-        if "file_offsets" in f:
-            file_offsets = f["file_offsets"][()]
-
-    if goniometer_csv_filename is not None:
-        print(f"Loading goniometer from: {goniometer_csv_filename}")
-        R = np.loadtxt(goniometer_csv_filename, delimiter=",")
-        rotations = np.stack([R] * len(two_theta))
-    else:
-        print("Using goniometer rotation from peaks file.")
-        R = rotations
-
-    # Logic to auto-detect wavelength if not provided
-    if wavelength_min is None or wavelength_max is None:
-        with h5py.File(peaks_h5_filename, 'r') as f_in:
-            if "instrument/wavelength" in f_in:
-                wl = f_in["instrument/wavelength"][()]
+    input_data = {}
+    with h5py.File(peaks_h5_filename, "r") as f:
+        # Load auto-detected wavelength if not provided
+        if wavelength_min is None or wavelength_max is None:
+            if "instrument/wavelength" in f:
+                wl = f["instrument/wavelength"][()]
                 if wavelength_min is None: wavelength_min = float(wl[0])
                 if wavelength_max is None: wavelength_max = float(wl[1])
                 print(f"Auto-detected wavelength: {wavelength_min:.2f} - {wavelength_max:.2f} A")
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
 
-    unique_filename = str(uuid.uuid4()) + ".h5"
-    print(f"Creating temporary indexer input file: {unique_filename}")
-    with h5py.File(unique_filename, "w") as f:
-        f["sample/a"] = a
-        f["sample/b"] = b
-        f["sample/c"] = c
-        f["sample/alpha"] = alpha
-        f["sample/beta"] = beta
-        f["sample/gamma"] = gamma
-        f["sample/space_group"] = sg_to_use
-        f["instrument/wavelength"] = [wavelength_min, wavelength_max]
-        f["goniometer/R"] = rotations
-        f["peaks/two_theta"] = two_theta
-        f["peaks/azimuthal"] = az_phi
-        f["peaks/intensity"] = intensity
-        f["peaks/sigma"] = sigma
+        # Read standard datasets
+        keys_to_load = [
+            "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma", 
+            "peaks/radius", "peaks/xyz",
+            "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names",
+            "files", "file_offsets",
+        ]
         
-        if radii is not None:
-            f["peaks/radius"] = radii
-        if peak_xyz is not None:
-            f["peaks/xyz"] = peak_xyz
-        
-        if gonio_axes is not None:
-            f["goniometer/axes"] = gonio_axes
-        if gonio_angles is not None:
-            f["goniometer/angles"] = gonio_angles
-        if gonio_names is not None:
-            dt = h5py.string_dtype(encoding='utf-8')
-            f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
-        if files_db is not None:
-            f["files"] = files_db
-        if file_offsets is not None:
-            f["file_offsets"] = file_offsets
+        for k in keys_to_load:
+            if k in f:
+                input_data[k] = f[k][()]
 
-    gonio_axes_list = None
-
-    gonio_axes_list = None
-    if refine_goniometer_axes:
-        gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(',')]
+    input_data["sample/a"] = a
+    input_data["sample/b"] = b
+    input_data["sample/c"] = c
+    input_data["sample/alpha"] = alpha
+    input_data["sample/beta"] = beta
+    input_data["sample/gamma"] = gamma
+    input_data["sample/space_group"] = sg_to_use
+    input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
     index(
-        hdf5_peaks_filename=unique_filename,
+        input_data=input_data,
         output_peaks_filename=output_peaks_filename,
         strategy_name=strategy_name,
         population_size=population_size,
@@ -569,7 +522,6 @@ def indexer(
         lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
         refine_goniometer=refine_goniometer,
-        refine_goniometer_axes=gonio_axes_list,
         goniometer_bound_deg=goniometer_bound_deg,
         refine_sample=refine_sample,
         sample_bound_meters=sample_bound_meters,

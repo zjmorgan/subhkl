@@ -812,7 +812,7 @@ class VectorizedObjectiveJAX:
 # ==============================================================================
 
 class FindUB:
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, data=None):
         self.goniometer_axes = None
         self.goniometer_angles = None
         self.goniometer_offsets = None 
@@ -823,7 +823,10 @@ class FindUB:
         self.base_sample_offset = np.zeros(3)
         self.base_gonio_offset = None 
 
-        if filename is not None: self.load_peaks(filename)
+        if filename is not None:
+            self.load_peaks(filename)
+        elif data is not None:
+            self.load_from_dict(data)
 
         t = np.linspace(0, np.pi, 1024)
         cdf = (t - np.sin(t)) / np.pi
@@ -831,28 +834,67 @@ class FindUB:
         self._angle_t = t
         self._angle = scipy.interpolate.interp1d(cdf, t, kind="linear")
 
+    def load_from_dict(self, data):
+        """Load data from a dictionary instead of a file."""
+        self.a = data["sample/a"]
+        self.b = data["sample/b"]
+        self.c = data["sample/c"]
+        self.alpha = data["sample/alpha"]
+        self.beta = data["sample/beta"]
+        self.gamma = data["sample/gamma"]
+        self.wavelength = data["instrument/wavelength"]
+        self.R = data["goniometer/R"]
+        self.two_theta = data["peaks/two_theta"]
+        self.az_phi = data["peaks/azimuthal"]
+        self.intensity = data["peaks/intensity"]
+        self.sigma_intensity = data["peaks/sigma"]
+        self.radii = data["peaks/radius"]
+        
+        # Handle bytes vs string for Space Group
+        sg = data["sample/space_group"]
+        if isinstance(sg, bytes):
+            self.space_group = sg.decode("utf-8")
+        else:
+            self.space_group = str(sg)
+
+        if "peaks/xyz" in data: self.peak_xyz = data["peaks/xyz"]
+        if "goniometer/axes" in data: self.goniometer_axes = data["goniometer/axes"]
+        if "goniometer/angles" in data: self.goniometer_angles = data["goniometer/angles"]
+        
+        if "goniometer/names" in data:
+            names = data["goniometer/names"]
+            # Handle list of bytes vs list of strings
+            self.goniometer_names = [n.decode('utf-8') if isinstance(n, bytes) else str(n) for n in names]
+            
+        if "beam/ki_vec" in data: self.ki_vec = data["beam/ki_vec"]
+        else: self.ki_vec = np.array([0., 0., 1.])
+
     def load_peaks(self, filename):
         with h5py.File(os.path.abspath(filename), "r") as f:
-            self.a = f["sample/a"][()]
-            self.b = f["sample/b"][()]
-            self.c = f["sample/c"][()]
-            self.alpha = f["sample/alpha"][()]
-            self.beta = f["sample/beta"][()]
-            self.gamma = f["sample/gamma"][()]
-            self.wavelength = f["instrument/wavelength"][()]
-            self.R = f["goniometer/R"][()]
-            self.two_theta = f["peaks/two_theta"][()]
-            self.az_phi = f["peaks/azimuthal"][()]
-            self.intensity = f["peaks/intensity"][()]
-            self.sigma_intensity = f["peaks/sigma"][()]
-            self.radii = f["peaks/radius"][()]
-            self.space_group = f["sample/space_group"][()].decode("utf-8")
-            if "peaks/xyz" in f: self.peak_xyz = f["peaks/xyz"][()]
-            if "goniometer/axes" in f: self.goniometer_axes = f["goniometer/axes"][()]
-            if "goniometer/angles" in f: self.goniometer_angles = f["goniometer/angles"][()]
-            if "goniometer/names" in f: self.goniometer_names = [n.decode('utf-8') for n in f["goniometer/names"][()]]
-            if "beam/ki_vec" in f: self.ki_vec = f["beam/ki_vec"][()]
-            else: self.ki_vec = np.array([0., 0., 1.])
+            # Create a dict from the file content and reuse logic
+            data = {}
+            data["sample/a"] = f["sample/a"][()]
+            data["sample/b"] = f["sample/b"][()]
+            data["sample/c"] = f["sample/c"][()]
+            data["sample/alpha"] = f["sample/alpha"][()]
+            data["sample/beta"] = f["sample/beta"][()]
+            data["sample/gamma"] = f["sample/gamma"][()]
+            data["instrument/wavelength"] = f["instrument/wavelength"][()]
+            data["goniometer/R"] = f["goniometer/R"][()]
+            data["peaks/two_theta"] = f["peaks/two_theta"][()]
+            data["peaks/azimuthal"] = f["peaks/azimuthal"][()]
+            data["peaks/intensity"] = f["peaks/intensity"][()]
+            data["peaks/sigma"] = f["peaks/sigma"][()]
+            data["peaks/radius"] = f["peaks/radius"][()]
+            data["sample/space_group"] = f["sample/space_group"][()]
+            
+            if "peaks/xyz" in f: data["peaks/xyz"] = f["peaks/xyz"][()]
+            if "goniometer/axes" in f: data["goniometer/axes"] = f["goniometer/axes"][()]
+            if "goniometer/angles" in f: data["goniometer/angles"] = f["goniometer/angles"][()]
+            if "goniometer/names" in f: data["goniometer/names"] = f["goniometer/names"][()]
+            if "beam/ki_vec" in f: data["beam/ki_vec"] = f["beam/ki_vec"][()]
+            
+            self.load_from_dict(data)
 
     def reciprocal_lattice_B(self):
         alpha = np.deg2rad(self.alpha)
