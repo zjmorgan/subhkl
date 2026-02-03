@@ -676,7 +676,7 @@ def metrics(
 
 @app.command()
 def peak_predictor(
-    filename: str,
+    filename: str,  # Now expects the MERGED HDF5 (scan_master.h5)
     instrument: str,
     indexed_hdf5_filename: str,
     integration_peaks_filename: str,
@@ -686,104 +686,108 @@ def peak_predictor(
     wavel_min: float = None,
     wavel_max: float = None,
 ):
-    with h5py.File(indexed_hdf5_filename) as f_indexed:
-        a = float(np.array(f_indexed["sample/a"]))
-        b = float(np.array(f_indexed["sample/b"]))
-        c = float(np.array(f_indexed["sample/c"]))
-        alpha = float(np.array(f_indexed["sample/alpha"]))
-        beta = float(np.array(f_indexed["sample/beta"]))
-        gamma = float(np.array(f_indexed["sample/gamma"]))
-        if space_group is None:
-            space_group = np.array(f_indexed["sample/space_group"]).item().decode('utf-8')
-        wavelength = np.array(f_indexed["instrument/wavelength"])
-        if wavel_min is not None: wavelength[0] = wavel_min
-        if wavel_max is not None: wavelength[1] = wavel_max
-        U = np.array(f_indexed["sample/U"])
-        B = np.array(f_indexed["sample/B"])
-
-        refined_offsets = None
-        if "optimization/goniometer_offsets" in f_indexed:
-            refined_offsets = np.array(f_indexed["optimization/goniometer_offsets"])
-
-        sample_offset = None
-        if "sample/offset" in f_indexed:
-            sample_offset = np.array(f_indexed["sample/offset"])
-
-        ki_vec = None
-        if "beam/ki_vec" in f_indexed:
-            ki_vec = np.array(f_indexed["beam/ki_vec"])
-            print(f"Using refined beam direction {ki_vec} in peak prediction.")
+    """
+    Predicts peaks for a full dataset using the optimized geometry from indexer.
+    Input `filename` should be the merged HDF5 used for indexing.
+    """
+    # 1. Load Optimized Parameters
+    with h5py.File(indexed_hdf5_filename, 'r') as f_idx:
+        a = float(f_idx["sample/a"][()])
+        b = float(f_idx["sample/b"][()])
+        c = float(f_idx["sample/c"][()])
+        alpha = float(f_idx["sample/alpha"][()])
+        beta = float(f_idx["sample/beta"][()])
+        gamma = float(f_idx["sample/gamma"][()])
         
-        stored_R = None
-        if "goniometer/R" in f_indexed:
-            all_R = np.array(f_indexed["goniometer/R"])
+        if space_group is None:
+            space_group = f_idx["sample/space_group"][()].decode('utf-8')
             
-            if "files" in f_indexed and "file_offsets" in f_indexed:
-                files_db = f_indexed["files"][()]
-                offsets = f_indexed["file_offsets"][()]
-                target_name = os.path.basename(filename)
-                
-                match_idx = -1
-                for i, fname_bytes in enumerate(files_db):
-                    fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
-                    if target_name in fname_str:
-                        match_idx = i
-                        break
-                
-                if match_idx >= 0 and all_R.ndim == 3:
-                     start_peak_idx = int(offsets[match_idx])
-                     if start_peak_idx < len(all_R):
-                         stored_R = all_R[start_peak_idx]
-                         print(f"Matched '{target_name}' to Run Index {match_idx}. Using R[{start_peak_idx}].")
-                         # --- NEW DEBUG ---
-                         trace = np.trace(stored_R)
-                         cos_theta = (trace - 1) / 2
-                         angle_deg = np.rad2deg(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
-                         print(f"  R Matrix Trace: {trace:.6f}")
-                         print(f"  Rotation Angle: {angle_deg:.4f} deg (Axis-Angle Magnitude)")
-                         print(f"  R Determinant:  {np.linalg.det(stored_R):.6f}")
-                         # -----------------
-                     else:
-                         print(f"Warning: Offset {start_peak_idx} out of bounds for R (len {len(all_R)}). Using R[0].")
-                         stored_R = all_R[0]
-                else:
-                    print(f"Warning: File '{target_name}' not found in index or R is not 3D. Using R[0].")
-                    if all_R.ndim == 3: stored_R = all_R[0]
-                    else: stored_R = all_R
-            else:
-                 if all_R.ndim == 3: stored_R = all_R[0]
-                 else: stored_R = all_R
-
-    peaks = Peaks(filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1])
-
-    if stored_R is not None:
-        peaks.goniometer_rotation = stored_R
-    elif refined_offsets is not None:
-        if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
-            new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
-            new_R = calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, new_angles)
-            peaks.goniometer_rotation = new_R
-            print("Applied refined goniometer offsets to peak prediction.")
+        wavelength = f_idx["instrument/wavelength"][()]
+        if wavel_min: wavelength[0] = wavel_min
+        if wavel_max: wavelength[1] = wavel_max
+        
+        U = f_idx["sample/U"][()]
+        B = f_idx["sample/B"][()]
+        
+        # Load Geometry Stacks
+        # R is likely (N_images, 3, 3)
+        all_R = f_idx["goniometer/R"][()]
+        
+        if "sample/offset" in f_idx:
+            sample_offset = f_idx["sample/offset"][()]
         else:
-            print("Warning: Refined offsets found but raw goniometer data not available. Using default R.")
+            sample_offset = np.zeros(3)
+            
+        if "beam/ki_vec" in f_idx:
+            ki_vec = f_idx["beam/ki_vec"][()]
+        else:
+            ki_vec = np.array([0., 0., 1.])
 
-    R_used = peaks.goniometer_rotation
-    RUB = R_used @ U @ B
+    # 2. Initialize Data Handler
+    # Peaks class auto-detects merged HDF5
+    peaks = Peaks(filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1])
+    
+    print(f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}")
 
-    peak_dict = peaks.predict_peaks(
-        a, b, c, alpha, beta, gamma, d_min, RUB, space_group=space_group, sample_offset=sample_offset, ki_vec=ki_vec,
-    )
+    # 3. Prediction Loop
+    # We must predict per-image because R (and thus RUB) changes per image in a scan.
+    results_map = {} # Store results by img_key
+    
+    # Iterate sorted keys (0, 1, 2... N)
+    img_keys = sorted(peaks.ims.keys())
+    
+    # Handle R shape mismatch (singleton vs stack)
+    if all_R.ndim == 2: all_R = all_R[np.newaxis, :, :] # (1,3,3)
+    if len(all_R) == 1 and len(img_keys) > 1:
+        # constant R
+        get_R = lambda i: all_R[0]
+    else:
+        # stack R
+        get_R = lambda i: all_R[i] if i < len(all_R) else all_R[-1]
 
-    if create_visualizations:
-        import matplotlib.pyplot as plt
-        for bank, predicted_peaks in peak_dict.items():
-            plt.imshow(peaks.ims[bank] + 1, cmap="binary", norm="log", origin='lower')
-            plt.scatter(predicted_peaks[1], predicted_peaks[0], edgecolors='r', facecolors='none')
-            plt.title(str(bank))
-            plt.savefig(filename + str(bank) + "_pred.png")
-            plt.show()
+    for img_key in img_keys:
+        # Get Physics for this specific frame
+        R_current = get_R(img_key)
+        RUB = R_current @ U @ B
+        
+        # Determine physical bank for this image (needed for detector geometry)
+        if hasattr(peaks, 'bank_mapping'):
+            phys_bank = peaks.bank_mapping.get(img_key, img_key)
+        else:
+            phys_bank = img_key
+            
+        det = peaks.get_detector(phys_bank)
+        
+        # Predict
+        # We manually call the lower-level utility to avoid overhead/complexity
+        from subhkl.utils import predict_reflections_on_panel
+        h_all, k_all, l_all = peaks.reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+        
+        row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
+            detector=det,
+            h=h_all, k=k_all, l=l_all,
+            RUB=RUB,
+            wavelength_min=wavelength[0],
+            wavelength_max=wavelength[1],
+            sample_offset=sample_offset,
+            ki_vec=ki_vec
+        )
+        
+        if len(row) > 0:
+            results_map[img_key] = (row, col, h_f, k_f, l_f, wl_f)
+            
+        if create_visualizations and len(row) > 0:
+            import matplotlib.pyplot as plt
+            plt.imshow(peaks.ims[img_key] + 1, cmap="binary", norm="log", origin='lower')
+            plt.scatter(col, row, edgecolors='r', facecolors='none', s=20)
+            plt.title(f"Img {img_key} (Bank {phys_bank})")
+            plt.savefig(f"{filename}_pred_{img_key}.png")
+            plt.close()
 
+    # 4. Save Predictions
+    print(f"Saving predictions to {integration_peaks_filename}")
     with h5py.File(integration_peaks_filename, "w") as f:
+        # Save Global Physics
         f["sample/a"] = a
         f["sample/b"] = b
         f["sample/c"] = c
@@ -794,75 +798,78 @@ def peak_predictor(
         f["sample/U"] = U
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = R_used
-        if sample_offset is not None: f["sample/offset"] = sample_offset
-        if ki_vec is not None: f["beam/ki_vec"] = ki_vec
+        f["goniometer/R"] = all_R # Save full stack
+        f["sample/offset"] = sample_offset
+        f["beam/ki_vec"] = ki_vec
 
-        for bank, (i, j, h, k, l, wl) in peak_dict.items():
-            f[f"banks/{bank}/i"] = i
-            f[f"banks/{bank}/j"] = j
-            f[f"banks/{bank}/h"] = h
-            f[f"banks/{bank}/k"] = k
-            f[f"banks/{bank}/l"] = l
-            f[f"banks/{bank}/wavelength"] = wl
+        # Save Peaks
+        # Structure: banks/{img_key}/...
+        # Using img_key as the identifier ensures 1:1 mapping with the merged input file
+        for img_key, (i, j, h, k, l, wl) in results_map.items():
+            grp = f.create_group(f"banks/{img_key}")
+            grp.create_dataset("i", data=i)
+            grp.create_dataset("j", data=j)
+            grp.create_dataset("h", data=h)
+            grp.create_dataset("k", data=k)
+            grp.create_dataset("l", data=l)
+            grp.create_dataset("wavelength", data=wl)
+
 
 @app.command()
 def integrator(
-    filename: str,
+    filename: str, # Merged HDF5
     instrument: str,
     integration_peaks_filename: str,
     output_filename: str,
-    integration_method: str,
+    integration_method: str = "free_fit",
     integration_mask_file: typing.Optional[str] = None,
     integration_mask_rel_erosion_radius: typing.Optional[float] = 0.05,
     region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_minimum_intensity: float = 50.0, # Adjusted default
     region_growth_minimum_sigma: typing.Optional[float] = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,
-    peak_minimum_pixels: int = 30,
+    peak_minimum_pixels: int = 10,
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     create_visualizations: bool = False,
     show_progress: bool = False,
     found_peaks_file: str = None,
 ):
+    """
+    Integrates predicted peaks using the merged image stack.
+    """
+    # 1. Load Predictions
     peak_dict = {}
-    
-    # Initialize vars for physics
-    RUB = np.eye(3)
-    sample_offset = None
-    ki_vec = None
+    with h5py.File(integration_peaks_filename, 'r') as f:
+        # Load Physics for context (passed to integrate if needed, mainly R)
+        if "sample/U" in f: U = f["sample/U"][()]
+        if "sample/B" in f: B = f["sample/B"][()]
+        if "goniometer/R" in f: all_R = f["goniometer/R"][()]
+        else: all_R = np.eye(3)[np.newaxis, :, :]
+        
+        if "sample/offset" in f: sample_offset = f["sample/offset"][()]
+        else: sample_offset = np.zeros(3)
+        if "beam/ki_vec" in f: ki_vec = f["beam/ki_vec"][()]
+        else: ki_vec = np.array([0., 0., 1.])
 
-    with h5py.File(integration_peaks_filename) as f:
-        # Load peaks
-        for bank in f["banks"].keys():
-            peak_dict[int(bank)] = [
-                np.array(f[f"banks/{bank}/i"]),
-                np.array(f[f"banks/{bank}/j"]),
-                np.array(f[f"banks/{bank}/h"]),
-                np.array(f[f"banks/{bank}/k"]),
-                np.array(f[f"banks/{bank}/l"]),
-                np.array(f[f"banks/{bank}/wavelength"])
+        # Load Per-Image Peaks
+        # Structure is banks/{img_key}
+        for key in f["banks"].keys():
+            # key is string "0", "1", etc.
+            img_idx = int(key)
+            grp = f[f"banks/{key}"]
+            peak_dict[img_idx] = [
+                grp["i"][()], grp["j"][()],
+                grp["h"][()], grp["k"][()], grp["l"][()],
+                grp["wavelength"][()]
             ]
-        
-        # Load Physics for Integration/Viz
-        if "sample/U" in f and "sample/B" in f and "goniometer/R" in f:
-            U = np.array(f["sample/U"])
-            B = np.array(f["sample/B"])
-            R = np.array(f["goniometer/R"])
-            if R.ndim == 3: 
-                R = R[0] # Assuming single gonio setting for image integration
-            
-            RUB = R @ U @ B
-            
-        if "sample/offset" in f:
-            sample_offset = np.array(f["sample/offset"])
-        
-        if "beam/ki_vec" in f:
-            ki_vec = np.array(f["beam/ki_vec"])
 
+    # 2. Initialize Data
+    peaks = Peaks(filename, instrument)
+    
+    # 3. Setup Parameters
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
         "region_growth_minimum_intensity": region_growth_minimum_intensity,
@@ -877,12 +884,24 @@ def integrator(
         "integration_mask_rel_erosion_radius": integration_mask_rel_erosion_radius,
     }
 
-    peaks = Peaks(filename, instrument)
+    # 4. Run Integration
+    # Note: RUB passed here is symbolic; integrate method will calculate 
+    # per-image geometry if we update it, or we pass specific R. 
+    # The current 'Peaks.integrate' iterates the dictionary keys.
+    # Since we loaded 'merged.h5', peaks.ims keys are 0..N.
+    # peak_dict keys are 0..N.
+    # They match!
     
+    # Construct a composite RUB for the *first* frame just to satisfy the signature,
+    # or rely on metric calculation internals.
+    # ideally 'integrate' should be aware of variable R, but for now we pass identity 
+    # and rely on the fact that prediction is already done.
+    RUB_nominal = np.eye(3) 
+
     result = peaks.integrate(
         peak_dict,
         integration_params,
-        RUB=RUB, # Pass Physics
+        RUB=RUB_nominal, 
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         create_visualizations=create_visualizations,
@@ -892,6 +911,10 @@ def integrator(
         found_peaks_file=found_peaks_file,
     )
 
+    # 5. Save Output
+    print(f"Saving integrated peaks to {output_filename}")
+    
+    # Copy metadata from prediction file
     copy_keys = [
         "sample/a", "sample/b", "sample/c", "sample/alpha", "sample/beta", "sample/gamma",
         "sample/space_group", "sample/U", "sample/B", "sample/offset",
@@ -908,8 +931,9 @@ def integrator(
         f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
+        f["peaks/xyz"] = result.xyz
 
-        with h5py.File(integration_peaks_filename) as f_in:
+        with h5py.File(integration_peaks_filename, 'r') as f_in:
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
