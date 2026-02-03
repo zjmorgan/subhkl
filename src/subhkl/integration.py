@@ -2,6 +2,7 @@ import os
 import re
 import typing
 from collections import namedtuple
+import bisect
 
 import numpy as np
 import numpy.typing as npt
@@ -203,32 +204,41 @@ class Peaks:
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
 
+
     def load_merged_h5(self, filename: str) -> dict[int, npt.NDArray]:
         """
-        Load images from the merged 'images' dataset.
-        Populates self.bank_mapping to link index -> physical detector bank.
+        Load images and metadata mapping from the merged HDF5.
         """
         ims = {}
         with h5py.File(filename, "r") as f:
-            images = f["images"] # Lazy load initially
+            images = f["images"] 
             N = images.shape[0]
-
-            # Load bank IDs to map index -> physical bank
+            
             if "bank_ids" in f:
                 bank_ids = f["bank_ids"][()]
             else:
-                # Default to bank 0 or try to parse from somewhere?
-                # Fallback: assume single bank instrument or map 1:1 if N is small
                 bank_ids = np.zeros(N, dtype=int)
 
-            # Load all into memory (assuming it fits, otherwise SparseRBF handles batching)
-            # Peaks class structure implies loading everything into dict.
-            data = images[()]
+            # --- Load File Mapping Metadata ---
+            if "files" in f and "file_offsets" in f:
+                # Decode bytes to strings
+                self.image_files_raw = [
+                    n.decode('utf-8') if isinstance(n, bytes) else str(n) 
+                    for n in f["files"][()]
+                ]
+                # Offsets map FileIndex -> StartImageIndex
+                # e.g. [0, 40, 80] means File 0 is imgs 0-39, File 1 is 40-79
+                self.file_offsets = f["file_offsets"][()]
+            else:
+                self.image_files_raw = None
+                self.file_offsets = None
 
+            data = images[()]
+            
             for i in range(N):
                 ims[i] = data[i]
                 self.bank_mapping[i] = int(bank_ids[i])
-
+        
         return ims
 
     def get_goniometer_from_nexus(self, filename: str) -> npt.NDArray:
@@ -848,15 +858,14 @@ class Peaks:
         # --- BATCH PRE-PROCESSING (SparseRBF) ---
         precomputed_peaks = {}
         if finder_algorithm == "sparse_rbf":
-            # Gather all images into a stack for batch processing on GPU
-            # Keys are sorted to ensure deterministic order (0..N for merged, or BankIDs for single)
+            # 1. Gather all images into a stack for batch processing on GPU
             img_keys = sorted(self.ims.keys())
             images_list = [self.ims[k] for k in img_keys]
             
             # Stack shape: (N_images, H, W)
-            # This handles both single multi-bank files and merged multi-run files
             img_stack = np.stack(images_list)
 
+            # 2. Instantiate Solver
             alg = SparseRBFPeakFinder(
                 alpha=harvest_peaks_kwargs.get('alpha', 0.1),
                 gamma=harvest_peaks_kwargs.get('gamma', 2.0),
@@ -867,30 +876,39 @@ class Peaks:
                 show_steps=harvest_peaks_kwargs.get('show_steps', False)
             )
 
-            # Run Solver
+            # 3. Run Parallel Solver
             batch_coords = alg.find_peaks_batch(img_stack)
-            
-            # Map results back to image keys
             precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords)}
 
         # --- MAIN PROCESSING LOOP ---
         for img_key in sorted(self.ims.keys()):
-            if show_progress:
-                print(f"Processing image {img_key}")
-
             # 1. Resolve Physical Detector
-            # If loaded from merged file, img_key is index (0..N). 
-            # We must map it to physical bank ID (e.g. 1..40) for geometry.
             if hasattr(self, 'bank_mapping') and img_key in self.bank_mapping:
                 physical_bank = self.bank_mapping[img_key]
             else:
-                physical_bank = img_key # Fallback for standard nexus files
+                physical_bank = img_key
 
-            # 2. Get Geometry for this specific image
-            # Note: We pass physical_bank to get the correct panel parameters
+            # 2. Resolve Human-Readable Name
+            if hasattr(self, 'image_files_raw') and self.image_files_raw and hasattr(self, 'file_offsets'):
+                 # Bisect to find which file this image index belongs to
+                file_idx = bisect.bisect_right(self.file_offsets, img_key) - 1
+                if 0 <= file_idx < len(self.image_files_raw):
+                    orig_name = os.path.basename(self.image_files_raw[file_idx])
+                    clean_name = os.path.splitext(orig_name)[0]
+                    clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
+                    img_label = clean_name
+                else:
+                    img_label = f"img{img_key}"
+            else:
+                img_label = f"img{img_key}"
+
+            if show_progress:
+                print(f"Processing {img_label} (Bank {physical_bank})")
+
+            # 3. Get Geometry
             det = self.get_detector(physical_bank)
 
-            # 3. Find/Retrieve Candidate Peaks
+            # 4. Find/Retrieve Candidate Peaks
             if finder_algorithm == "peak_local_max":
                 i, j = self.harvest_peaks(img_key, **harvest_peaks_kwargs)
             elif finder_algorithm == "thresholding":
@@ -903,8 +921,7 @@ class Peaks:
 
             centers = np.stack([i, j], axis=-1)
 
-            # 4. Integrate
-            # Setup masks/overrides...
+            # 5. Setup Masks
             if harvest_peaks_kwargs.get("mask_file") is not None:
                 mask = np.array(Image.open(harvest_peaks_kwargs["mask_file"]))
                 if 'mask_rel_erosion_radius' in harvest_peaks_kwargs:
@@ -914,7 +931,18 @@ class Peaks:
             else:
                 mask = np.full(self.ims[img_key].shape, True)
 
-            # Integrate
+            # --- FIX: RESTORE SIGMA OVERRIDE ---
+            # This recalculates min_intensity based on the local image noise floor.
+            # Without this, the integrator uses the default 4500.0 and rejects everything.
+            if integration_params.get("region_growth_minimum_sigma") is not None:
+                mean = np.mean(self.ims[img_key][mask])
+                std = np.std(self.ims[img_key][mask])
+                n_sigma = integration_params["region_growth_minimum_sigma"]
+                integrator.region_grower.min_intensity = mean + n_sigma * std
+                # Optional: debug print to verify it's working
+                # print(f"  > Override threshold: {integrator.region_grower.min_intensity:.2f}")
+
+            # 6. Integrate
             int_result, hulls = integrator.integrate_peaks(
                 physical_bank, 
                 self.ims[img_key], 
@@ -925,24 +953,52 @@ class Peaks:
             bank_intensity = np.array([res[3] for res in int_result])
             bank_sigma = np.array([res[5] for res in int_result])
             
-            # --- FIX: Strict Keeping (Hull Required) ---
-            # Filter edge artifacts that failed convex hull generation
+            # --- Filter Logic ---
+            # Relaxed check: Keep if intensity is valid.
             keep = []
-            for idx, val in enumerate(bank_intensity):
-                has_hull = hulls[idx][1] is not None
-                is_valid = val is not None
-                keep.append(is_valid and has_hull)
+            for val in bank_intensity:
+                keep.append(val is not None)
 
-            # Visualization (omitted for brevity, uses 'keep' mask)
-            # ...
+            # --- VISUALIZATION ---
+            if visualize:
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+                
+                axes[0].imshow(1 + self.ims[img_key], norm="log", cmap="binary", origin='lower')
+                axes[0].scatter(j, i, marker="1", c="blue")
+                axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
 
-            # 5. Append Valid Peaks
+                plt_im = axes[1].imshow(1 + self.ims[img_key], norm="log", cmap="binary", origin='lower')
+
+                forbidden = ~mask
+                if np.any(forbidden):
+                    overlay = np.zeros((*forbidden.shape, 4))
+                    overlay[forbidden] = [0, 1, 1, 0.3]  # Cyan
+                    axes[1].imshow(overlay, origin='lower')
+
+                for _, hull, _, _ in hulls:
+                    if hull is not None:
+                        for simplex in hull.simplices:
+                            axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                
+                axes[1].set_title("Integrated Hulls")
+                fig.subplots_adjust(right=0.8)
+                cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+                fig.colorbar(plt_im, cax=cbar_ax)
+
+                fname = f"{img_label}_bank{physical_bank}.png"
+                if file_prefix is not None:
+                    fname = f"{file_prefix}_{fname}"
+                
+                fig.savefig(fname)
+                plt.close(fig)
+
+            # 7. Append Valid Peaks
             if sum(keep) > 0:
                 i, j = i[keep], j[keep]
                 bank_intensity = bank_intensity[keep]
                 bank_sigma = bank_sigma[keep]
 
-                # Convert to Angles/Lab Coords
+                det = self.get_detector(physical_bank)
                 tt, az = det.pixel_to_angles(i, j)
                 
                 lab_coords_T = det.pixel_to_lab(i, j)
@@ -953,11 +1009,10 @@ class Peaks:
 
                 num_new_peaks = len(tt)
 
-                # --- Handle Radii (Angular Size) ---
+                # Calculate Radii
                 bank_radii = []
                 kept_indices = np.where(keep)[0]
                 
-                # Centers as unit vectors
                 tt_rad, az_rad = np.deg2rad(tt), np.deg2rad(az)
                 v_centers = np.stack([
                     np.sin(tt_rad) * np.cos(az_rad),
@@ -967,6 +1022,10 @@ class Peaks:
 
                 for k_idx, orig_idx in enumerate(kept_indices):
                     _, hull, _, _ = hulls[orig_idx]
+                    if hull is None:
+                        bank_radii.append(0.0)
+                        continue
+                        
                     verts = hull.points[hull.vertices]
                     v_i, v_j = verts[:, 0], verts[:, 1]
                     v_tt, v_az = det.pixel_to_angles(v_i, v_j)
@@ -982,9 +1041,7 @@ class Peaks:
                     bank_radii.append(np.max(np.arccos(dots)))
 
                 # --- Handle Per-Image Geometry ---
-                # Rotation Matrix
                 if self.goniometer_rotation.ndim == 3:
-                    # Use specific matrix for this image index
                     if img_key < len(self.goniometer_rotation):
                         current_R = self.goniometer_rotation[img_key]
                     else:
@@ -992,16 +1049,16 @@ class Peaks:
                 else:
                     current_R = self.goniometer_rotation
 
-                # Goniometer Angles
                 current_angles = None
                 if self.goniometer_angles_raw is not None:
                     if self.goniometer_angles_raw.ndim == 2:
                         if img_key < len(self.goniometer_angles_raw):
                             current_angles = self.goniometer_angles_raw[img_key]
+                        else:
+                            current_angles = self.goniometer_angles_raw[-1]
                     else:
                         current_angles = self.goniometer_angles_raw
 
-                # Append ALL data
                 two_theta.extend(tt.tolist())
                 az_phi.extend(az.tolist())
                 R.extend([current_R] * num_new_peaks)
@@ -1011,16 +1068,14 @@ class Peaks:
                 sigma.extend(bank_sigma.tolist())
                 radii.extend(bank_radii)
                 xyz_out.extend(lab_coords.tolist())
-                
-                # IMPORTANT: Use PHYSICAL bank ID here
                 banks.extend([physical_bank] * num_new_peaks)
                 
                 if current_angles is not None:
                     gonio_angles_out.extend([current_angles] * num_new_peaks)
                 
-                print(f"Integrated {len(i)}/{len(centers)} peaks for Image {img_key} (Bank {physical_bank})")
+                print(f"Integrated {len(i)}/{len(centers)} peaks for {img_label} (Bank {physical_bank})")
             else:
-                print(f"Image {img_key} (Bank {physical_bank}) had 0 valid peaks")
+                print(f"{img_label} (Bank {physical_bank}) had 0 valid peaks")
                 
         return DetectorPeaks(
             R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, 
