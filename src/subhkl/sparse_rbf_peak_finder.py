@@ -1,13 +1,15 @@
 import numpy as np
-import jax
-import jax.numpy as jnp
-from jax import jit, vmap, lax
 from functools import partial
-import jax.scipy.optimize
-import jax.scipy.signal
 import sys
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
+
+# Import JAX with fallback from utils (centralized)
+from subhkl.utils import jax, jnp, jit, vmap, lax, HAS_JAX
+
+if HAS_JAX:
+    import jax.scipy.optimize
+    import jax.scipy.signal
 
 class SparseRBFPeakFinder:
     """
@@ -18,6 +20,8 @@ class SparseRBFPeakFinder:
     - Uses 'Gradient Boosting' (Greedy Selection) and 'Gauss-Newton' (BFGS) optimization.
     - [cite_start]Implements 'Besov Scaling' (sigma^gamma) to penalize singularities[cite: 147].
     - Enforces Dirichlet Boundary Conditions by restricting the measure support.
+    
+    Requires JAX to be installed.
     """
     def __init__(
         self,
@@ -30,6 +34,11 @@ class SparseRBFPeakFinder:
         show_steps: bool = False,
         show_scale: str = "linear"
     ):
+        if not HAS_JAX:
+            raise ImportError(
+                "JAX is required for SparseRBFPeakFinder. "
+                'Install with: pip install -e ".[jax]" or pip install jax jaxlib'
+            )
         self.alpha = alpha
         self.gamma = gamma
         self.ref_sigma = 1.0            # Reference unit (1 pixel)

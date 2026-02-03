@@ -11,44 +11,20 @@ import scipy.interpolate
 
 import gemmi
 
-# Try to import JAX and evosax (optional dependencies). If JAX is not
-# available we provide minimal fallbacks so the rest of the module can
-# operate using NumPy-only semantics.
-try:
-    import jax
-    import jax.numpy as jnp
-    import jax.scipy.linalg as jscipy_linalg
-    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
-    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-
-    HAS_JAX = True
-    OPTIMIZATION_BACKEND = "jax"
-except Exception:
-    # Fallback shim: expose a minimal `jax`-like object and map jax.numpy
-    # to the installed NumPy so code using `jnp` still works.
-    import numpy as jnp
-
-    class _JaxShim:
-        """Minimal JAX shim for when JAX is not installed."""
-
-        @staticmethod
-        def jit(f=None, *, static_argnames=None, **kwargs):
-            if f is None:
-                return lambda fn: fn
-            return f
-
-    jax = _JaxShim()
-    DifferentialEvolution = None
-    PSO = None
-    CMA_ES = None
-    # Map jax.scipy.linalg calls to scipy.linalg when JAX missing
-    jscipy_linalg = scipy.linalg
-    # Sharding primitives unavailable without JAX
-    Mesh = None
-    NamedSharding = None
-    P = None
-    HAS_JAX = False
-    OPTIMIZATION_BACKEND = "numpy"
+# Import JAX with fallback from utils (centralized)
+from subhkl.utils import (
+    jax,
+    jnp,
+    jscipy_linalg,
+    HAS_JAX,
+    OPTIMIZATION_BACKEND,
+    DifferentialEvolution,
+    PSO,
+    CMA_ES,
+    Mesh,
+    NamedSharding,
+    P,
+)
 
 from subhkl.detector import scattering_vector_from_angles
 from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
