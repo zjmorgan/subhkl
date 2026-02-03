@@ -62,7 +62,7 @@ def _get_active_lattice_indices(lattice_system):
 def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0.05, atol_ang=0.5):
     """
     Determine the Lattice System for refinement based on Space Group and Geometry.
-    
+
     Logic:
     1. Determine 'Expected' system from Space Group (Bravais Lattice).
     2. Determine 'Geometric' system from parameter values (e.g. 90 deg, a=b).
@@ -70,12 +70,12 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
     4. Override: If Expected symmetry is LOWER than Geometric (e.g. P1 SG but 90-90-90 params),
        force LOWER symmetry (Triclinic) to allow full refinement.
     """
-    
+
     # --- 1. Determine Expected System from Space Group ---
     try:
         sg = get_space_group_object(space_group_name)
         # Gemmi CrystalSystem: triclinic, monoclinic, orthorhombic, tetragonal, trigonal, hexagonal, cubic
-        sys_str = str(sg.crystal_system()).split('.')[-1].lower() 
+        sys_str = str(sg.crystal_system()).split('.')[-1].lower()
         centering = sg.centring_type() # 'P', 'F', 'I', 'R', etc.
     except Exception:
         sys_str = 'triclinic' # Fallback
@@ -85,7 +85,7 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
     expected = 'Triclinic'
     if sys_str == 'cubic': expected = 'Cubic'
     elif sys_str == 'hexagonal': expected = 'Hexagonal'
-    elif sys_str == 'trigonal': 
+    elif sys_str == 'trigonal':
         expected = 'Rhombohedral' if centering == 'R' else 'Hexagonal'
     elif sys_str == 'tetragonal': expected = 'Tetragonal'
     elif sys_str == 'orthorhombic': expected = 'Orthorhombic'
@@ -97,7 +97,7 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
     eq = lambda x, y: np.isclose(x, y, atol=atol_len)
 
     violation_msg = []
-    
+
     if expected == 'Cubic':
         if not (eq(a, b) and eq(b, c)): violation_msg.append("a=b=c")
         if not (is_90(alpha) and is_90(beta) and is_90(gamma)): violation_msg.append("angles=90")
@@ -139,10 +139,10 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
     # --- 4. Hierarchy and Override ---
     # Rank symmetries: Lower number = Lower Symmetry (More free params)
     ranks = {
-        'Triclinic': 0, 'Monoclinic': 1, 'Orthorhombic': 2, 
+        'Triclinic': 0, 'Monoclinic': 1, 'Orthorhombic': 2,
         'Tetragonal': 3, 'Rhombohedral': 4, 'Hexagonal': 4, 'Cubic': 5
     }
-    
+
     rank_exp = ranks.get(expected, 0)
     rank_geo = ranks.get(geometric, 0)
 
@@ -151,9 +151,9 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
     #    we MUST use Expected (Triclinic) to allow refinement of angles away from 90.
     # 2. If Expected is HIGHER symmetry (e.g. Cubic SG, but wonky params),
     #    we MUST use Expected (Cubic) to enforce Space Group symmetry (despite the warning).
-    
+
     final_system = expected
-    
+
     # Calculate free params count
     # Triclinic(6), Mono(4), Ortho(3), Tet(2), Hex(2), Rho(2), Cub(1)
     if final_system == 'Triclinic': num = 6
@@ -167,7 +167,7 @@ def get_lattice_system(a, b, c, alpha, beta, gamma, space_group_name, atol_len=0
 
     if rank_exp < rank_geo:
         print(f"Lattice System Override: Geometry suggests {geometric}, but Space Group {space_group_name} requires {expected}. Enforcing {expected} (Lower Symmetry).")
-    
+
     return final_system, num
 
 def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
@@ -939,7 +939,7 @@ class FindUB:
             self.a, self.b, self.c = b_a, b_b, b_c
             self.alpha, self.beta, self.gamma = b_alpha, b_beta, b_gamma
             print(f"  > Recentered Lattice: {self.a:.2f}, {self.b:.2f}, {self.c:.2f}...")
-            lat_sys, _ = get_lattice_system(self.a, self.b, self.c, self.alpha, self.beta, self.gamma, get_centering(self.space_group))
+            lat_sys, _ = get_lattice_system(self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group)
             active_indices = _get_active_lattice_indices(lat_sys)
             new_params.append(np.full(len(active_indices), 0.5))
 
