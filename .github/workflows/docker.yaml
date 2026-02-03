@@ -2,7 +2,6 @@ name: Docker build
 
 on:
   push:
-    branches: ['main']
 
 env:
   IMAGE_NAME: zjmorgan/subhkl
