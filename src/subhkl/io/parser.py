@@ -137,10 +137,6 @@ def index(
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
 
-    h = [i[0] for i in hkl]
-    k = [i[1] for i in hkl]
-    l_list = [i[2] for i in hkl]
-
     B = opt.reciprocal_lattice_B()
     refined_R = opt.R
 
@@ -201,9 +197,9 @@ def index(
         
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
         # opt.minimize_evosax returns hkl (3, N).
-        f["peaks/h"] = hkl[0]
-        f["peaks/k"] = hkl[1]
-        f["peaks/l"] = hkl[2]
+        f["peaks/h"] = hkl[:,0]
+        f["peaks/k"] = hkl[:,1]
+        f["peaks/l"] = hkl[:,2]
         f["peaks/lambda"] = lamda
         f["optimization/best_params"] = opt.x
     print("Done.")
