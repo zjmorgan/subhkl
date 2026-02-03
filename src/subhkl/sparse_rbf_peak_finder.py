@@ -7,6 +7,7 @@ import jax.scipy.optimize
 import jax.scipy.signal
 import sys
 from scipy.spatial.distance import pdist, squareform
+from tqdm import tqdm
 
 class SparseRBFPeakFinder:
     """
@@ -206,11 +207,6 @@ class SparseRBFPeakFinder:
         results = vmap(process_one_seed)(seeds_halo_shifted)
         return results.reshape(-1, 4)
 
-    def _progress_callback(self, current, total, label):
-        pct = (current / total) * 100
-        sys.stdout.write(f"\rSparseRBF ({label}): {pct:.1f}%")
-        sys.stdout.flush()
-
     # =========================================================================
     # MAIN LOOP
     # =========================================================================
@@ -286,14 +282,19 @@ class SparseRBFPeakFinder:
                 
                 print(f"  > Dense Search on {total_wins_all} windows...")
                 solver = jit(vmap(lambda w: self._solve_dense(w, w_h, w_w, 10)))
-                
-                for i in range(0, total_wins_all, chunk_size):
-                    chunk_coords = window_coords_arr[i:i+chunk_size]
-                    c_win = extract_chunk_exact(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
-                    res = solver(c_win)
-                    all_results.append(np.array(res))
-                    self._progress_callback(i + len(c_win), total_wins_all, "Dense")
-                    
+            
+                with tqdm(total=total_wins_all, desc="Dense Search", unit="win") as pbar:
+                    for i in range(0, total_wins_all, chunk_size):
+                        chunk_coords = window_coords_arr[i:i+chunk_size]
+                        c_win = extract_chunk_exact(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
+                        
+                        res = solver(c_win)
+                        # Force blocking to ensure timing is accurate for the progress bar
+                        res.block_until_ready()
+                        
+                        all_results.append(np.array(res))
+                        pbar.update(len(c_win))
+
             else:
                 # RECURSIVE: PATCHY
                 print(f"  > Refining seeds on {total_wins_all} windows (w/ Halo)...")
@@ -315,34 +316,37 @@ class SparseRBFPeakFinder:
                     lambda w, s: self._solve_patchy_window(w, s, w_h, w_w, HALO, P)
                 ))
                 
-                for i in range(0, total_wins_all, chunk_size):
-                    chunk_coords = window_coords_arr[i:i+chunk_size]
-                    
-                    chunk_seeds = np.zeros((len(chunk_coords), M_S, 4), dtype=np.float32)
-                    for k, (b, r, c) in enumerate(chunk_coords):
-                        cp = current_peaks[b]
-                        if len(cp) == 0: continue
-                        valid_cp = cp[cp[:, 0] > 1e-6]
-                        r_end = r + w_h
-                        c_end = c + w_w
+
+                with tqdm(total=total_wins_all, desc="Refinement", unit="win") as pbar:
+                    for i in range(0, total_wins_all, chunk_size):
+                        chunk_coords = window_coords_arr[i:i+chunk_size]
+
+                        chunk_seeds = np.zeros((len(chunk_coords), M_S, 4), dtype=np.float32)
+                        for k, (b, r, c) in enumerate(chunk_coords):
+                            cp = current_peaks[b]
+                            if len(cp) == 0: continue
+                            valid_cp = cp[cp[:, 0] > 1e-6]
+                            r_end = r + w_h
+                            c_end = c + w_w
+                            
+                            in_r = (valid_cp[:, 1] >= r) & (valid_cp[:, 1] < r_end)
+                            in_c = (valid_cp[:, 2] >= c) & (valid_cp[:, 2] < c_end)
+                            seeds = valid_cp[in_r & in_c]
+                            
+                            if len(seeds) > 0:
+                                seeds_local = seeds.copy()
+                                seeds_local[:, 1] -= r
+                                seeds_local[:, 2] -= c
+                                if len(seeds_local) > M_S:
+                                    order = np.argsort(seeds_local[:, 0])[::-1]
+                                    seeds_local = seeds_local[order[:M_S]]
+                                chunk_seeds[k, :len(seeds_local), :] = seeds_local
                         
-                        in_r = (valid_cp[:, 1] >= r) & (valid_cp[:, 1] < r_end)
-                        in_c = (valid_cp[:, 2] >= c) & (valid_cp[:, 2] < c_end)
-                        seeds = valid_cp[in_r & in_c]
-                        
-                        if len(seeds) > 0:
-                            seeds_local = seeds.copy()
-                            seeds_local[:, 1] -= r
-                            seeds_local[:, 2] -= c
-                            if len(seeds_local) > M_S:
-                                order = np.argsort(seeds_local[:, 0])[::-1]
-                                seeds_local = seeds_local[order[:M_S]]
-                            chunk_seeds[k, :len(seeds_local), :] = seeds_local
-                    
-                    c_win_halo = extract_chunk_with_halo(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
-                    res = solver(c_win_halo, jnp.array(chunk_seeds))
-                    all_results.append(np.array(res))
-                    self._progress_callback(i + len(c_win_halo), total_wins_all, "Patchy")
+                        c_win_halo = extract_chunk_with_halo(chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2])
+                        res = solver(c_win_halo, jnp.array(chunk_seeds))
+                        res.block_until_ready() # Ensure accurate ETA
+                        all_results.append(np.array(res))
+                        pbar.update(len(c_win_halo))
 
             # --- Merge & Deduplicate ---
             print("\n  > Merging & Deduplicating...")
