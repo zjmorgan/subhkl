@@ -611,25 +611,22 @@ def indexer_using_file(
 
 
 @app.command()
-def metrics(filename: str):
-    """
-    Calculate and print D-spacing and Angular errors for an indexed solution.
-    Output Format: METRICS: median_d mean_d max_d median_ang mean_ang max_ang
-    """
+def metrics(
+    filename: str,
+    d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation.")
+):
     try:
-        # 1. LOAD DATA
         with h5py.File(filename, "r") as f:
             if "peaks/xyz" not in f:
                 print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
                 return
 
-            xyz_det = f["peaks/xyz"][()] # Lab coordinates (N, 3)
+            xyz_det = f["peaks/xyz"][()] 
             h = f["peaks/h"][()]
             k = f["peaks/k"][()]
             l = f["peaks/l"][()]
             lam = f["peaks/lambda"][()]
 
-            # Geometry
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
             ub_helper.b = f["sample/b"][()]
@@ -658,7 +655,6 @@ def metrics(filename: str):
             else:
                 sample_offset = np.zeros(3)
 
-        # Filter Indexed
         mask = (h != 0) | (k != 0) | (l != 0)
         if np.sum(mask) == 0:
             print("METRICS: 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000")
@@ -669,27 +665,49 @@ def metrics(filename: str):
         xyz_det = xyz_det[mask]
         R_all = R_all[mask]
 
-        # --- PHYSICS CALCULATION via UTILS ---
         B_mat = ub_helper.reciprocal_lattice_B()
         
-        # Construct RUB (R @ U @ B)
+        # --- NEW: Filter by d_min if provided ---
+        if d_min is not None:
+            # Calculate d = 1 / |B * hkl|
+            # Note: |B*h| is 1/d in subhkl units (standard crystallographic definition)
+            # hkl shape (N, 3)
+            hkl_vecs = np.stack([h, k, l], axis=1)
+            q_cryst = hkl_vecs @ B_mat.T
+            q_mag = np.linalg.norm(q_cryst, axis=1)
+            
+            with np.errstate(divide='ignore'):
+                d_vals = 1.0 / q_mag
+            
+            # Keep peaks where d >= d_min
+            d_mask = d_vals >= d_min
+            
+            if np.sum(d_mask) == 0:
+                print(f"METRICS: No peaks found with d >= {d_min} A.")
+                return
+
+            h, k, l = h[d_mask], k[d_mask], l[d_mask]
+            lam = lam[d_mask]
+            xyz_det = xyz_det[d_mask]
+            R_all = R_all[d_mask]
+            print(f"METRICS: Filtered to {len(h)} peaks with d >= {d_min} A.")
+
         UB = U @ B_mat
         
-        # Handle Broadcasting: R is (N,3,3), UB is (3,3)
         if R_all.ndim == 3:
-            RUB = np.matmul(R_all, UB) # (N, 3, 3)
+            RUB = np.matmul(R_all, UB) 
         else:
-            RUB = R_all @ UB # (3, 3)
+            RUB = R_all @ UB 
 
         d_err, ang_err = calculate_angular_error(
             xyz_det, h, k, l, lam, RUB, sample_offset, ki_vec
         )
 
-        # 5. PRINT RESULTS
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
 
     except Exception as e:
+        # print(e)
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
 
 @app.command()
