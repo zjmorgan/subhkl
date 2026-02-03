@@ -36,7 +36,7 @@ from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
 from subhkl.spacegroup import is_systematically_absent
-from subhkl.utils import predict_reflections_on_panel, calculate_angular_error
+from subhkl.utils import predict_reflections_on_panel, calculate_angular_error, generate_reflections
 
 DetectorPeaks = namedtuple(
     "DetectorPeaks",
@@ -245,15 +245,19 @@ def _process_single_image(
 def _predict_single_bank(
     bank_id, 
     det_config, 
-    h, k, l, 
+    unit_cell_params, 
     RUB, 
     wavelength_min, wavelength_max, 
     sample_offset, ki_vec
 ):
     """
     Worker function for predicting peaks on a single detector bank.
-    Calculates reflection positions based on orientation matrix (RUB).
+    Generates HKLs locally (lazy generation) to reduce IPC overhead.
     """
+    # 1. Generate Reflections locally
+    a, b, c, alpha, beta, gamma, space_group, d_min = unit_cell_params
+    h, k, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+
     det = Detector(det_config)
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
         detector=det, h=h, k=k, l=l, RUB=RUB,
@@ -782,23 +786,39 @@ class Peaks:
             self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw
         )
 
-    # --- UPDATED PREDICT PEAKS ---
     def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None):
         """
         Predicts peak positions using parallel processing.
+        Handles RUB as either a single (3,3) matrix OR a stack (N,3,3) for rotation scans.
+        Generates HKLs locally (lazy generation) to reduce IPC overhead.
         """
-        # 1. Generate candidate HKLs (fast, done in main process)
-        h, k, l = self.reflections(a, b, c, alpha, beta, gamma, space_group=space_group, d_min=d_min)
         
         peak_dict = {}
         tasks = []
         
+        # Package scalar params to send to workers
+        unit_cell_params = (a, b, c, alpha, beta, gamma, space_group, d_min)
+        
+        sorted_keys = sorted(self.ims.keys())
+        use_stack = (RUB.ndim == 3 and RUB.shape[0] > 1)
+
         print(f"Predicting peaks for {len(self.ims)} banks...")
         
-        for bank in sorted(self.ims.keys()):
+        for i, bank in enumerate(sorted_keys):
             det_config = beamlines[self.instrument][str(self.bank_mapping.get(bank, bank))]
+            
+            if use_stack:
+                # Use bank ID as index if it's an integer 0..N, otherwise fallback to enumeration index
+                idx = bank if isinstance(bank, int) and bank < RUB.shape[0] else i
+                if idx >= RUB.shape[0]: idx = -1 # Safety fallback to last frame
+                rub_val = RUB[idx]
+            else:
+                rub_val = RUB if RUB.ndim == 2 else RUB[0]
+
             tasks.append((
-                bank, det_config, h, k, l, RUB, 
+                bank, det_config, 
+                unit_cell_params, # Pass tuple instead of arrays
+                rub_val, 
                 self.wavelength_min, self.wavelength_max, 
                 sample_offset, ki_vec
             ))

@@ -698,93 +698,59 @@ def peak_predictor(
         alpha = float(f_idx["sample/alpha"][()])
         beta = float(f_idx["sample/beta"][()])
         gamma = float(f_idx["sample/gamma"][()])
-        
+
         if space_group is None:
             space_group = f_idx["sample/space_group"][()].decode('utf-8')
-            
+
         wavelength = f_idx["instrument/wavelength"][()]
         if wavel_min: wavelength[0] = wavel_min
         if wavel_max: wavelength[1] = wavel_max
-        
+
         U = f_idx["sample/U"][()]
         B = f_idx["sample/B"][()]
-        
+
         # Load Geometry Stacks
         # R is likely (N_images, 3, 3)
         all_R = f_idx["goniometer/R"][()]
-        
+
         if "sample/offset" in f_idx:
             sample_offset = f_idx["sample/offset"][()]
         else:
             sample_offset = np.zeros(3)
-            
+
         if "beam/ki_vec" in f_idx:
             ki_vec = f_idx["beam/ki_vec"][()]
         else:
             ki_vec = np.array([0., 0., 1.])
 
     # 2. Initialize Data Handler
-    # Peaks class auto-detects merged HDF5
     peaks = Peaks(filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1])
-    
+
     print(f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}")
 
-    # 3. Prediction Loop
-    # We must predict per-image because R (and thus RUB) changes per image in a scan.
-    results_map = {} # Store results by img_key
-    
-    # Iterate sorted keys (0, 1, 2... N)
-    img_keys = sorted(peaks.ims.keys())
-    
-    # Handle R shape mismatch (singleton vs stack)
-    if all_R.ndim == 2: all_R = all_R[np.newaxis, :, :] # (1,3,3)
-    if len(all_R) == 1 and len(img_keys) > 1:
-        # constant R
-        get_R = lambda i: all_R[0]
+    # 3. Calculate RUB Stack for Parallel Processing
+    # UB = U @ B
+    UB = U @ B
+
+    # Handle R being a stack or single matrix
+    if all_R.ndim == 3:
+        # Broadcast matmul: (N, 3, 3) @ (3, 3) -> (N, 3, 3)
+        RUB = np.matmul(all_R, UB)
     else:
-        # stack R
-        get_R = lambda i: all_R[i] if i < len(all_R) else all_R[-1]
+        # Standard matmul: (3, 3) @ (3, 3) -> (3, 3)
+        RUB = all_R @ UB
 
-    for img_key in img_keys:
-        # Get Physics for this specific frame
-        R_current = get_R(img_key)
-        RUB = R_current @ U @ B
-        
-        # Determine physical bank for this image (needed for detector geometry)
-        if hasattr(peaks, 'bank_mapping'):
-            phys_bank = peaks.bank_mapping.get(img_key, img_key)
-        else:
-            phys_bank = img_key
-            
-        det = peaks.get_detector(phys_bank)
-        
-        # Predict
-        # We manually call the lower-level utility to avoid overhead/complexity
-        from subhkl.utils import predict_reflections_on_panel
-        h_all, k_all, l_all = peaks.reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
-        
-        row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
-            detector=det,
-            h=h_all, k=k_all, l=l_all,
-            RUB=RUB,
-            wavelength_min=wavelength[0],
-            wavelength_max=wavelength[1],
-            sample_offset=sample_offset,
-            ki_vec=ki_vec
-        )
-        
-        if len(row) > 0:
-            results_map[img_key] = (row, col, h_f, k_f, l_f, wl_f)
-            
-        if create_visualizations and len(row) > 0:
-            import matplotlib.pyplot as plt
-            plt.imshow(peaks.ims[img_key] + 1, cmap="binary", norm="log", origin='lower')
-            plt.scatter(col, row, edgecolors='r', facecolors='none', s=20)
-            plt.title(f"Img {img_key} (Bank {phys_bank})")
-            plt.savefig(f"{filename}_pred_{img_key}.png")
-            plt.close()
+    # 4. Call Parallelized Prediction
+    # This uses the optimized worker (scalar params) + ProcessPoolExecutor
+    results_map = peaks.predict_peaks(
+        a, b, c, alpha, beta, gamma, d_min,
+        RUB=RUB,
+        space_group=space_group,
+        sample_offset=sample_offset,
+        ki_vec=ki_vec
+    )
 
-    # 4. Save Predictions
+    # 5. Save Predictions
     print(f"Saving predictions to {integration_peaks_filename}")
     with h5py.File(integration_peaks_filename, "w") as f:
         # Save Global Physics
@@ -804,7 +770,6 @@ def peak_predictor(
 
         # Save Peaks
         # Structure: banks/{img_key}/...
-        # Using img_key as the identifier ensures 1:1 mapping with the merged input file
         for img_key, (i, j, h, k, l, wl) in results_map.items():
             grp = f.create_group(f"banks/{img_key}")
             grp.create_dataset("i", data=i)
@@ -813,7 +778,6 @@ def peak_predictor(
             grp.create_dataset("k", data=k)
             grp.create_dataset("l", data=l)
             grp.create_dataset("wavelength", data=wl)
-
 
 @app.command()
 def integrator(
