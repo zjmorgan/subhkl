@@ -3,6 +3,7 @@ import re
 import typing
 from collections import namedtuple
 import bisect
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
@@ -271,31 +272,31 @@ def _predict_single_bank(
 def _integrate_single_bank(
     bank_id,
     image,
-    peaks,
+    peaks, 
     det_config,
     integration_params,
     integration_method,
     viz_info,
-    metrics_info
+    metrics_info 
 ):
     # Unpack predicted peaks (i, j, h, k, l, wl)
     bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
     centers = np.stack([bank_i, bank_j], axis=-1)
-
+    
     det = Detector(det_config)
     bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
-
-    # FIX: Correctly handle lab coordinate shape (N, 3)
+    
+    # Correctly handle lab coordinate shape (N, 3)
     lab_coords_raw = det.pixel_to_lab(bank_i, bank_j) # Returns (3, N)
-    if lab_coords_raw.ndim == 1:
+    if lab_coords_raw.ndim == 1: 
         lab_coords = lab_coords_raw[np.newaxis, :] # (1, 3) -> (N=1, 3)
-    else:
+    else: 
         lab_coords = lab_coords_raw.T # (N, 3)
 
     # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
     found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec = metrics_info
-
+    
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
         if found_peaks_bank is not None:
@@ -307,34 +308,34 @@ def _integrate_single_bank(
             f_vecs = found_peaks_xyz - s_off
             dots = np.dot(f_vecs, det_vec)
             f_xyz_front = found_peaks_xyz[dots > 0]
-
+            
             if len(f_xyz_front) > 0:
                 f_row, f_col = det.lab_to_pixel(f_xyz_front[:,0], f_xyz_front[:,1], f_xyz_front[:,2], clip=False)
                 on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
                 f_xyz_valid = f_xyz_front[on_sensor]
-
+        
         if len(f_xyz_valid) > 0:
             f_row_valid, f_col_valid = det.lab_to_pixel(f_xyz_valid[:,0], f_xyz_valid[:,1], f_xyz_valid[:,2], clip=False)
             on_panel_found = (f_row_valid >= 0) & (f_row_valid < det.n) & (f_col_valid >= 0) & (f_col_valid < det.m)
-
+            
             if np.sum(on_panel_found) > 0:
                 f_row_valid = f_row_valid[on_panel_found]
                 f_col_valid = f_col_valid[on_panel_found]
                 f_xyz_valid = f_xyz_valid[on_panel_found]
-
+                
                 f_pixels = np.stack([f_row_valid, f_col_valid], axis=1)
                 p_pixels = np.stack([bank_i, bank_j], axis=1)
-
+                
                 tree = scipy.spatial.KDTree(p_pixels)
                 dists_pix, idxs = tree.query(f_pixels)
                 valid_matches = dists_pix < 20.0
-
+                
                 if np.sum(valid_matches) > 0:
                     matched_idxs = idxs[valid_matches]
                     f_xyz_matched = f_xyz_valid[valid_matches]
                     d_err, ang_err = calculate_angular_error(
-                        f_xyz_matched,
-                        bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs],
+                        f_xyz_matched, 
+                        bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs], 
                         RUB, sample_offset, ki_vec
                     )
                     metrics_str = f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, $\\Delta d$={np.median(d_err):.3f}$\\AA$"
@@ -361,7 +362,7 @@ def _integrate_single_bank(
         r_int, c_int = int(r), int(c)
         if (0 <= r_int < mask.shape[0] and 0 <= c_int < mask.shape[1] and mask[r_int, c_int]):
             valid_indices.append(idx)
-
+    
     centers = centers[valid_indices]
     bank_tt = bank_tt[valid_indices]
     bank_az = bank_az[valid_indices]
@@ -380,21 +381,22 @@ def _integrate_single_bank(
     keep = [val is not None for val in bank_intensity]
 
     # --- VISUALIZATION ---
-    do_viz, viz_prefix, filename_base = viz_info
+    # UPDATED: Use viz_label for filename
+    do_viz, viz_prefix, viz_label = viz_info
     if do_viz:
         import matplotlib.pyplot as plt
         if plt.get_backend().lower() != 'agg': plt.switch_backend('Agg')
         plt.rc("font", size=8)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         axes[0].imshow(1 + image, norm="log", cmap="binary", origin='lower')
-        axes[0].set_title(f"{filename_base}: Bank {bank_id}")
-
+        axes[0].set_title(f"{viz_label}")
+        
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
             axes[0].scatter(centers[:, 1], centers[:, 0], marker="1", c="blue", label=label_pred, s=40)
-
+        
         axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=False, ncol=1)
-
+        
         for p_i, p_j, p_h, p_k, p_l in zip(centers[:,0], centers[:,1], bank_h, bank_k, bank_l):
             is_zone = (p_h == 0) or (p_k == 0) or (p_l == 0)
             is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
@@ -409,14 +411,15 @@ def _integrate_single_bank(
         overlay[forbidden] = [0, 1, 1, 0.3]
         axes[1].imshow(overlay, origin='lower')
         axes[1].set_title("Integrated peaks")
-
+        
         for _, hull, _, _ in hulls:
             if hull is not None:
                 for simplex in hull.simplices:
                     axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-
-        out_name = f"{bank_id}_int.png"
-        if viz_prefix: out_name = viz_prefix + out_name
+        
+        # New Naming: {prefix}_{label}_int.png
+        out_name = f"{viz_label}_int.png"
+        if viz_prefix: out_name = f"{viz_prefix}_{out_name}"
         fig.savefig(out_name, bbox_inches='tight')
         plt.close(fig)
 
@@ -569,6 +572,7 @@ class Peaks:
                             ims[bank] = bc.reshape(n, m)
 
         return ims
+
     def get_detector(self, bank: int) -> Detector:
         if bank in self.bank_mapping:
             physical_bank = self.bank_mapping[bank]
@@ -578,51 +582,17 @@ class Peaks:
         det_config = beamlines[self.instrument][bank_id]
         return Detector(det_config)
 
-    # Legacy wrappers
-    def harvest_peaks(self, bank, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False):
-        return _run_harvest_local_max(self.ims[bank], max_peaks, min_pix, min_rel_intensity, normalize)
+    def get_image_label(self, img_key):
+        """Helper to resolve a readable label for an image key."""
+        if hasattr(self, 'image_files_raw') and self.image_files_raw and hasattr(self, 'file_offsets'):
+            file_idx = bisect.bisect_right(self.file_offsets, img_key) - 1
+            if 0 <= file_idx < len(self.image_files_raw):
+                orig_name = os.path.basename(self.image_files_raw[file_idx])
+                clean_name = os.path.splitext(orig_name)[0]
+                clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
+                return clean_name
+        return f"img{img_key}"
 
-    def harvest_peaks_thresholding(self, bank, **kwargs):
-        return _run_harvest_thresholding(self.ims[bank], **kwargs)
-
-    # ... [Keep fit, intensity, residual, peak, transform_ellipsoid, scale_ellipsoid, scale_coordinates, reflections] ...
-    def scale_coordinates(self, bank, i, j):
-        det = self.get_detector(bank)
-        x = (i / (det.m - 1) - 0.5) * det.width
-        y = (j / (det.n - 1) - 0.5) * det.height
-        return x, y
-        
-    def cartesian_matrix_metric_tensor(self, a, b, c, alpha, beta, gamma):
-        G = np.array([
-            [a ** 2, a * b * np.cos(gamma), a * c * np.cos(beta)],
-            [b * a * np.cos(gamma), b ** 2, b * c * np.cos(alpha)],
-            [c * a * np.cos(beta), c * b * np.cos(alpha), c ** 2],
-        ])
-        Gstar = np.linalg.inv(G)
-        B = scipy.linalg.cholesky(Gstar, lower=False)
-        return B, Gstar
-
-    def reflections(self, a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2):
-        constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
-        B, Gstar = self.cartesian_matrix_metric_tensor(*constants)
-        astar, bstar, cstar = np.sqrt(np.diag(Gstar))
-        h_max = int(np.floor(1 / d_min / astar))
-        k_max = int(np.floor(1 / d_min / bstar))
-        l_max = int(np.floor(1 / d_min / cstar))
-        h, k, l = np.meshgrid(
-            np.arange(-h_max, h_max + 1),
-            np.arange(-k_max, k_max + 1),
-            np.arange(-l_max, l_max + 1),
-            indexing="ij",
-        )
-        h_flat, k_flat, l_flat = h.flatten(), k.flatten(), l.flatten()
-        hkl_sq = np.einsum("ij,jl,il->l", Gstar, [h_flat, k_flat, l_flat], [h_flat, k_flat, l_flat])
-        with np.errstate(divide="ignore"):
-            d = 1 / np.sqrt(hkl_sq)
-        res_mask = (d > d_min) & (d < np.inf)
-        absent_mask = is_systematically_absent(h_flat, k_flat, l_flat, space_group)
-        final_mask = res_mask & (~absent_mask)
-        return h_flat[final_mask], k_flat[final_mask], l_flat[final_mask]
 
     def get_detector_peaks(
         self,
@@ -632,9 +602,6 @@ class Peaks:
         visualize: bool = False,
         file_prefix: str | None = None,
     ) -> DetectorPeaks:
-        """
-        Get peaks in detector space using parallel processing for integration.
-        """
         if not self.ims:
             raise Exception("ERROR: Must have images for Peaks first...")
 
@@ -674,31 +641,16 @@ class Peaks:
 
         # --- PREPARE PARALLEL TASKS ---
         tasks = []
-        
         for img_key in sorted(self.ims.keys()):
-            # 1. Resolve Physical Detector
             if hasattr(self, 'bank_mapping') and img_key in self.bank_mapping:
                 physical_bank = self.bank_mapping[img_key]
             else:
                 physical_bank = img_key 
+            
+            img_label = self.get_image_label(img_key)
 
-            # 2. Resolve Label
-            if hasattr(self, 'image_files_raw') and self.image_files_raw and hasattr(self, 'file_offsets'):
-                file_idx = bisect.bisect_right(self.file_offsets, img_key) - 1
-                if 0 <= file_idx < len(self.image_files_raw):
-                    orig_name = os.path.basename(self.image_files_raw[file_idx])
-                    clean_name = os.path.splitext(orig_name)[0]
-                    clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
-                    img_label = clean_name
-                else:
-                    img_label = f"img{img_key}"
-            else:
-                img_label = f"img{img_key}"
-
-            # 3. Geometry
             det_config = beamlines[self.instrument][str(physical_bank)]
             
-            # Geometry params for this image
             if self.goniometer_rotation.ndim == 3:
                 current_R = self.goniometer_rotation[img_key] if img_key < len(self.goniometer_rotation) else self.goniometer_rotation[-1]
             else:
@@ -711,36 +663,27 @@ class Peaks:
                 else:
                     current_angles = self.goniometer_angles_raw
 
-            # 4. Finder Info
             pre_coords = None
             if finder_algorithm == "sparse_rbf":
                 coords = precomputed_peaks[img_key]
                 pre_coords = (coords[:, 0], coords[:, 1])
             
             finder_info = (finder_algorithm, harvest_peaks_kwargs, pre_coords)
-            
-            # 5. Mask Info
-            mask_info = (
-                harvest_peaks_kwargs.get("mask_file"), 
-                harvest_peaks_kwargs.get('mask_rel_erosion_radius')
-            )
-            
-            # 6. Geo Info
+            mask_info = (harvest_peaks_kwargs.get("mask_file"), harvest_peaks_kwargs.get('mask_rel_erosion_radius'))
             geo_info = (current_R, current_angles, self.wavelength_min, self.wavelength_max)
-            
-            # 7. Viz Info
             viz_info = (visualize, file_prefix)
 
-            # Pack Task
             tasks.append((
                 img_key, img_label, physical_bank, self.ims[img_key], 
                 det_config, finder_info, integration_params, 
                 mask_info, geo_info, viz_info
             ))
 
-        # --- EXECUTE PARALLEL ---
         print(f"Starting parallel integration of {len(tasks)} images...")
-        with ProcessPoolExecutor() as executor:
+
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_process_single_image, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
@@ -748,7 +691,6 @@ class Peaks:
                     res, msg = future.result()
                     if show_progress: 
                         tqdm.write(msg)
-                    
                     if res:
                         two_theta.extend(res['two_theta'])
                         az_phi.extend(res['az_phi'])
@@ -762,7 +704,6 @@ class Peaks:
                         banks.extend(res['banks'])
                         if res['gonio_angles']:
                             gonio_angles_out.extend(res['gonio_angles'])
-                            
                 except Exception as e:
                     print(f"Worker failed: {e}")
 
@@ -771,6 +712,7 @@ class Peaks:
             radii, xyz_out, banks, 
             self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw
         )
+
 
     def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None):
         """
@@ -809,7 +751,9 @@ class Peaks:
                 sample_offset, ki_vec
             ))
             
-        with ProcessPoolExecutor() as executor:
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
             # Use tqdm for progress bar
             for future in tqdm(as_completed(futures), total=len(futures), desc="Predicting"):
@@ -836,10 +780,6 @@ class Peaks:
         file_prefix=None,
         found_peaks_file=None 
     ):
-        """
-        Integrates predicted peaks using parallel processing.
-        Includes metric calculation against found peaks (KDTree matching).
-        """
         h, k, l = [], [], []
         intensity, sigma = [], []
         tt, az = [], []
@@ -847,7 +787,6 @@ class Peaks:
         banks = []
         xyz = []
 
-        # Load Found Peaks (Main Process)
         found_peaks_xyz = None
         found_peaks_bank = None
         if found_peaks_file is not None:
@@ -878,7 +817,6 @@ class Peaks:
             except Exception as e:
                 print(f"Failed to load found peaks: {e}")
 
-        # Prepare Parallel Tasks
         tasks = []
         fname_clean = os.path.basename(self.filename)
         
@@ -886,9 +824,13 @@ class Peaks:
             physical_bank = self.bank_mapping.get(bank, bank)
             det_config = beamlines[self.instrument][str(physical_bank)]
             
-            # Pack metrics info (can be large, but shared memory handles it)
+            # UPDATED: Generate nice labels for visualization
+            img_label = self.get_image_label(bank)
+            viz_label = f"{img_label}_bank{physical_bank}"
+            
             metrics_info = (found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec)
-            viz_info = (create_visualizations, file_prefix, fname_clean)
+            # Pass viz_label instead of fname_clean
+            viz_info = (create_visualizations, file_prefix, viz_label)
             
             tasks.append((
                 bank, self.ims[bank], peaks, det_config, 
@@ -896,8 +838,10 @@ class Peaks:
             ))
 
         print(f"Integrating {len(tasks)} banks in parallel...")
-        
-        with ProcessPoolExecutor() as executor:
+       
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
