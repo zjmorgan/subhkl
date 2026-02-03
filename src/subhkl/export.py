@@ -92,11 +92,8 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "peaks/azimuthal",
             "peaks/intensity",
             "peaks/sigma",
-<<<<<<< HEAD
             "peaks/radius",  # Added radius to merge keys
             "peaks/xyz",
-=======
->>>>>>> origin/main
         ]
         copy_keys = [
             "goniometer/axes",

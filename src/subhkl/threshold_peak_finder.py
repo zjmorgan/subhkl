@@ -307,16 +307,7 @@ class ThresholdingPeakFinder:
 
         if self.show_steps:
             plt.imshow(im, norm=self.show_scale, cmap="binary")
-<<<<<<< HEAD
             plt.scatter(refined_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
-=======
-            plt.scatter(
-                contour_centers[:, 0],
-                contour_centers[:, 1],
-                edgecolors="red",
-                facecolors="none",
-            )
->>>>>>> origin/main
             plt.title("Peaks")
             plt.show()
             plt.savefig("peaks.png")
