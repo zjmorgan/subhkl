@@ -25,7 +25,7 @@ class SparseRBFPeakFinder:
         min_sigma: float = 0.2,         # Search sub-pixel to identify artifacts
         max_sigma: float = 10.0,
         max_peaks: int = 500,           
-        tiles: tuple = None,            
+        chunk_size: int = 1024,
         show_steps: bool = False,
         show_scale: str = "linear"
     ):
@@ -35,6 +35,7 @@ class SparseRBFPeakFinder:
         self.min_sigma = min_sigma
         self.max_sigma = max_sigma
         self.max_peaks = max_peaks
+        self.chunk_size = chunk_size
         self.show_steps = show_steps
         
         # Settings
@@ -270,7 +271,7 @@ class SparseRBFPeakFinder:
             window_coords_arr = np.array(window_coords, dtype=np.int32)
             
             # --- Solver Setup ---
-            chunk_size = 128
+            chunk_size = self.chunk_size
             all_results = []
             
             if level_idx == 0:

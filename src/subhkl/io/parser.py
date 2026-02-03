@@ -229,6 +229,7 @@ def finder(
     sparse_rbf_min_sigma: float = 0.5,  # Min spot size (pixels)
     sparse_rbf_max_sigma: float = 10.0, # Max spot size (pixels)
     sparse_rbf_max_peaks: int = 500,    # Max peaks per bank
+    sparse_rbf_chunk_size: int = 4096,  # reduce if OOM
     sparse_rbf_tile_rows: int = 2,      # NEW: Number of row divisions for tiling
     sparse_rbf_tile_cols: int = 2,      # NEW: Number of col divisions for tiling
 ):
@@ -268,6 +269,7 @@ def finder(
             "min_sigma": sparse_rbf_min_sigma,
             "max_sigma": sparse_rbf_max_sigma,
             "max_peaks": sparse_rbf_max_peaks,
+            "chunk_size": sparse_rbf_chunk_size,
             "show_steps": show_steps,
             "show_scale": "linear",
             "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
