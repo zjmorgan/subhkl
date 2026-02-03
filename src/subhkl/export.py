@@ -185,3 +185,23 @@ class MTZExporter:
 
         mtz.set_data(data)
         mtz.write_to_file(filename)
+
+class ImageStackMerger(BaseConcatenateMerger):
+    def __init__(self, h5_files):
+        """
+        Merges reduced image HDF5 files into a single stack for batch processing.
+        """
+        merge_keys = [
+            "images",              # The stack of 2D images
+            "goniometer/angles",   # Per-image angles
+            "bank_ids",            # Per-image detector ID
+        ]
+
+        # Keys that should be identical across all files (metadata)
+        copy_keys = [
+            "goniometer/axes",
+            "goniometer/names",
+            "instrument/wavelength",
+            "instrument/name",
+        ]
+        super().__init__(h5_files, copy_keys, merge_keys)

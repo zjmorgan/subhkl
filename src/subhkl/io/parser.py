@@ -5,8 +5,10 @@ import typer
 import uuid
 import os
 import re
+import glob
 
 from subhkl.export import FinderConcatenateMerger, MTZExporter
+from subhkl.export import FinderConcatenateMerger, MTZExporter, ImageStackMerger
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
@@ -960,5 +962,108 @@ def mtz_exporter(
     algorithm.write_mtz(output_mtz_filename)
 
 
+@app.command()
+def reduce(
+    nexus_filename: str,
+    output_filename: str,
+    instrument: str,
+    wavelength_min: float = typer.Option(None, help="Override min wavelength"),
+    wavelength_max: float = typer.Option(None, help="Override max wavelength"),
+):
+    """
+    Reduces a single Nexus event file to a dense image stack HDF5 file.
+    Output shape: (N_banks, Height, Width).
+    """
+    print(f"Reducing {nexus_filename} -> {output_filename}")
+
+    # 1. Load Data using existing Peaks class logic
+    # This handles loading the event data into 2D histograms (self.ims)
+    # and parsing the goniometer/wavelength from the Nexus file.
+    peaks_handler = Peaks(
+        nexus_filename,
+        instrument,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max
+    )
+
+    if not peaks_handler.ims:
+        print("Warning: No images found in file.")
+        return
+
+    # 2. Stack Data for Batch Processing
+    # Ensure consistent ordering of banks
+    sorted_banks = sorted(peaks_handler.ims.keys())
+
+    # Stack images: (N_banks, H, W)
+    # Note: Assumes all banks have the same shape, which is standard for one instrument.
+    image_stack = np.stack([peaks_handler.ims[b] for b in sorted_banks])
+
+    bank_ids = np.array(sorted_banks, dtype=np.int32)
+    n_images = len(sorted_banks)
+
+    # 3. Prepare Metadata
+    # Repeat angles for each bank so they stay aligned after merging
+    if peaks_handler.goniometer_angles_raw is not None:
+        # shape (1, 3) -> (N_banks, 3)
+        angles_repeated = np.tile(peaks_handler.goniometer_angles_raw, (n_images, 1))
+    else:
+        angles_repeated = np.zeros((n_images, 3)) # Fallback
+
+    if peaks_handler.goniometer_axes_raw is not None:
+        axes = np.array(peaks_handler.goniometer_axes_raw)
+    else:
+        axes = np.array([0.0, 1.0, 0.0]) # Fallback
+
+    # 4. Save to HDF5
+    # We use LZF compression for speed as these are intermediate training files
+    with h5py.File(output_filename, "w") as f:
+        # Data
+        f.create_dataset("images", data=image_stack, compression="lzf")
+        f.create_dataset("bank_ids", data=bank_ids)
+
+        # Metadata (Repeated per image)
+        f.create_dataset("goniometer/angles", data=angles_repeated)
+
+        # Metadata (Constant)
+        f.create_dataset("goniometer/axes", data=axes)
+
+        if peaks_handler.goniometer_names_raw:
+            dt = h5py.string_dtype(encoding='utf-8')
+            f.create_dataset("goniometer/names", data=peaks_handler.goniometer_names_raw, dtype=dt)
+
+        # Save Wavelength (Min/Max)
+        # Using format compatible with downstream indexer
+        wl = [peaks_handler.wavelength_min, peaks_handler.wavelength_max]
+        f.create_dataset("instrument/wavelength", data=wl)
+
+        # Save Instrument Name
+        f.attrs["instrument"] = instrument
+
+    print(f"Saved {n_images} banks to {output_filename}")
+
+@app.command()
+def merge_images(
+    input_pattern: str = typer.Argument(..., help="Glob pattern for reduced .h5 files (e.g. 'reduced/*.h5')"),
+    output_filename: str = typer.Argument(..., help="Output master .h5 file"),
+):
+    """
+    Merges multiple reduced HDF5 image files into a single master dataset.
+    """
+    # 1. Resolve file list
+    # Sort is crucial to ensure scan order (time/angle) is preserved
+    h5_files = sorted(glob.glob(input_pattern))
+    
+    if not h5_files:
+        print(f"No files found matching: {input_pattern}")
+        raise typer.Exit(code=1)
+        
+    print(f"Found {len(h5_files)} files. Merging...")
+
+    # 2. Merge
+    # Uses the new ImageStackMerger class in export.py
+    merger = ImageStackMerger(h5_files)
+    merger.merge(output_filename)
+    
+    print(f"Successfully created {output_filename}")
 if __name__ == "__main__":
     app()
