@@ -1,0 +1,17 @@
+env
+output.h5
+*.h5
+__pycache__
+*.pyc
+build
+dist
+*.egg-info
+*.egg
+.vscode
+.idea
+.env
+.DS_Store
+*.so
+
+# NOTE: Do not add .git here. The Docker build (see Dockerfile lines 16-17)
+# requires the .git directory so that versioningit can compute versions.
