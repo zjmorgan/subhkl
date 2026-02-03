@@ -2,8 +2,11 @@ name: Docker build
 
 on:
   push:
+  pull_request:
+    types: [opened, synchronize, reopened]
     branches:
-      - '*'
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
