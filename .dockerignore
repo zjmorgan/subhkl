@@ -1,0 +1,14 @@
+env
+output.h5
+*.h5
+__pycache__
+*.pyc
+build
+dist
+*.egg-info
+*.egg
+.vscode
+.idea
+.env
+.DS_Store
+*.so
