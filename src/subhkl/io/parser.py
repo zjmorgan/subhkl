@@ -731,21 +731,51 @@ def peak_predictor(
         if "beam/ki_vec" in f_indexed:
             ki_vec = np.array(f_indexed["beam/ki_vec"])
             print(f"Using refined beam direction {ki_vec} in peak prediction.")
-
-        # Load Stored R (Prioritized!)
+        
         stored_R = None
         if "goniometer/R" in f_indexed:
-            stored_R = np.array(f_indexed["goniometer/R"])
-            if stored_R.ndim == 3:
-                stored_R = stored_R[0]
+            all_R = np.array(f_indexed["goniometer/R"])
+            
+            if "files" in f_indexed and "file_offsets" in f_indexed:
+                files_db = f_indexed["files"][()]
+                offsets = f_indexed["file_offsets"][()]
+                target_name = os.path.basename(filename)
+                
+                match_idx = -1
+                for i, fname_bytes in enumerate(files_db):
+                    fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
+                    if target_name in fname_str:
+                        match_idx = i
+                        break
+                
+                if match_idx >= 0 and all_R.ndim == 3:
+                     start_peak_idx = int(offsets[match_idx])
+                     if start_peak_idx < len(all_R):
+                         stored_R = all_R[start_peak_idx]
+                         print(f"Matched '{target_name}' to Run Index {match_idx}. Using R[{start_peak_idx}].")
+                         # --- NEW DEBUG ---
+                         trace = np.trace(stored_R)
+                         cos_theta = (trace - 1) / 2
+                         angle_deg = np.rad2deg(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
+                         print(f"  R Matrix Trace: {trace:.6f}")
+                         print(f"  Rotation Angle: {angle_deg:.4f} deg (Axis-Angle Magnitude)")
+                         print(f"  R Determinant:  {np.linalg.det(stored_R):.6f}")
+                         # -----------------
+                     else:
+                         print(f"Warning: Offset {start_peak_idx} out of bounds for R (len {len(all_R)}). Using R[0].")
+                         stored_R = all_R[0]
+                else:
+                    print(f"Warning: File '{target_name}' not found in index or R is not 3D. Using R[0].")
+                    if all_R.ndim == 3: stored_R = all_R[0]
+                    else: stored_R = all_R
+            else:
+                 if all_R.ndim == 3: stored_R = all_R[0]
+                 else: stored_R = all_R
 
-    # 1. Initialize Peaks
     peaks = Peaks(filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1])
 
-    # 2. Prioritize: Stored R > Refined Offsets > Nominal
     if stored_R is not None:
         peaks.goniometer_rotation = stored_R
-        print("Using stored goniometer R matrix from indexed file.")
     elif refined_offsets is not None:
         if peaks.goniometer_axes_raw is not None and peaks.goniometer_angles_raw is not None:
             new_angles = np.array(peaks.goniometer_angles_raw) + refined_offsets
@@ -755,11 +785,9 @@ def peak_predictor(
         else:
             print("Warning: Refined offsets found but raw goniometer data not available. Using default R.")
 
-    # 3. Construct RUB using the resolved R
     R_used = peaks.goniometer_rotation
     RUB = R_used @ U @ B
 
-    # Pass RUB directly to predict_peaks
     peak_dict = peaks.predict_peaks(
         a, b, c, alpha, beta, gamma, d_min, RUB, space_group=space_group, sample_offset=sample_offset, ki_vec=ki_vec,
     )

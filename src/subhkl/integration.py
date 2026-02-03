@@ -998,7 +998,6 @@ class Peaks:
         # Return axes (global) and angles (per peak)
         return DetectorPeaks(R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, radii, xyz_out, banks, self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw)
 
-
     def integrate(
         self,
         peak_dict,
@@ -1022,6 +1021,7 @@ class Peaks:
         xyz = []
 
         found_peaks_xyz = None
+        found_peaks_bank = None
         if found_peaks_file is not None:
             try:
                 import h5py
@@ -1043,12 +1043,20 @@ class Peaks:
                             start = int(offsets[match_idx])
                             end = int(offsets[match_idx+1]) if match_idx < len(files_db) - 1 else f["peaks/xyz"].shape[0]
                             found_peaks_xyz = f["peaks/xyz"][start:end]
+                            if "bank" in f:
+                                found_peaks_bank = f["bank"][start:end]
+                            elif "peaks/bank" in f:
+                                found_peaks_bank = f["peaks/bank"][start:end]
                             print(f"Loaded {len(found_peaks_xyz)} peaks for comparison.")
                         else:
                             print(f"Warning: Current file '{target_name}' not found in {found_peaks_file}.")
                     elif "peaks/xyz" in f:
                         print("Warning: 'files' index not found. Loading ALL peaks.")
                         found_peaks_xyz = f["peaks/xyz"][()]
+                        if "bank" in f:
+                            found_peaks_bank = f["bank"][()]
+                        elif "peaks/bank" in f:
+                            found_peaks_bank = f["peaks/bank"][()]
             except Exception as e:
                 print(f"Failed to load found peaks: {e}")
 
@@ -1065,41 +1073,85 @@ class Peaks:
                 lab_coords_T = lab_coords_T.T
             lab_coords = lab_coords_T.T 
 
-            # --- METRIC CALCULATION BLOCK (UPDATED) ---
+            # --- METRIC CALCULATION BLOCK (2D PIXEL SPACE + DIRECTION CHECK) ---
             metrics_str = ""
             if found_peaks_xyz is not None and len(centers) > 0:
-                f_row, f_col = det.lab_to_pixel(found_peaks_xyz[:,0], found_peaks_xyz[:,1], found_peaks_xyz[:,2], clip=False)
-                on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
                 
-                if np.sum(on_sensor) > 0:
-                    f_xyz_valid = found_peaks_xyz[on_sensor]
-                    f_row_valid = f_row[on_sensor]
-                    f_col_valid = f_col[on_sensor]
+                # 1. Filter Found Peaks
+                f_xyz_valid = np.array([])
+                
+                if found_peaks_bank is not None:
+                    mask_bank = (found_peaks_bank == bank)
+                    f_xyz_valid = found_peaks_xyz[mask_bank]
+                else:
+                    # Fallback with Directionality Check
+                    if sample_offset is None: s_off = np.zeros(3)
+                    else: s_off = sample_offset
                     
-                    # Match Predicted Peaks (p) to Nearest Found Peak (f)
-                    p_xyz = lab_coords 
+                    det_vec = det.center - s_off
+                    f_vecs = found_peaks_xyz - s_off
                     
-                    tree = scipy.spatial.KDTree(f_xyz_valid)
-                    dists, idxs = tree.query(p_xyz) 
-                    matched_f_xyz = f_xyz_valid[idxs]
+                    # Dot product > 0 ensures "front" side
+                    dots = np.dot(f_vecs, det_vec)
+                    front_mask = dots > 0
+                    
+                    f_xyz_front = found_peaks_xyz[front_mask]
+                    
+                    if len(f_xyz_front) > 0:
+                        f_row, f_col = det.lab_to_pixel(f_xyz_front[:,0], f_xyz_front[:,1], f_xyz_front[:,2], clip=False)
+                        on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                        f_xyz_valid = f_xyz_front[on_sensor]
+                
+                if len(f_xyz_valid) > 0:
+                    # 2. Project to Pixels
+                    f_row_valid, f_col_valid = det.lab_to_pixel(f_xyz_valid[:,0], f_xyz_valid[:,1], f_xyz_valid[:,2], clip=False)
+                    on_panel_found = (f_row_valid >= 0) & (f_row_valid < det.n) & (f_col_valid >= 0) & (f_col_valid < det.m)
+                    
+                    if np.sum(on_panel_found) > 0:
+                        f_row_valid = f_row_valid[on_panel_found]
+                        f_col_valid = f_col_valid[on_panel_found]
+                        f_xyz_valid = f_xyz_valid[on_panel_found]
+                        
+                        f_pixels = np.stack([f_row_valid, f_col_valid], axis=1) # (N, 2)
+                        p_pixels = np.stack([bank_i, bank_j], axis=1)           # (M, 2)
+                        
+                        # 3. KDTree in Pixel Space
+                        tree = scipy.spatial.KDTree(p_pixels)
+                        dists_pix, idxs = tree.query(f_pixels)
+                        
+                        # 4. Filter by Pixel Distance
+                        PIXEL_TOLERANCE = 20.0
+                        valid_matches = dists_pix < PIXEL_TOLERANCE
+                        
+                        if np.sum(valid_matches) > 0:
+                            matched_idxs = idxs[valid_matches]
+                            
+                            matched_h = bank_h[matched_idxs]
+                            matched_k = bank_k[matched_idxs]
+                            matched_l = bank_l[matched_idxs]
+                            matched_wl = bank_wl[matched_idxs]
+                            f_xyz_matched = f_xyz_valid[valid_matches]
 
-                    # Use COMMON PHYSICS from utils.py
-                    # We compare the MATCHED found peaks against the Predicted HKLs + RUB
-                    d_err, ang_err = calculate_angular_error(
-                        matched_f_xyz, 
-                        bank_h, bank_k, bank_l, bank_wl, 
-                        RUB, sample_offset, ki_vec
-                    )
-                    
-                    med_ang = np.median(ang_err)
-                    med_d = np.median(d_err)
-                    
-                    metrics_str = f"Median Error: Ang={med_ang:.2f} deg, d={med_d:.3f} A"
-                    
-                    print(f"--- Visual Metrics for Bank {bank} ---")
-                    print(f"  Angular Error: Median={med_ang:.4f} deg")
-                    print(f"  D-Space Error: Median={med_d:.4f} A")
-                    print("-------------------------------------")
+                            # 5. Calculate Physics Metrics
+                            d_err, ang_err = calculate_angular_error(
+                                f_xyz_matched, 
+                                matched_h, matched_k, matched_l, matched_wl, 
+                                RUB, sample_offset, ki_vec
+                            )
+                            
+                            med_ang = np.median(ang_err)
+                            med_d = np.median(d_err)
+                            
+                            metrics_str = f" | Med Error: $\\Delta\\theta$={med_ang:.2f}$^\\circ$, $\\Delta d$={med_d:.3f}$\\AA$"
+                            
+                            print(f"--- Visual Metrics for Bank {bank} ---")
+                            print(f"  Angular Error: Median={med_ang:.4f} deg")
+                            print(f"  D-Space Error: Median={med_d:.4f} A")
+                            print("-------------------------------------")
+                        else:
+                            print(f"--- Visual Metrics for Bank {bank} ---")
+                            print("  No matches found within 20px tolerance.")
+                            print("-------------------------------------")
 
             if integration_params.get("integration_mask_file") is not None:
                 mask = np.array(Image.open(integration_params["integration_mask_file"]))
@@ -1151,26 +1203,40 @@ class Peaks:
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
                 axes[0].imshow(1 + self.ims[bank], norm="log", cmap="binary", origin='lower')
-                axes[0].set_title(f"Bank {bank}: Predicted vs Found")
+                
+                # Update title to include filename
+                fname_clean = os.path.basename(self.filename)
+                axes[0].set_title(f"{fname_clean}: Bank {bank}")
 
-                # Set Label Below Plot
-                if metrics_str:
-                    axes[0].set_xlabel(metrics_str, fontsize=9, color='blue')
-
-                axes[0].scatter(bank_j, bank_i, marker="1", c="blue", label="Predicted", s=40)
+                label_pred = f"Predicted{metrics_str}"
+                axes[0].scatter(bank_j, bank_i, marker="1", c="blue", label=label_pred, s=40)
                 
                 if found_peaks_xyz is not None:
-                    # Reuse calculated f_row, f_col, from metric block if available
-                    # For safety, recalculate logic for plotting scope to ensure filtered properly
-                    f_row, f_col = det.lab_to_pixel(found_peaks_xyz[:,0], found_peaks_xyz[:,1], found_peaks_xyz[:,2], clip=False)
-                    in_bounds = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                    # Logic to plot Found Peaks
+                    f_xyz_plot = np.array([])
+                    if found_peaks_bank is not None:
+                        mask_bank = (found_peaks_bank == bank)
+                        f_xyz_plot = found_peaks_xyz[mask_bank]
+                    else:
+                        if sample_offset is None: s_off = np.zeros(3)
+                        else: s_off = sample_offset
+                        det_vec = det.center - s_off
+                        f_vecs = found_peaks_xyz - s_off
+                        dots = np.dot(f_vecs, det_vec)
+                        front_mask = dots > 0
+                        f_xyz_front = found_peaks_xyz[front_mask]
+                        if len(f_xyz_front) > 0:
+                            f_row, f_col = det.lab_to_pixel(f_xyz_front[:,0], f_xyz_front[:,1], f_xyz_front[:,2], clip=False)
+                            on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                            f_xyz_plot = f_xyz_front[on_sensor]
                     
-                    if np.any(in_bounds):
-                        f_row_valid = f_row[in_bounds]
-                        f_col_valid = f_col[in_bounds]
-                        axes[0].scatter(f_col_valid, f_row_valid, s=60, facecolors='none', edgecolors='lime', linewidths=1.5, label='Found')
+                    if len(f_xyz_plot) > 0:
+                        f_row_valid, f_col_valid = det.lab_to_pixel(f_xyz_plot[:,0], f_xyz_plot[:,1], f_xyz_plot[:,2], clip=False)
+                        in_bounds = (f_row_valid >= 0) & (f_row_valid < det.n) & (f_col_valid >= 0) & (f_col_valid < det.m)
+                        if np.any(in_bounds):
+                            axes[0].scatter(f_col_valid[in_bounds], f_row_valid[in_bounds], s=60, facecolors='none', edgecolors='lime', linewidths=1.5, label='Found')
                 
-                axes[0].legend(loc='upper right', fontsize='x-small')
+                axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=False, ncol=1)
 
                 for p_i, p_j, p_h, p_k, p_l in zip(bank_i, bank_j, bank_h, bank_k, bank_l):
                     is_zone_axis = (p_h == 0) or (p_k == 0) or (p_l == 0)
@@ -1201,7 +1267,7 @@ class Peaks:
                 output_file = str(bank) + "_int.png"
                 if file_prefix is not None:
                     output_file = file_prefix + output_file
-                fig.savefig(output_file)
+                fig.savefig(output_file, bbox_inches='tight')
                 plt.close(fig)
 
             h.extend(bank_h[keep])
