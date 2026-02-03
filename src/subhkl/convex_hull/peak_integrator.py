@@ -6,6 +6,12 @@ from scipy.spatial import Delaunay
 from scipy.stats import zscore
 from scipy.optimize import minimize
 
+# Try to import QhullError for specific catching, fallback to ValueError/Exception
+try:
+    from scipy.spatial.qhull import QhullError
+except ImportError:
+    class QhullError(Exception): pass
+
 from subhkl.convex_hull.offset_mask import OffsetMask
 from subhkl.convex_hull.region_grower import RegionGrower
 
@@ -135,7 +141,12 @@ class PeakIntegrator:
 
                 # Discard peak if SNR is too low
                 if peak_intensity is not None:
-                    snr = peak_intensity / sigma
+                    # FIX: Guard against division by zero if sigma is 0
+                    if sigma > 1e-9:
+                        snr = peak_intensity / sigma
+                    else:
+                        snr = 0.0
+
                     if snr < self.min_peak_snr:
                         bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
                         is_peak[i_peak] = False
@@ -304,6 +315,16 @@ class PeakIntegrator:
 
             # Build masks and hulls
             masks, hulls = self._make_peak_hulls_and_masks(core_points, im_shape)
+            
+            # Check for failure (degenerate hulls)
+            if masks is None:
+                peak_masks.append(None)
+                inner_masks.append(None)
+                bg_masks.append(None)
+                peak_hulls.append([None]*4)
+                is_peak[peak_idx] = False # Mark as invalid
+                continue
+
             peak_hulls.append(hulls)
             peak_mask, inner_mask, bg_mask = masks
             peak_masks.append(peak_mask)
@@ -600,24 +621,25 @@ class PeakIntegrator:
         global_max_idx = (r_start + max_idx_2d[0].item(), c_start + max_idx_2d[1].item())
         return global_max_idx
 
+
     @staticmethod
     def _remove_outliers(data, threshold=3.0):
         """
         Remove outliers from the dataset based on z-score.
-
-        Parameters
-        ----------
-        data:
-            Input point data of shape (n_samples, 2).
-        threshold:
-            Z-score threshold for outlier detection.
-
-        Return
-        ------
-        filtered_data:
-            Data with outliers removed.
+        Manually calculates z-scores to avoid scipy RuntimeWarnings on constant data.
         """
-        z_scores = np.abs(zscore(data, axis=0))
+        if len(data) < 2:
+            return data
+            
+        mean = np.mean(data, axis=0)
+        std = np.std(data, axis=0)
+        
+        # Avoid division by zero: if std is 0, the data is constant, so z-score is 0 (keep point)
+        # We replace 0 with 1 in the divisor to perform valid division, yielding 0/1 = 0
+        safe_std = np.where(std == 0, 1.0, std)
+        
+        z_scores = np.abs((data - mean) / safe_std)
+        
         return data[(z_scores < threshold).all(axis=1)]
 
     @staticmethod
@@ -685,8 +707,16 @@ class PeakIntegrator:
             ((peak_mask, inner_mask, bg_mask), (core_hull, peak_hull, inner_hull,
               outer_hull)) giving the masks and hulls for the peak
         """
+        # Ensure we have enough points for a 2D hull
+        if len(core_points) < 3:
+            return None, None
+
         # Adjust the core hall to make sure it's not too big or too small
-        core_hull = ConvexHull(core_points)
+        try:
+            core_hull = ConvexHull(core_points)
+        except (QhullError, ValueError, IndexError):
+            # Fail gracefully on degenerate peaks (lines, points)
+            return None, None
 
         core_scale = 0.0
         core_hull = self._expand_convex_hull(core_hull, core_scale)
