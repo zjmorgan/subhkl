@@ -2,6 +2,9 @@ name: Docker build
 
 on:
   push:
+    branches:
+      - main
+      - '[0-9]+-*'  # Feature branches like 21-unit-tests-and-post-merge-roundoff-part-2
 
 env:
   IMAGE_NAME: zjmorgan/subhkl
