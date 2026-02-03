@@ -2,11 +2,14 @@ name: Docker build
 
 on:
   push:
-    branches:
-      - '**'
   pull_request:
+    types: [opened, synchronize, reopened]
     branches:
-      - '**'
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   IMAGE_NAME: zjmorgan/subhkl
