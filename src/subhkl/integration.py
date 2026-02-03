@@ -18,10 +18,11 @@ import scipy.ndimage
 import scipy.spatial
 import cv2
 
-# Ensure we have tqdm for progress
+# Ensure we have tqdm for progress bars
 try:
     from tqdm import tqdm
 except ImportError:
+    # Fallback if tqdm is not installed
     tqdm = lambda x, **kwargs: x
 
 from subhkl.config import (
@@ -37,7 +38,6 @@ from subhkl.detector import Detector
 from subhkl.spacegroup import is_systematically_absent
 from subhkl.utils import predict_reflections_on_panel, calculate_angular_error
 
-# ... [DetectorPeaks and IntegrationResult namedtuples remain unchanged] ...
 DetectorPeaks = namedtuple(
     "DetectorPeaks",
     [
@@ -73,10 +73,14 @@ IntegrationResult = namedtuple(
     ]
 )
 
-# --- WORKER FUNCTIONS ---
+# ==============================================================================
+# WORKER FUNCTIONS (Multiprocessing)
+# ==============================================================================
 
 def _run_harvest_local_max(im, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False, **kwargs):
-    # (Same as before)
+    """
+    Worker for finding peak candidates using local maxima search.
+    """
     if normalize:
         blur = scipy.ndimage.gaussian_filter(im, 4)
         div = scipy.ndimage.gaussian_filter(im, 60)
@@ -94,7 +98,9 @@ def _run_harvest_local_max(im, max_peaks=200, min_pix=50, min_rel_intensity=0.5,
     return coords[:, 0], coords[:, 1]
 
 def _run_harvest_thresholding(im, **kwargs):
-    # (Same as before)
+    """
+    Worker for finding peak candidates using adaptive thresholding.
+    """
     valid_keys = [
         'noise_cutoff_quantile', 'min_peak_dist_pixels', 'blur_kernel_sigma', 
         'open_kernel_size_pixels', 'mask_file', 'mask_rel_erosion_radius',
@@ -109,8 +115,10 @@ def _process_single_image(
     img_key, img_label, physical_bank, image, det_config,
     finder_info, integration_params, mask_info, geometry_info, viz_info 
 ):
-    # (Same implementation as previous step - handles get_detector_peaks logic)
-    # ... [Code omitted for brevity, identical to previous turn] ...
+    """
+    Worker function to process a single image in a separate process.
+    Performs peak finding, integration, and optional visualization.
+    """
     # Unpack tuple arguments
     algo, harvest_kwargs, pre_coords = finder_info
     mask_file, erosion = mask_info
@@ -119,6 +127,7 @@ def _process_single_image(
 
     det = Detector(det_config)
     
+    # 1. Find Peaks
     if algo == 'sparse_rbf':
         i, j = pre_coords
     elif algo == 'peak_local_max':
@@ -130,6 +139,7 @@ def _process_single_image(
         
     centers = np.stack([i, j], axis=-1)
     
+    # 2. Setup Mask
     if mask_file is not None:
         mask_im = np.array(Image.open(mask_file))
         if erosion:
@@ -141,6 +151,8 @@ def _process_single_image(
     else:
         mask = np.full(image.shape, True)
         
+    # 3. Integration Setup (Sigma Override)
+    # Rebuild integrator from params to avoid sharing state
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
     
     if integration_params.get("region_growth_minimum_sigma") is not None:
@@ -149,14 +161,19 @@ def _process_single_image(
         n_sigma = integration_params["region_growth_minimum_sigma"]
         integrator.region_grower.min_intensity = mean + n_sigma * std
 
+    # 4. Integrate
     int_result, hulls = integrator.integrate_peaks(physical_bank, image, centers, return_hulls=True)
     
     bank_intensity = np.array([res[3] for res in int_result])
     bank_sigma = np.array([res[5] for res in int_result])
+    
+    # Relaxed Filter: Keep valid intensity (SparseRBF mask handles edges)
     keep = [val is not None for val in bank_intensity]
     
+    # 5. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
+        # Force Agg backend to avoid thread issues
         current_backend = plt.get_backend()
         if current_backend.lower() != 'agg': plt.switch_backend('Agg')
         try:
@@ -182,6 +199,7 @@ def _process_single_image(
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
 
+    # 6. Gather Results
     if sum(keep) > 0:
         i, j = i[keep], j[keep]
         intensities = bank_intensity[keep]
@@ -191,6 +209,8 @@ def _process_single_image(
         if lab_coords_T.ndim == 1: lab_coords = lab_coords_T[np.newaxis, :]
         else: lab_coords = lab_coords_T.T
         num = len(tt)
+        
+        # Radii Calculation
         radii = []
         kept_indices = np.where(keep)[0]
         tt_rad, az_rad = np.deg2rad(tt), np.deg2rad(az)
@@ -207,6 +227,7 @@ def _process_single_image(
             v_vecs = np.stack([np.sin(v_tt_r) * np.cos(v_az_r), np.sin(v_tt_r) * np.sin(v_az_r), np.cos(v_tt_r)], axis=1)
             dots = np.clip(v_vecs @ v_centers[k_idx], -1.0, 1.0)
             radii.append(np.max(np.arccos(dots)))
+            
         res = {
             'two_theta': tt.tolist(), 'az_phi': az.tolist(), 'R': [gonio_R] * num,
             'lamda_min': [wl_min] * num, 'lamda_max': [wl_max] * num,
@@ -229,7 +250,10 @@ def _predict_single_bank(
     wavelength_min, wavelength_max, 
     sample_offset, ki_vec
 ):
-    """Worker for predict_peaks"""
+    """
+    Worker function for predicting peaks on a single detector bank.
+    Calculates reflection positions based on orientation matrix (RUB).
+    """
     det = Detector(det_config)
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
         detector=det, h=h, k=k, l=l, RUB=RUB,
@@ -243,14 +267,18 @@ def _predict_single_bank(
 def _integrate_single_bank(
     bank_id,
     image,
-    peaks, # (i, j, h, k, l, wl)
+    peaks, 
     det_config,
     integration_params,
     integration_method,
     viz_info,
-    metrics_info # (found_xyz, found_bank, RUB, sample_offset, ki_vec)
+    metrics_info 
 ):
-    """Worker for integrate"""
+    """
+    Worker function for integrating predicted peaks on a single detector bank.
+    Includes metric calculation against found peaks and visualization.
+    """
+    # Unpack predicted peaks (i, j, h, k, l, wl)
     bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
     centers = np.stack([bank_i, bank_j], axis=-1)
     
@@ -262,18 +290,19 @@ def _integrate_single_bank(
     else: lab_coords_T = lab_coords_T.T
     lab_coords = lab_coords_T.T 
 
-    # --- METRICS ---
+    # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
     found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec = metrics_info
     
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
         
+        # Filter found peaks relevant to this bank
         if found_peaks_bank is not None:
             mask_bank = (found_peaks_bank == bank_id)
             f_xyz_valid = found_peaks_xyz[mask_bank]
         else:
-            # Directionality Fallback
+            # Fallback: Directionality check
             s_off = sample_offset if sample_offset is not None else np.zeros(3)
             det_vec = det.center - s_off
             f_vecs = found_peaks_xyz - s_off
@@ -365,22 +394,16 @@ def _integrate_single_bank(
         axes[0].set_title(f"{filename_base}: Bank {bank_id}")
         
         label_pred = f"Predicted{metrics_str}"
-        # Filter plotted points to match original centers (before mask filter) for context? 
-        # Or just plotted filtered. Let's plot filtered to match "Predicted".
-        # centers is already filtered.
         if len(centers) > 0:
             axes[0].scatter(centers[:, 1], centers[:, 0], marker="1", c="blue", label=label_pred, s=40)
         
         # Plot Found Peaks (re-calc coords just for plot)
         if found_peaks_xyz is not None:
-             # (Reuse logic to project found peaks for viz)
-             # Omitted for brevity in worker, but ideally include if crucial. 
-             # Assuming "Predict" is main goal.
+             # Logic to re-plot 'found' peaks would be similar to above
              pass
 
         axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=False, ncol=1)
         
-        # Text labels
         for p_i, p_j, p_h, p_k, p_l in zip(centers[:,0], centers[:,1], bank_h, bank_k, bank_l):
             is_zone = (p_h == 0) or (p_k == 0) or (p_l == 0)
             is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
@@ -416,7 +439,6 @@ def _integrate_single_bank(
 
 
 class Peaks:
-    # ... [__init__, load_merged_h5, load_nexus, etc. unchanged] ...
     def __init__(
         self,
         filename: str,
@@ -426,7 +448,6 @@ class Peaks:
         wavelength_min: typing.Optional[float] = None,
         wavelength_max: typing.Optional[float] = None,
     ):
-        # (Same content)
         name, ext = os.path.splitext(filename)
         self.filename = filename  
         self.instrument = instrument
@@ -532,6 +553,32 @@ class Peaks:
                 self.bank_mapping[i] = int(bank_ids[i])
         return ims
 
+    def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
+        detectors = beamlines[self.instrument]
+        settings = reduction_settings[self.instrument]
+        ims = {}
+        with File(filename, "r") as f:
+            keys = []
+            banks = []
+            for key in f["/entry/"].keys():
+                match = re.match(r"bank(\d+).*", key)
+                if match is not None:
+                    keys.append(key)
+                    banks.append(int(match.groups()[0]))
+            for rel_key, bank in zip(keys, banks):
+                key = "/entry/" + rel_key + "/event_id"
+                array = f[key][()]
+                det = detectors.get(str(bank))
+                if det is not None:
+                    m, n, offset = det["m"], det["n"], det["offset"]
+                    bc = np.bincount(array - offset, minlength=m * n)
+                    if np.sum(bc) > 0:
+                        if settings.get('YAxisIsFastVaryingIndex'):
+                            ims[bank] = bc.reshape(m, n).T
+                        else:
+                            ims[bank] = bc.reshape(n, m)
+
+        return ims
     def get_detector(self, bank: int) -> Detector:
         if bank in self.bank_mapping:
             physical_bank = self.bank_mapping[bank]
@@ -710,7 +757,6 @@ class Peaks:
                 try:
                     res, msg = future.result()
                     if show_progress: 
-                        # tqdm handles printing better if we use write, or just let it mix
                         tqdm.write(msg)
                     
                     if res:
@@ -759,7 +805,8 @@ class Peaks:
             
         with ProcessPoolExecutor() as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
-            for future in as_completed(futures):
+            # Use tqdm for progress bar
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Predicting"):
                 try:
                     bank_id, res = future.result()
                     if res:
@@ -783,6 +830,10 @@ class Peaks:
         file_prefix=None,
         found_peaks_file=None 
     ):
+        """
+        Integrates predicted peaks using parallel processing.
+        Includes metric calculation against found peaks (KDTree matching).
+        """
         h, k, l = [], [], []
         intensity, sigma = [], []
         tt, az = [], []
@@ -843,7 +894,7 @@ class Peaks:
         with ProcessPoolExecutor() as executor:
             futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
             
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Integrator", disable=not show_progress):
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
                 try:
                     res = future.result()
                     if res:
@@ -857,9 +908,24 @@ class Peaks:
 
         return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
 
-    # ... [write_hdf5 remains unchanged] ...
-    def write_hdf5(self, output_filename, rotations, two_theta, az_phi, wavelength_mins, wavelength_maxes, intensity, sigma, radii, xyz, bank, gonio_axes=None, gonio_angles=None, gonio_names=None, instrument_wavelength=None):
-        # (Same as before)
+    def write_hdf5(
+        self,
+        output_filename: str,
+        rotations: list[float],
+        two_theta: list[float],
+        az_phi: list[float],
+        wavelength_mins: list[float],
+        wavelength_maxes: list[float],
+        intensity: list[float],
+        sigma: list[float],
+        radii: list[float], 
+        xyz: list[list[float]], 
+        bank: list[int],
+        gonio_axes: list[list[float]] = None,
+        gonio_angles: list[list[float]] = None,
+        gonio_names: list[str] = None,
+        instrument_wavelength: tuple[float, float] = None
+    ):
         with File(output_filename, "w") as f:
             f["wavelength_mins"] = wavelength_mins
             f["wavelength_maxes"] = wavelength_maxes
@@ -871,9 +937,16 @@ class Peaks:
             f["peaks/radius"] = radii
             f["peaks/xyz"] = xyz  
             f["bank"] = bank
-            if gonio_axes is not None: f["goniometer/axes"] = gonio_axes
-            if gonio_angles is not None: f["goniometer/angles"] = gonio_angles
+            
+            if gonio_axes is not None:
+                f["goniometer/axes"] = gonio_axes
+            
+            if gonio_angles is not None:
+                f["goniometer/angles"] = gonio_angles
+                
             if gonio_names is not None:
                 dt = h5py.string_dtype(encoding='utf-8')
                 f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
-            if instrument_wavelength is not None: f["instrument/wavelength"] = instrument_wavelength
+
+            if instrument_wavelength is not None:
+                f["instrument/wavelength"] = instrument_wavelength
