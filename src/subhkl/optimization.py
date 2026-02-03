@@ -16,7 +16,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
 
 from subhkl.detector import scattering_vector_from_angles
-from subhkl.spacegroup import generate_hkl_mask, get_centering
+from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
 
 try:
     from tqdm import trange
