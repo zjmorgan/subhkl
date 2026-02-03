@@ -8,12 +8,47 @@ import scipy.linalg
 import scipy.spatial
 import scipy.interpolate
 
-import jax
-import jax.numpy as jnp
-import jax.scipy.linalg as jscipy_linalg
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
-from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+import gemmi
+
+# Try to import JAX and evosax (optional dependencies). If JAX is not
+# available we provide minimal fallbacks so the rest of the module can
+# operate using NumPy-only semantics.
+try:
+    import jax
+    import jax.numpy as jnp
+    import jax.scipy.linalg as jscipy_linalg
+    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+
+    HAS_JAX = True
+    OPTIMIZATION_BACKEND = "jax"
+except Exception:
+    # Fallback shim: expose a minimal `jax`-like object and map jax.numpy
+    # to the installed NumPy so code using `jnp` still works.
+    import numpy as jnp
+
+    class _JaxShim:
+        """Minimal JAX shim for when JAX is not installed."""
+
+        @staticmethod
+        def jit(f=None, *, static_argnames=None, **kwargs):
+            if f is None:
+                return lambda fn: fn
+            return f
+
+    jax = _JaxShim()
+    DifferentialEvolution = None
+    PSO = None
+    CMA_ES = None
+    # Map jax.scipy.linalg calls to scipy.linalg when JAX missing
+    jscipy_linalg = scipy.linalg
+    # Sharding primitives unavailable without JAX
+    Mesh = None
+    NamedSharding = None
+    P = None
+    HAS_JAX = False
+    OPTIMIZATION_BACKEND = "numpy"
 
 from subhkl.detector import scattering_vector_from_angles
 from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
@@ -23,6 +58,21 @@ try:
 except ImportError:
     trange = None
 
+
+def require_jax():
+    """
+    Check if JAX is available and raise an informative error if not.
+
+    Raises
+    ------
+    ImportError
+        If JAX and evosax are not installed.
+    """
+    if not HAS_JAX:
+        raise ImportError(
+            "JAX and evosax are required for this functionality. "
+            'Install with: pip install -e ".[jax]" or pip install jax jaxlib evosax'
+        )
 
 # ==============================================================================
 # 1. HELPER FUNCTIONS: Parameter Mapping
@@ -192,7 +242,7 @@ def rotation_matrix_from_rodrigues_jax(w):
 # 2. VECTORIZED OBJECTIVE (JAX)
 # ==============================================================================
 
-class VectorizedObjectiveJAX:
+class VectorizedObjective:
     def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
@@ -977,12 +1027,12 @@ class FindUB:
 
         return np.concatenate([np.atleast_1d(p) for p in new_params])
 
-    def minimize_evosax(
+    def minimize(
         self,
-        strategy_name: str, 
-        population_size: int = 1000, 
-        num_generations: int = 100, 
-        n_runs: int = 1, 
+        strategy_name: str,
+        population_size: int = 1000,
+        num_generations: int = 100,
+        n_runs: int = 1,
         seed: int = 0,
         softness: float = 0.01,
         loss_method: str = 'gaussian',
@@ -1064,7 +1114,7 @@ class FindUB:
         if loss_method == "forward" and (d_min is None or d_max is None):
             raise ValueError(f"Need to supply --d_min and --d_max for loss_method=='forward'")
 
-        objective = VectorizedObjectiveJAX(
+        objective = VectorizedObjective(
             self.reciprocal_lattice_B(),
             kf_ki_input,
             self.peak_xyz,

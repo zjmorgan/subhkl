@@ -259,7 +259,7 @@ def finder(
             peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
         if peak_local_max_min_relative_intensity > 0:
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
-        peak_kwargs['normalize'] = peak_local_max_normalization
+        peak_kwargs["normalize"] = peak_local_max_normalization
     elif finder_algorithm == "thresholding":
         peak_kwargs.update({
             "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
@@ -295,7 +295,7 @@ def finder(
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
     }
 
     detector_peaks = peaks.get_detector_peaks(
@@ -303,7 +303,7 @@ def finder(
         integration_params,
         visualize=create_visualizations,
         show_progress=show_progress,
-        file_prefix=filename
+        file_prefix=filename,
     )
 
     peaks.write_hdf5(
@@ -373,9 +373,7 @@ def indexer(
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,
     strategy_name: str = typer.Option(
-        "DE", 
-        "--strategy", 
-        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+        "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
     sigma_init: float = typer.Option(
         None,
@@ -383,24 +381,17 @@ def indexer(
         help="Parameter exploration range."
     ),
     n_runs: int = typer.Option(
-        1, 
-        "--n-runs", "-n", 
-        help="Number of optimization runs with different seeds."
+        1, "--n-runs", "-n", help="Number of optimization runs with different seeds."
     ),
     population_size: int = typer.Option(
-        1000, 
-        "--population-size", "--popsize", 
-        help="Population size for each generation."
+        1000,
+        "--population-size",
+        "--popsize",
+        help="Population size for each generation.",
     ),
-    gens: int = typer.Option(
-        100, 
-        "--gens", 
-        help="Number of generations to run."
-    ),
+    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
     seed: int = typer.Option(
-        0, 
-        "--seed", 
-        help="Base seed for the first optimization run."
+        0, "--seed", help="Base seed for the first optimization run."
     ),
     softness: float = 0.1,
     refine_lattice: bool = typer.Option(
@@ -541,7 +532,7 @@ def indexer(
 
 @app.command()
 def indexer_using_file(
-    hdf5_peaks_filename: str, 
+    hdf5_peaks_filename: str,
     output_peaks_filename: str,
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,

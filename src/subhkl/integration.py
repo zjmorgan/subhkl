@@ -630,7 +630,7 @@ class Peaks:
         integration_params: dict,
         show_progress: bool = False,
         visualize: bool = False,
-        file_prefix: str | None = None
+        file_prefix: str | None = None,
     ) -> DetectorPeaks:
         """
         Get peaks in detector space using parallel processing for integration.

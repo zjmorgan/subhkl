@@ -1,6 +1,101 @@
 # subhkl
 Solving crystal orientation from Laue diffraction images
 
+## Installation
+
+### Option 1: Using uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package installer and resolver. If you don't have it installed:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then create a virtual environment and install the project:
+
+```bash
+uv venv env
+source env/bin/activate  # On Windows: env\Scripts\activate
+uv pip install -e .
+```
+
+### Option 2: Using standard Python venv
+
+```bash
+python -m venv env
+source env/bin/activate  # On Windows: env\Scripts\activate
+python -m pip install -e .
+```
+
+### Installing test dependencies
+
+```bash
+uv pip install -e ".[test]"  # with uv
+# or
+python -m pip install -e ".[test]"  # with pip
+```
+
+### Installing optional JAX dependencies
+
+JAX is an optional dependency used for GPU-accelerated optimization algorithms. The package automatically uses JAX when available, falling back to NumPy otherwise.
+
+**Installation options:**
+
+```bash
+# Standard installation (NumPy backend only - no GPU)
+pip install subhkl
+
+# CPU-only JAX acceleration (faster, but no GPU)
+pip install subhkl[jax]
+
+# NVIDIA GPU support (CUDA 12.x)
+pip install subhkl[jax-cuda12]
+
+# NVIDIA GPU support (CUDA 11.x - for older systems)
+pip install subhkl[jax-cuda11]
+
+# AMD GPU support (ROCm)
+pip install subhkl[jax-rocm]
+```
+
+**For development (editable install):**
+
+```bash
+# NumPy backend
+uv pip install -e .
+
+# JAX CPU
+uv pip install -e ".[jax]"
+
+# JAX with CUDA 12
+uv pip install -e ".[jax-cuda12]"
+
+# JAX with CUDA 11
+uv pip install -e ".[jax-cuda11]"
+
+# JAX with ROCm (AMD)
+uv pip install -e ".[jax-rocm]"
+```
+
+**Backend detection:**
+
+The optimization backend is automatically selected at import time. You can check which backend is being used:
+
+```python
+import subhkl
+
+print(f"Backend: {subhkl.OPTIMIZATION_BACKEND}")  # "jax" or "numpy"
+print(f"JAX available: {subhkl.HAS_JAX}")  # True or False
+
+# VectorizedObjective automatically uses the best available backend
+objective = subhkl.VectorizedObjective(...)  # JIT-compiled if JAX available
+```
+
+**Performance notes:**
+- **NumPy backend**: Works everywhere, no GPU required, good for small-scale problems
+- **JAX CPU**: ~2-5x faster than NumPy due to JIT compilation, no GPU required
+- **JAX GPU (CUDA/ROCm)**: ~10-100x faster for large-scale optimization, requires compatible GPU
+
 ## Running with docker
 
 Building:
@@ -82,3 +177,48 @@ python -m subhkl.io.parser finder data.h5 MANDI \
 python -m subhkl.io.parser finder data.h5 MANDI \
     --finder-algorithm sparse_rbf \
     --show-steps
+## Developer Guide
+
+### Running Tests
+
+```bash
+pytest -v
+```
+
+### Running Linting
+
+```bash
+ruff format --check && ruff check
+```
+
+To auto-fix formatting issues:
+
+```bash
+ruff format
+```
+
+### Publishing a Release
+
+The project uses automated publishing to PyPI and GitHub Container Registry when you create a semantic version tag.
+
+**Prerequisites:**
+
+1. **Set up PyPI trusted publishing** (one-time setup):
+   - Go to https://pypi.org/manage/account/publishing/
+   - Add GitHub as a trusted publisher for your repository
+   - Set the workflow filename to `publish.yaml`
+   - Set the environment name to `pypi`
+
+2. **Create and push a release tag**:
+
+```bash
+# Create a new version tag (e.g., v0.1.0)
+git tag v0.1.0
+
+# Push the tag to GitHub
+git push origin v0.1.0
+```
+
+This will automatically:
+- Build and publish the package to PyPI
+- Build and push a Docker image to `ghcr.io/zjmorgan/subhkl:v0.1.0` (and `latest`)
