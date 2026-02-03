@@ -20,29 +20,23 @@ def test_backend_flags_and_require_jax():
 
 
 def test_param_mapping_roundtrip():
-    from subhkl.optimization import _inverse_map_param, _forward_map_param
-
     bounds = [0.001, 0.1, 1.0]
     test_vals = [-2.0, -0.5, 0.0, 0.3, 0.9]
     for b in bounds:
         for v in test_vals:
-            norm = _inverse_map_param(v, b)
-            out = _forward_map_param(norm, b)
+            norm = optimization._inverse_map_param(v, b)
+            out = optimization._forward_map_param(norm, b)
             # Forward output must lie within [-bound, bound]
             assert out >= -b - 1e-12 and out <= b + 1e-12
 
 
 def test_get_lattice_system_simple_cubic():
-    from subhkl.optimization import get_lattice_system
-
-    final, num = get_lattice_system(10.0, 10.0, 10.0, 90.0, 90.0, 90.0, "P 4 3 2")
+    final, num = optimization.get_lattice_system(10.0, 10.0, 10.0, 90.0, 90.0, 90.0, "P 4 3 2")
     assert final == "Cubic"
     assert num == 1
 
 
 def test_findub_load_from_dict_and_reciprocal_B():
-    from subhkl.optimization import FindUB
-
     data = {}
     data["sample/a"] = 10.0
     data["sample/b"] = 10.0
@@ -59,7 +53,7 @@ def test_findub_load_from_dict_and_reciprocal_B():
     data["peaks/radius"] = np.array([0.0])
     data["sample/space_group"] = "P 1"
 
-    fu = FindUB(data=data)
+    fu = optimization.FindUB(data=data)
     B = fu.reciprocal_lattice_B()
     assert B.shape == (3, 3)
 
