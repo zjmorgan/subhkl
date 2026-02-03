@@ -12,3 +12,6 @@ dist
 .env
 .DS_Store
 *.so
+
+# NOTE: Do not add .git here. The Docker build (see Dockerfile lines 16-17)
+# requires the .git directory so that versioningit can compute versions.
