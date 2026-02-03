@@ -3,6 +3,7 @@ import re
 import typing
 from collections import namedtuple
 import bisect
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
@@ -679,7 +680,10 @@ class Peaks:
             ))
 
         print(f"Starting parallel integration of {len(tasks)} images...")
-        with ProcessPoolExecutor() as executor:
+
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_process_single_image, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
@@ -747,7 +751,9 @@ class Peaks:
                 sample_offset, ki_vec
             ))
             
-        with ProcessPoolExecutor() as executor:
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
             # Use tqdm for progress bar
             for future in tqdm(as_completed(futures), total=len(futures), desc="Predicting"):
@@ -832,8 +838,10 @@ class Peaks:
             ))
 
         print(f"Integrating {len(tasks)} banks in parallel...")
-        
-        with ProcessPoolExecutor() as executor:
+       
+        # Use 'spawn' to be safe with JAX threading
+        ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(mp_context=ctx) as executor:
             futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
