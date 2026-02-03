@@ -311,7 +311,8 @@ def finder(
         bank=detector_peaks.bank,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
-        gonio_names=detector_peaks.gonio_names
+        gonio_names=detector_peaks.gonio_names,
+        instrument_wavelength=[peaks.wavelength_min, peaks.wavelength_max],
     )
 
 
@@ -356,9 +357,9 @@ def indexer(
     alpha: float,
     beta: float,
     gamma: float,
-    wavelength_min: float,
-    wavelength_max: float,
     space_group: str,
+    wavelength_min: float = None,
+    wavelength_max: float = None,
     goniometer_csv_filename: typing.Optional[str] = None,
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,
@@ -502,6 +503,17 @@ def indexer(
     else:
         print("Using goniometer rotation from peaks file.")
         R = rotations
+
+    # Logic to auto-detect wavelength if not provided
+    if wavelength_min is None or wavelength_max is None:
+        with h5py.File(peaks_h5_filename, 'r') as f_in:
+            if "instrument/wavelength" in f_in:
+                wl = f_in["instrument/wavelength"][()]
+                if wavelength_min is None: wavelength_min = float(wl[0])
+                if wavelength_max is None: wavelength_max = float(wl[1])
+                print(f"Auto-detected wavelength: {wavelength_min:.2f} - {wavelength_max:.2f} A")
+            else:
+                raise ValueError("Wavelength not provided and not found in input file.")
 
     unique_filename = str(uuid.uuid4()) + ".h5"
     print(f"Creating temporary indexer input file: {unique_filename}")

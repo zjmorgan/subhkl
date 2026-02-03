@@ -1479,7 +1479,8 @@ class Peaks:
         bank: list[int],
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
-        gonio_names: list[str] = None
+        gonio_names: list[str] = None,
+        instrument_wavelength: tuple[float, float] = None
     ):
         """
         Write output HDF5 file for peaks in detector space.
@@ -1539,3 +1540,7 @@ class Peaks:
                 # Save as fixed-length strings (numpy S-type) or variable length
                 dt = h5py.string_dtype(encoding='utf-8')
                 f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
+
+            # NEW: Save global wavelength range for Indexer
+            if instrument_wavelength is not None:
+                f["instrument/wavelength"] = instrument_wavelength
