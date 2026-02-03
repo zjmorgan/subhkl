@@ -271,75 +271,70 @@ def _predict_single_bank(
 def _integrate_single_bank(
     bank_id,
     image,
-    peaks, 
+    peaks,
     det_config,
     integration_params,
     integration_method,
     viz_info,
-    metrics_info 
+    metrics_info
 ):
-    """
-    Worker function for integrating predicted peaks on a single detector bank.
-    Includes metric calculation against found peaks and visualization.
-    """
     # Unpack predicted peaks (i, j, h, k, l, wl)
     bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
     centers = np.stack([bank_i, bank_j], axis=-1)
-    
+
     det = Detector(det_config)
     bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
-    
-    lab_coords_T = det.pixel_to_lab(bank_i, bank_j)
-    if lab_coords_T.ndim == 1: lab_coords_T = lab_coords_T[np.newaxis, :]
-    else: lab_coords_T = lab_coords_T.T
-    lab_coords = lab_coords_T.T 
+
+    # FIX: Correctly handle lab coordinate shape (N, 3)
+    lab_coords_raw = det.pixel_to_lab(bank_i, bank_j) # Returns (3, N)
+    if lab_coords_raw.ndim == 1:
+        lab_coords = lab_coords_raw[np.newaxis, :] # (1, 3) -> (N=1, 3)
+    else:
+        lab_coords = lab_coords_raw.T # (N, 3)
 
     # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
     found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec = metrics_info
-    
+
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
-        
-        # Filter found peaks relevant to this bank
         if found_peaks_bank is not None:
             mask_bank = (found_peaks_bank == bank_id)
             f_xyz_valid = found_peaks_xyz[mask_bank]
         else:
-            # Fallback: Directionality check
             s_off = sample_offset if sample_offset is not None else np.zeros(3)
             det_vec = det.center - s_off
             f_vecs = found_peaks_xyz - s_off
             dots = np.dot(f_vecs, det_vec)
             f_xyz_front = found_peaks_xyz[dots > 0]
-            
+
             if len(f_xyz_front) > 0:
                 f_row, f_col = det.lab_to_pixel(f_xyz_front[:,0], f_xyz_front[:,1], f_xyz_front[:,2], clip=False)
                 on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
                 f_xyz_valid = f_xyz_front[on_sensor]
-        
+
         if len(f_xyz_valid) > 0:
             f_row_valid, f_col_valid = det.lab_to_pixel(f_xyz_valid[:,0], f_xyz_valid[:,1], f_xyz_valid[:,2], clip=False)
             on_panel_found = (f_row_valid >= 0) & (f_row_valid < det.n) & (f_col_valid >= 0) & (f_col_valid < det.m)
-            
+
             if np.sum(on_panel_found) > 0:
                 f_row_valid = f_row_valid[on_panel_found]
                 f_col_valid = f_col_valid[on_panel_found]
                 f_xyz_valid = f_xyz_valid[on_panel_found]
-                
+
                 f_pixels = np.stack([f_row_valid, f_col_valid], axis=1)
                 p_pixels = np.stack([bank_i, bank_j], axis=1)
-                
+
                 tree = scipy.spatial.KDTree(p_pixels)
                 dists_pix, idxs = tree.query(f_pixels)
                 valid_matches = dists_pix < 20.0
-                
+
                 if np.sum(valid_matches) > 0:
                     matched_idxs = idxs[valid_matches]
                     f_xyz_matched = f_xyz_valid[valid_matches]
                     d_err, ang_err = calculate_angular_error(
-                        f_xyz_matched, 
-                        bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs], 
+                        f_xyz_matched,
+                        bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs],
                         RUB, sample_offset, ki_vec
                     )
                     metrics_str = f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, $\\Delta d$={np.median(d_err):.3f}$\\AA$"
@@ -361,16 +356,13 @@ def _integrate_single_bank(
         n_sigma = integration_params["region_growth_minimum_sigma"]
         integrator.region_grower.min_intensity = mean + n_sigma * std
 
-    # Filter invalid centers (masked out)
     valid_indices = []
     for idx, (r, c) in enumerate(centers):
         r_int, c_int = int(r), int(c)
         if (0 <= r_int < mask.shape[0] and 0 <= c_int < mask.shape[1] and mask[r_int, c_int]):
             valid_indices.append(idx)
-    
+
     centers = centers[valid_indices]
-    
-    # Subset data
     bank_tt = bank_tt[valid_indices]
     bank_az = bank_az[valid_indices]
     bank_h = bank_h[valid_indices]
@@ -396,18 +388,13 @@ def _integrate_single_bank(
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         axes[0].imshow(1 + image, norm="log", cmap="binary", origin='lower')
         axes[0].set_title(f"{filename_base}: Bank {bank_id}")
-        
+
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
             axes[0].scatter(centers[:, 1], centers[:, 0], marker="1", c="blue", label=label_pred, s=40)
-        
-        # Plot Found Peaks (re-calc coords just for plot)
-        if found_peaks_xyz is not None:
-             # Logic to re-plot 'found' peaks would be similar to above
-             pass
 
         axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=False, ncol=1)
-        
+
         for p_i, p_j, p_h, p_k, p_l in zip(centers[:,0], centers[:,1], bank_h, bank_k, bank_l):
             is_zone = (p_h == 0) or (p_k == 0) or (p_l == 0)
             is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
@@ -422,12 +409,12 @@ def _integrate_single_bank(
         overlay[forbidden] = [0, 1, 1, 0.3]
         axes[1].imshow(overlay, origin='lower')
         axes[1].set_title("Integrated peaks")
-        
+
         for _, hull, _, _ in hulls:
             if hull is not None:
                 for simplex in hull.simplices:
                     axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-        
+
         out_name = f"{bank_id}_int.png"
         if viz_prefix: out_name = viz_prefix + out_name
         fig.savefig(out_name, bbox_inches='tight')
@@ -440,7 +427,6 @@ def _integrate_single_bank(
         'wavelength': bank_wl[keep], 'xyz': lab_coords[keep].tolist(),
         'bank': [bank_id] * sum(keep)
     }
-
 
 class Peaks:
     def __init__(
