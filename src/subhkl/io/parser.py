@@ -12,7 +12,7 @@ from subhkl.export import FinderConcatenateMerger, MTZExporter, ImageStackMerger
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
-from subhkl.utils import calculate_angular_error
+from subhkl.utils import calculate_angular_error, HAS_JAX
 
 app = typer.Typer()
 

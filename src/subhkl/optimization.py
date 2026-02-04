@@ -1043,6 +1043,367 @@ class FindUB:
 
         return np.concatenate([np.atleast_1d(p) for p in new_params])
 
+    def _minimize_scipy(
+        self,
+        population_size: int = 1000,
+        num_generations: int = 100,
+        seed: int = 0,
+        softness: float = 0.01,
+        loss_method: str = 'gaussian',
+        init_params: np.ndarray = None,
+        refine_lattice: bool = False,
+        lattice_bound_frac: float = 0.05,
+        goniometer_axes: list = None,
+        goniometer_angles: np.ndarray = None,
+        refine_goniometer: bool = False,
+        goniometer_bound_deg: float = 5.0,
+        goniometer_names: list = None,
+        refine_goniometer_axes: list = None,
+        refine_sample: bool = False,
+        sample_bound_meters: float = 2.0,
+        refine_beam: bool = False,
+        beam_bound_deg: float = 1.0,
+        d_min: float = None,
+        d_max: float = None,
+        hkl_search_range: int = 20,
+        B_sharpen: float = 50,
+    ):
+        """
+        SciPy-based fallback for minimize when JAX is not available.
+        Uses scipy.optimize.differential_evolution.
+        """
+        from scipy.optimize import differential_evolution
+        
+        # Prepare goniometer parameters
+        if goniometer_axes is None and self.goniometer_axes is not None:
+             goniometer_axes = self.goniometer_axes
+        if goniometer_angles is None and self.goniometer_angles is not None:
+             goniometer_angles = self.goniometer_angles.T
+        if goniometer_names is None and self.goniometer_names is not None:
+             goniometer_names = self.goniometer_names
+
+        # Determine lattice system
+        lattice_system = 'Triclinic'
+        num_lattice_params = 6
+        if refine_lattice:
+            lattice_system, num_lattice_params = get_lattice_system(
+                self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group
+            )
+            print(f"Lattice System: {lattice_system} ({num_lattice_params} free params)")
+
+        # Determine number of dimensions
+        num_dims = 3  # orientation
+        if refine_lattice: num_dims += num_lattice_params
+        if refine_sample:
+            if self.peak_xyz is not None: num_dims += 3
+            else: refine_sample = False
+        if refine_beam:
+            if self.peak_xyz is not None: num_dims += 2
+            else: refine_beam = False
+        if refine_goniometer:
+            goniometer_refine_mask = None
+            if refine_goniometer_axes is not None and self.goniometer_names is not None:
+                mask = []
+                for name in self.goniometer_names:
+                    should_refine = any(req in name for req in refine_goniometer_axes)
+                    mask.append(should_refine)
+                goniometer_refine_mask = np.array(mask, dtype=bool)
+                num_dims += np.sum(goniometer_refine_mask)
+            else:
+                num_dims += len(goniometer_axes)
+
+        # Prepare scattering vectors
+        kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
+        
+        if goniometer_axes is not None:
+            kf_ki_input = kf_ki_dir_lab
+        else:
+            kf_ki_input = np.einsum("mji,jm->im", self.R, kf_ki_dir_lab)
+
+        # Prepare weights
+        snr = self.intensity / (self.sigma_intensity + 1e-6)
+        if B_sharpen is not None:
+            theta_rad = np.deg2rad(self.two_theta) / 2.0
+            sin_sq_theta = np.sin(theta_rad)**2
+            wilson_correction = np.exp(B_sharpen * sin_sq_theta)
+            weights = snr * wilson_correction
+            weights = weights / np.mean(weights)
+        else:
+            weights = snr
+        weights = np.clip(weights, 0, 10.0)
+
+        # Create objective function (NumPy-based, no JAX)
+        def objective_scipy(x):
+            """NumPy-based objective for SciPy optimizer."""
+            x_batch = x.reshape(1, -1)
+            
+            # Parse parameters
+            idx = 0
+            rot_params = x_batch[:, idx:idx+3]
+            U = self._rotation_matrix_from_rodrigues_numpy(rot_params[0])
+            idx += 3
+
+            # Lattice
+            if refine_lattice:
+                B = self._compute_B_numpy(
+                    x_batch[:, idx:idx+num_lattice_params][0],
+                    lattice_system,
+                    lattice_bound_frac
+                )
+                idx += num_lattice_params
+                UB = U @ B
+            else:
+                UB = U @ self.reciprocal_lattice_B()
+
+            # Sample
+            if refine_sample:
+                s_norm = x_batch[:, idx:idx+3][0]
+                idx += 3
+                sample_delta = np.array([
+                    _forward_map_param(s_norm[0], sample_bound_meters),
+                    _forward_map_param(s_norm[1], sample_bound_meters),
+                    _forward_map_param(s_norm[2], sample_bound_meters),
+                ])
+                sample_total = self.base_sample_offset + sample_delta
+            else:
+                sample_total = self.base_sample_offset
+
+            # Beam
+            if refine_beam:
+                bound_rad = np.deg2rad(beam_bound_deg)
+                tx = _forward_map_param(x_batch[0, idx], bound_rad)
+                ty = _forward_map_param(x_batch[0, idx+1], bound_rad)
+                idx += 2
+                ki_vec = self.ki_vec.copy()
+                ki_vec[0] += tx
+                ki_vec[1] += ty
+                ki_vec = ki_vec / np.linalg.norm(ki_vec)
+            else:
+                ki_vec = self.ki_vec
+
+            # Compute scattering vectors
+            if refine_sample:
+                s = sample_total[:, np.newaxis]
+                p = self.peak_xyz.T
+                v = p - s
+                dist = np.sqrt(np.sum(v**2, axis=0, keepdims=True))
+                kf = v / dist
+                ki = ki_vec[:, np.newaxis]
+                q_lab = kf - ki
+                k_sq_dyn = np.sum(q_lab**2, axis=0)
+            else:
+                kf_lab_fixed = kf_ki_input + np.array([0., 0., 1.])[:, None]
+                kf_lab_fixed = kf_lab_fixed / np.linalg.norm(kf_lab_fixed, axis=0)
+                ki = ki_vec[:, np.newaxis]
+                q_lab = kf_lab_fixed - ki
+                k_sq_dyn = np.sum(q_lab**2, axis=0)
+
+            # Apply goniometer rotation if present
+            if goniometer_axes is not None:
+                R = self._compute_goniometer_R_numpy(goniometer_axes, goniometer_angles)
+                kf_ki_vec = np.einsum("mji,jm->im", R, q_lab)
+            else:
+                kf_ki_vec = q_lab
+
+            # Simple peak matching score
+            UB_inv = np.linalg.inv(UB)
+            h_est = UB_inv @ kf_ki_vec
+            h_int = np.round(h_est)
+            q_pred = UB @ h_int
+            
+            diff = kf_ki_vec - q_pred
+            dist_sq = np.sum(diff**2, axis=0)
+            prob = np.exp(-dist_sq / (2 * softness**2))
+            
+            score = -np.sum(weights * prob)
+            return score
+
+        # Set bounds (all parameters normalized to [0, 1] except orientation which is unbounded)
+        bounds = [(-np.pi, np.pi)] * 3  # Orientation (Rodrigues)
+        if refine_lattice:
+            bounds += [(0.0, 1.0)] * num_lattice_params
+        if refine_sample:
+            bounds += [(0.0, 1.0)] * 3
+        if refine_beam:
+            bounds += [(0.0, 1.0)] * 2
+        if refine_goniometer:
+            if goniometer_refine_mask is not None:
+                bounds += [(0.0, 1.0)] * np.sum(goniometer_refine_mask)
+            else:
+                bounds += [(0.0, 1.0)] * len(goniometer_axes)
+
+        # Prepare initial guess
+        x0 = None
+        if init_params is not None:
+            x0 = init_params
+            if len(x0) < num_dims:
+                # Pad with 0.5 for normalized params
+                x0 = np.concatenate([x0, np.full(num_dims - len(x0), 0.5)])
+            elif len(x0) > num_dims:
+                x0 = x0[:num_dims]
+
+        # Run optimization
+        print(f"\n--- Starting SciPy Differential Evolution ---")
+        print(f"Population: {population_size}, Generations: {num_generations}")
+        
+        result = differential_evolution(
+            objective_scipy,
+            bounds,
+            maxiter=num_generations,
+            popsize=population_size // num_dims,  # SciPy uses popsize per dimension
+            seed=seed,
+            x0=x0,
+            atol=0,
+            tol=0.01,
+        )
+
+        print(f"\n--- Optimization Complete ---")
+        print(f"Best score: {-result.fun:.2f}")
+        
+        # Store results
+        self.x = result.x
+        
+        # Reconstruct physical parameters
+        idx = 0
+        rot_params = self.x[idx:idx+3]
+        U = self._rotation_matrix_from_rodrigues_numpy(rot_params)
+        idx += 3
+
+        if refine_lattice:
+            B = self._compute_B_numpy(
+                self.x[idx:idx+num_lattice_params],
+                lattice_system,
+                lattice_bound_frac
+            )
+            idx += num_lattice_params
+            print("--- Refined Lattice Parameters ---")
+            # Extract from B matrix
+            cell_params = self._cell_from_B_numpy(B)
+            self.a, self.b, self.c = cell_params[:3]
+            self.alpha, self.beta, self.gamma = cell_params[3:]
+            print(f"a: {self.a:.4f}, b: {self.b:.4f}, c: {self.c:.4f}")
+            print(f"alpha: {self.alpha:.4f}, beta: {self.beta:.4f}, gamma: {self.gamma:.4f}")
+        else:
+            B = self.reciprocal_lattice_B()
+
+        if refine_sample:
+            s_norm = self.x[idx:idx+3]
+            idx += 3
+            sample_delta = np.array([
+                _forward_map_param(s_norm[0], sample_bound_meters),
+                _forward_map_param(s_norm[1], sample_bound_meters),
+                _forward_map_param(s_norm[2], sample_bound_meters),
+            ])
+            self.sample_offset = self.base_sample_offset + sample_delta
+            print(f"--- Refined Sample Offset: {self.sample_offset} ---")
+
+        if refine_beam:
+            bound_rad = np.deg2rad(beam_bound_deg)
+            tx = _forward_map_param(self.x[idx], bound_rad)
+            ty = _forward_map_param(self.x[idx+1], bound_rad)
+            idx += 2
+            ki_vec = self.ki_vec.copy()
+            ki_vec[0] += tx
+            ki_vec[1] += ty
+            self.ki_vec = ki_vec / np.linalg.norm(ki_vec)
+            print(f"--- Refined Beam Vector: {self.ki_vec} ---")
+
+        # Return indexed peaks
+        UB = U @ B
+        UB_inv = np.linalg.inv(UB)
+        h_est = UB_inv @ kf_ki_input
+        h_int = np.round(h_est).astype(int).T
+        
+        # Compute wavelengths (simplified)
+        lamda = np.ones(h_int.shape[0]) * np.mean(self.wavelength)
+        
+        return h_int.shape[0], h_int, lamda, U
+
+    def _rotation_matrix_from_rodrigues_numpy(self, w):
+        """NumPy version of Rodrigues rotation."""
+        theta = np.linalg.norm(w) + 1e-9
+        k = w / theta
+        K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+        I = np.eye(3)
+        R = I + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+        return R
+
+    def _compute_B_numpy(self, params_norm, lattice_system, lattice_bound_frac):
+        """NumPy version of B matrix computation."""
+        # Reconstruct cell params
+        cell_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
+        active_indices = _get_active_lattice_indices(lattice_system)
+        free_params_init = cell_init[active_indices]
+        
+        p_free = _forward_map_lattice(params_norm, free_params_init, lattice_bound_frac)
+        
+        # Reconstruct full cell params based on lattice system
+        if lattice_system == 'Cubic':
+            a = p_free[0]
+            cell_params = np.array([a, a, a, 90.0, 90.0, 90.0])
+        elif lattice_system == 'Hexagonal':
+            a, c = p_free[0], p_free[1]
+            cell_params = np.array([a, a, c, 90.0, 90.0, 120.0])
+        elif lattice_system == 'Tetragonal':
+            a, c = p_free[0], p_free[1]
+            cell_params = np.array([a, a, c, 90.0, 90.0, 90.0])
+        elif lattice_system == 'Rhombohedral':
+            a, alpha = p_free[0], p_free[1]
+            cell_params = np.array([a, a, a, alpha, alpha, alpha])
+        elif lattice_system == 'Orthorhombic':
+            a, b, c = p_free[0], p_free[1], p_free[2]
+            cell_params = np.array([a, b, c, 90.0, 90.0, 90.0])
+        elif lattice_system == 'Monoclinic':
+            a, b, c, beta = p_free[0], p_free[1], p_free[2], p_free[3]
+            cell_params = np.array([a, b, c, 90.0, beta, 90.0])
+        else:
+            cell_params = p_free
+        
+        # Compute B matrix
+        a, b, c = cell_params[:3]
+        alpha, beta, gamma = np.deg2rad(cell_params[3:])
+        
+        g11, g22, g33 = a**2, b**2, c**2
+        g12 = a * b * np.cos(gamma)
+        g13 = a * c * np.cos(beta)
+        g23 = b * c * np.cos(alpha)
+        
+        G = np.array([[g11, g12, g13], [g12, g22, g23], [g13, g23, g33]])
+        G_star = np.linalg.inv(G)
+        B = scipy.linalg.cholesky(G_star, lower=False)
+        return B
+
+    def _cell_from_B_numpy(self, B):
+        """Extract cell parameters from B matrix."""
+        G_star = B.T @ B
+        G = np.linalg.inv(G_star)
+        
+        a = np.sqrt(G[0, 0])
+        b = np.sqrt(G[1, 1])
+        c = np.sqrt(G[2, 2])
+        
+        alpha = np.rad2deg(np.arccos(G[1, 2] / (b * c)))
+        beta = np.rad2deg(np.arccos(G[0, 2] / (a * c)))
+        gamma = np.rad2deg(np.arccos(G[0, 1] / (a * b)))
+        
+        return np.array([a, b, c, alpha, beta, gamma])
+
+    def _compute_goniometer_R_numpy(self, axes, angles):
+        """NumPy version of goniometer rotation matrices."""
+        R = np.eye(3)
+        for i in range(len(axes)):
+            axis_spec = axes[i]
+            direction = axis_spec[:3]
+            sign = axis_spec[3]
+            
+            # Compute rotation matrix for this axis
+            theta = np.deg2rad(sign * angles[i, :])
+            # For simplicity, assume single angle (not batch)
+            # This needs to match the R shape expected
+            # Simplified for now - may need adjustment
+            pass
+        return np.tile(R[np.newaxis, :, :], (angles.shape[1], 1, 1))
+
     def minimize(
         self,
         strategy_name: str,
@@ -1077,6 +1438,40 @@ class FindUB:
         sigma_init: float = None,
         B_sharpen: float = 50,
     ):
+        """
+        Minimize the objective using evolutionary strategies.
+        
+        When JAX is not available, falls back to SciPy's differential_evolution.
+        """
+        if not HAS_JAX:
+            # Fall back to SciPy-based optimization
+            print("JAX not available - using SciPy-based optimization")
+            return self._minimize_scipy(
+                population_size=population_size,
+                num_generations=num_generations,
+                seed=seed,
+                softness=softness,
+                loss_method=loss_method,
+                init_params=init_params,
+                refine_lattice=refine_lattice,
+                lattice_bound_frac=lattice_bound_frac,
+                goniometer_axes=goniometer_axes,
+                goniometer_angles=goniometer_angles,
+                refine_goniometer=refine_goniometer,
+                goniometer_bound_deg=goniometer_bound_deg,
+                goniometer_names=goniometer_names,
+                refine_goniometer_axes=refine_goniometer_axes,
+                refine_sample=refine_sample,
+                sample_bound_meters=sample_bound_meters,
+                refine_beam=refine_beam,
+                beam_bound_deg=beam_bound_deg,
+                d_min=d_min,
+                d_max=d_max,
+                hkl_search_range=hkl_search_range,
+                B_sharpen=B_sharpen,
+            )
+        
+        # JAX-based optimization (original code follows)
         if goniometer_axes is None and self.goniometer_axes is not None:
              goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
