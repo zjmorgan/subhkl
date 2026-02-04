@@ -504,6 +504,10 @@ def indexer(
     input_data["sample/space_group"] = sg_to_use
     input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
+    gonio_axes_list = None
+    if refine_goniometer_axes:
+        gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(',')]
+
     index(
         input_data=input_data,
         output_peaks_filename=output_peaks_filename,
@@ -518,6 +522,7 @@ def indexer(
         lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
         refine_goniometer=refine_goniometer,
+        refine_goniometer_axes=gonio_axes_list,
         goniometer_bound_deg=goniometer_bound_deg,
         refine_sample=refine_sample,
         sample_bound_meters=sample_bound_meters,

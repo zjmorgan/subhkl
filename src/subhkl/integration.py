@@ -168,8 +168,12 @@ def _process_single_image(
     bank_intensity = np.array([res[3] for res in int_result])
     bank_sigma = np.array([res[5] for res in int_result])
     
-    # Relaxed Filter: Keep valid intensity (SparseRBF mask handles edges)
-    keep = [val is not None for val in bank_intensity]
+    # Strict Keeping (Hull Required)
+    keep = []
+    for idx, res in enumerate(int_result):
+        has_hull = hulls[idx][1] is not None
+        is_valid = res[3] is not None
+        keep.append(is_valid and has_hull)
     
     # 5. Visualization
     if do_viz:
@@ -378,7 +382,12 @@ def _integrate_single_bank(
 
     bank_intensity = np.array([res[3] for res in int_result])
     bank_sigma = np.array([res[5] for res in int_result])
-    keep = [val is not None for val in bank_intensity]
+    
+    keep = []
+    for idx, res in enumerate(int_result):
+        has_hull = hulls[idx][1] is not None
+        is_valid = res[3] is not None
+        keep.append(is_valid and has_hull)
 
     # --- VISUALIZATION ---
     # UPDATED: Use viz_label for filename

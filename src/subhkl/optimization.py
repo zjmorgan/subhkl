@@ -821,8 +821,11 @@ class VectorizedObjectiveJAX:
             if R.ndim == 4: kf_ki_vec = jnp.einsum("smji,sjm->sim", R, q_lab)
             else: kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
         elif not self.input_is_rotated:
-            R_static = self.static_R[None, :, :].repeat(x.shape[0], axis=0)
-            kf_ki_vec = jnp.einsum("sji,sjm->sim", R_static, q_lab)
+            R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+            if R_static.ndim == 4:
+                kf_ki_vec = jnp.einsum("smji,sjm->sim", R_static, q_lab)
+            else:
+                kf_ki_vec = jnp.einsum("sji,sjm->sim", R_static, q_lab)
         else:
             kf_ki_vec = q_lab
 
