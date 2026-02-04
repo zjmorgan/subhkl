@@ -1000,8 +1000,15 @@ def merge_images(
     Merges multiple reduced HDF5 image files into a single master dataset.
     """
     # 1. Resolve file list
-    # Sort is crucial to ensure scan order (time/angle) is preserved
-    h5_files = sorted(glob.glob(input_pattern))
+    # Support both glob patterns and space-separated lists of files
+    if " " in input_pattern:
+        h5_files = []
+        for p in input_pattern.split():
+            h5_files.extend(glob.glob(p))
+    else:
+        h5_files = glob.glob(input_pattern)
+    
+    h5_files = sorted(list(set(h5_files)))
     
     if not h5_files:
         print(f"No files found matching: {input_pattern}")

@@ -215,14 +215,18 @@ class VectorizedObjectiveJAX:
         else:
             self.static_R = jnp.eye(3)
 
-        # FIX: Use explicitly passed Lab Frame vectors if available to avoid frame mixing
+        # Reconstruct kf from Q (kf = Q + ki)
+        # Note: self.kf_ki_dir_init was passed as kf_ki_input.
         if kf_lab_fixed_vectors is not None:
-            # kf_lab_fixed is the unit vector k_f in Lab Frame
-            # We assume input was Q_lab = k_f - k_i(ideal). So k_f = Q_lab + [0,0,1]
+            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
             self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + jnp.array([0., 0., 1.])[:, None]
+            self.input_is_rotated = False
         else:
-            # Fallback (Only valid if R=Identity)
+            # Fallback: input was already rotated to Sample Frame (or R=I).
+            # This matches the earlier branch behavior where kf_lab_fixed = kf_ki_input + [0,0,1].
+            # If pre-rotated, this is actually kf_sample (assuming ki_sample = [0,0,1]).
             self.kf_lab_fixed = self.kf_ki_dir_init + jnp.array([0., 0., 1.])[:, None]
+            self.input_is_rotated = True
 
         self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
 
@@ -730,10 +734,8 @@ class VectorizedObjectiveJAX:
         
         (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (init_vals, init_idxs), jnp.arange(num_chunks))
         
-        # 3. Robust Scaling
-        max_possible_L = 1.0 / (softness**2)
-        scale_factor = 50.0 / max_possible_L
-        log_K = (1.0 / softness**2) * top_vals * scale_factor
+        # 3. Robust Scaling (vMF kernel: exp((cos(theta)-1)/softness^2))
+        log_K = (top_vals - 1.0) / (softness**2)
         
         # 4. Filter Logic (Re-calculate norms for Top-K only)
         # Gather HKL vectors: (Batch, N_obs, K, 3)
@@ -765,10 +767,13 @@ class VectorizedObjectiveJAX:
         mask_res = (d_sparse >= self.d_min) & (d_sparse <= self.d_max)
         
         valid_mask = mask_lambda & mask_res
-        log_K = jnp.where(valid_mask, log_K, -100.0)
+        log_K = jnp.where(valid_mask, log_K, -1e6) # Effectively zero probability
 
         # 5. Outlier (Dustbin) & Softmax
-        log_K_dustbin = jnp.full((batch_size, n_obs, 1), -5.0)
+        # Use an angular threshold for outliers that scales with softness (e.g. 3 sigma)
+        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * softness)
+        log_K_dustbin = (jnp.cos(outlier_threshold_rad) - 1.0) / (softness**2)
+        log_K_dustbin = jnp.full((batch_size, n_obs, 1), log_K_dustbin)
         log_K_extended = jnp.concatenate([log_K, log_K_dustbin], axis=2)
         
         # Row Normalization (Softmax)
@@ -777,13 +782,13 @@ class VectorizedObjectiveJAX:
         
         # 6. Score
         P_match = P[:, :, :-1]
-        log_K_match = log_K 
+        probs = jnp.max(P_match, axis=2)
         
-        matched_scores = jnp.sum(P_match * log_K_match, axis=2)
-        weighted_score = jnp.sum(self.weights * matched_scores, axis=1)
+        # We want to maximize probabilities. Optimization is minimization.
+        # Use (probs / softness^2) to provide a strong gradient.
+        weighted_score = jnp.sum(self.weights * (probs / (softness**2)), axis=1)
 
         # Metrics
-        probs = jnp.max(P_match, axis=2)
         best_k_idx = jnp.argmax(P_match, axis=2)
         best_hkl_idx = jnp.take_along_axis(top_idxs, best_k_idx[:, :, None], axis=2).squeeze(2)
         best_hkl = jnp.take(hkl_pool.T, best_hkl_idx, axis=0)
@@ -794,9 +799,8 @@ class VectorizedObjectiveJAX:
 
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
-        UB, _, sample_total, ki_vec, _, R_refined = self._get_physical_params_jax(x)
+        UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
         
-        # 1. Calculate Q in LAB FRAME
         if self.refine_sample:
             s = sample_total[:, :, None]
             p = self.peak_xyz[None, :, :]
@@ -812,28 +816,15 @@ class VectorizedObjectiveJAX:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
-        # 2. Determine Total Rotation Matrix (Sample -> Lab)
-        # If refining, R_refined is the delta applied to base. 
-        # If not refining, we must use static_R.
-        # NOTE: self.compute_goniometer_R_jax returns R relative to the *nominal* offsets 
-        # inside the helper. If ref_gonio is False, R_refined is None.
-        
-        if R_refined is not None:
-            R_total = R_refined
+        # Rotate to SAMPLE FRAME
+        if R is not None:
+            if R.ndim == 4: kf_ki_vec = jnp.einsum("smji,sjm->sim", R, q_lab)
+            else: kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
+        elif not self.input_is_rotated:
+            R_static = self.static_R[None, :, :].repeat(x.shape[0], axis=0)
+            kf_ki_vec = jnp.einsum("sji,sjm->sim", R_static, q_lab)
         else:
-            # Broadcast static_R to batch size
-            R_total = self.static_R[None, :, :].repeat(x.shape[0], axis=0)
-
-        # 3. Rotate Q_lab to SAMPLE FRAME (Q_sample = R.T @ Q_lab)
-        # Input to indexers must be in Sample Frame to match UB * hkl
-        if R_total.ndim == 4: 
-            # Case: Multi-goniometer batching (rare)
-            kf_ki_vec = jnp.einsum("smji,sjm->sim", R_total, q_lab)
-        else:
-            # Standard Case: Transpose R to rotate Lab -> Sample
-            # R maps Sample -> Lab. So we need R.T @ q_lab
-            # einsum "sji,sjm->sim" does R^T * q (j is summation index on 1st dim of matrix)
-            kf_ki_vec = jnp.einsum("sji,sjm->sim", R_total, q_lab)
+            kf_ki_vec = q_lab
 
         if self.loss_method == 'forward':
             score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness, window_batch_size=self.window_batch_size)
