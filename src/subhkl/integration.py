@@ -682,10 +682,12 @@ class Peaks:
 
             current_angles = None
             if self.goniometer_angles_raw is not None:
-                if self.goniometer_angles_raw.ndim == 2:
-                    current_angles = self.goniometer_angles_raw[img_key] if img_key < len(self.goniometer_angles_raw) else self.goniometer_angles_raw[-1]
+                # Ensure goniometer_angles_raw is a numpy array
+                angles_array = np.asarray(self.goniometer_angles_raw)
+                if angles_array.ndim == 2:
+                    current_angles = angles_array[img_key] if img_key < len(angles_array) else angles_array[-1]
                 else:
-                    current_angles = self.goniometer_angles_raw
+                    current_angles = angles_array
 
             pre_coords = None
             if finder_algorithm == "sparse_rbf":
