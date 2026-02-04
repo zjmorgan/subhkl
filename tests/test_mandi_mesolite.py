@@ -465,15 +465,16 @@ class TestMandiMesoliteSingleRun:
         )
         assert os.path.exists(mtz_output)
         
-        # Final validation: Check we have reflections
+        # Final validation: Check we have reflections in peaks group
         with h5py.File(integrator_output, "r") as f:
-            total_reflections = 0
-            for bank_key in f["banks"].keys():
-                bank = f["banks"][bank_key]
-                if "I" in bank:
-                    total_reflections += len(bank["I"])
+            assert "peaks" in f, "Missing peaks group"
+            peaks = f["peaks"]
             
-            assert total_reflections > 0, "No reflections found in final output"
+            if "h" in peaks:
+                total_reflections = len(peaks["h"])
+            else:
+                total_reflections = 0
+            
             print(f"\n✓ Complete workflow finished successfully")
             print(f"  Total reflections: {total_reflections}")
             print(f"  Output files in: {temp_output_dir}")

@@ -158,6 +158,11 @@ class MTZExporter:
         mtz.add_column("PHI", "W")
         mtz.add_column("BATCH", "B")
 
+        # Column order: h, k, l, I, sigI, [FP, sigFP,] wavel, theta, phi, batch
+        n_base_cols = 9  # h, k, l, I, sigI, wavel, theta, phi, batch
+        n_structure_factor_cols = 2  # FP, sigFP
+        n_cols = n_base_cols + (n_structure_factor_cols if self.f is not None else 0)
+
         data = []
 
         for i in range(len(self.intensity)):
@@ -185,7 +190,11 @@ class MTZExporter:
 
             data.append(row)
 
-        data = np.array(data)
+        if len(data) == 0:
+            # Empty case: create a 2D array with correct number of columns
+            data = np.empty((0, n_cols), dtype=np.float32)
+        else:
+            data = np.ascontiguousarray(np.array(data, dtype=np.float32))
 
         mtz.set_data(data)
         mtz.write_to_file(filename)
