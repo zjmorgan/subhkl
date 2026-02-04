@@ -1,7 +1,9 @@
-name: CI
+name: Integration Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
@@ -12,28 +14,10 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Linting + formating
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: uv pip install -e ".[lint]" --system
-      - name: Run linting
-        run: |
-          ruff format --check
-          ruff check
-
-  test-unit:
-    name: Unit tests (${{ matrix.backend }})
+  test-integration:
+    name: Integration tests (${{ matrix.backend }})
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10"]
         os:
@@ -59,5 +43,11 @@ jobs:
       - name: Verify backend
         run: |
           python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
-      - name: Run tests
-        run: pytest -v -m "not slow and not integration"
+      - name: Run integration tests
+        run: pytest -v -m "integration" tests/test_mandi_mesolite.py::TestMandiMesoliteSingleRun
+        env:
+          MESOLITE_MAX_FILES: 1
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "Integration tests completed for ${{ matrix.backend }} backend"
