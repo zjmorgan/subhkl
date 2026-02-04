@@ -228,18 +228,34 @@ class VectorizedObjective:
                  peak_radii=None, loss_method='gaussian', 
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
                  chunk_size=4096, num_iters=20, top_k=32,
-                 space_group="P 1"):
+                 space_group="P 1",
+                 static_R=None, kf_lab_fixed_vectors=None):
         
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
-        
-        # Fixed Detector Vectors (kf) from input Q (assuming ideal beam)
-        # Note: self.kf_ki_dir_init was calculated as (Pixel - IdealBeam).
-        # So kf_lab = kf_ki_dir_init + IdealBeam.
-        self.kf_lab_fixed = self.kf_ki_dir_init + jnp.array([0., 0., 1.])[:, None]
+
+        # FIX: Handle Static Rotation (R) correctly
+        if static_R is not None:
+            self.static_R = jnp.array(static_R)
+        else:
+            self.static_R = jnp.eye(3)
+
+        # Reconstruct kf from Q (kf = Q + ki)
+        # Note: self.kf_ki_dir_init was passed as kf_ki_input.
+        if kf_lab_fixed_vectors is not None:
+            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
+            self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + jnp.array([0., 0., 1.])[:, None]
+            self.input_is_rotated = False
+        else:
+            # Fallback: input was already rotated to Sample Frame (or R=I).
+            # This matches the earlier branch behavior where kf_lab_fixed = kf_ki_input + [0,0,1].
+            # If pre-rotated, this is actually kf_sample (assuming ki_sample = [0,0,1]).
+            self.kf_lab_fixed = self.kf_ki_dir_init + jnp.array([0., 0., 1.])[:, None]
+            self.input_is_rotated = True
+
         self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
-        
+
         if peak_xyz_lab is not None:
             self.peak_xyz = jnp.array(peak_xyz_lab.T) 
         else:
@@ -744,10 +760,8 @@ class VectorizedObjective:
         
         (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (init_vals, init_idxs), jnp.arange(num_chunks))
         
-        # 3. Robust Scaling
-        max_possible_L = 1.0 / (softness**2)
-        scale_factor = 50.0 / max_possible_L
-        log_K = (1.0 / softness**2) * top_vals * scale_factor
+        # 3. Robust Scaling (vMF kernel: exp((cos(theta)-1)/softness^2))
+        log_K = (top_vals - 1.0) / (softness**2)
         
         # 4. Filter Logic (Re-calculate norms for Top-K only)
         # Gather HKL vectors: (Batch, N_obs, K, 3)
@@ -761,18 +775,31 @@ class VectorizedObjective:
         
         q_sq_selected = jnp.sum(q_selected**2, axis=3)
         
-        # Lambda & Resolution Checks
-        lambda_sparse = jnp.sqrt(k_sq_obs)[:, :, None] / (jnp.sqrt(q_sq_selected) + 1e-9)
+        # 1. Transpose k_obs from (Batch, 3, N_obs) -> (Batch, N_obs, 3)
+        #    and expand to (Batch, N_obs, 1, 3) to match q_selected (Batch, N_obs, K, 3)
+        k_obs_aligned = kf_ki_sample.transpose(0, 2, 1)[:, :, None, :]
+
+        # 2. Project predicted Q onto the observed scattering vector k
+        k_dot_q = jnp.sum(k_obs_aligned * q_selected, axis=-1)
+
+        # 3. Calculate Lambda: |k|^2 / (k . q)
+        #    k_sq_obs shape is (Batch, N_obs), expand to (Batch, N_obs, 1)
+        lambda_sparse = k_sq_obs[:, :, None] / (k_dot_q + 1e-9)
+
+        # Clip to valid bandwidth to prevent numerical explosions
         mask_lambda = (lambda_sparse >= self.wl_min_val) & (lambda_sparse <= self.wl_max_val)
         
         d_sparse = 1.0 / jnp.sqrt(q_sq_selected + 1e-9)
         mask_res = (d_sparse >= self.d_min) & (d_sparse <= self.d_max)
         
         valid_mask = mask_lambda & mask_res
-        log_K = jnp.where(valid_mask, log_K, -100.0)
+        log_K = jnp.where(valid_mask, log_K, -1e6) # Effectively zero probability
 
         # 5. Outlier (Dustbin) & Softmax
-        log_K_dustbin = jnp.full((batch_size, n_obs, 1), -5.0)
+        # Use an angular threshold for outliers that scales with softness (e.g. 3 sigma)
+        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * softness)
+        log_K_dustbin = (jnp.cos(outlier_threshold_rad) - 1.0) / (softness**2)
+        log_K_dustbin = jnp.full((batch_size, n_obs, 1), log_K_dustbin)
         log_K_extended = jnp.concatenate([log_K, log_K_dustbin], axis=2)
         
         # Row Normalization (Softmax)
@@ -781,13 +808,13 @@ class VectorizedObjective:
         
         # 6. Score
         P_match = P[:, :, :-1]
-        log_K_match = log_K 
+        probs = jnp.max(P_match, axis=2)
         
-        matched_scores = jnp.sum(P_match * log_K_match, axis=2)
-        weighted_score = jnp.sum(self.weights * matched_scores, axis=1)
+        # We want to maximize probabilities. Optimization is minimization.
+        # Use (probs / softness^2) to provide a strong gradient.
+        weighted_score = jnp.sum(self.weights * (probs / (softness**2)), axis=1)
 
         # Metrics
-        probs = jnp.max(P_match, axis=2)
         best_k_idx = jnp.argmax(P_match, axis=2)
         best_hkl_idx = jnp.take_along_axis(top_idxs, best_k_idx[:, :, None], axis=2).squeeze(2)
         best_hkl = jnp.take(hkl_pool.T, best_hkl_idx, axis=0)
@@ -815,9 +842,16 @@ class VectorizedObjective:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
+        # Rotate to SAMPLE FRAME
         if R is not None:
             if R.ndim == 4: kf_ki_vec = jnp.einsum("smji,sjm->sim", R, q_lab)
             else: kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
+        elif not self.input_is_rotated:
+            R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+            if R_static.ndim == 4:
+                kf_ki_vec = jnp.einsum("smji,sjm->sim", R_static, q_lab)
+            else:
+                kf_ki_vec = jnp.einsum("sji,sjm->sim", R_static, q_lab)
         else:
             kf_ki_vec = q_lab
 
@@ -1126,6 +1160,8 @@ class FindUB:
             chunk_size=chunk_size,
             num_iters=num_iters,
             top_k=top_k,
+            static_R=self.R if self.R is not None else np.eye(3),
+            kf_lab_fixed_vectors=kf_ki_dir_lab, # Pass raw Lab vectors
         )
         print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
 
