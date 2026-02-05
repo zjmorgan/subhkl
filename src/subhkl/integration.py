@@ -812,6 +812,7 @@ class Peaks:
 
         found_peaks_xyz = None
         found_peaks_bank = None
+        found_peaks_run = None
         if found_peaks_file is not None:
             try:
                 import h5py
@@ -833,10 +834,14 @@ class Peaks:
                             found_peaks_xyz = f["peaks/xyz"][start:end]
                             if "bank" in f: found_peaks_bank = f["bank"][start:end]
                             elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][start:end]
+                            
+                            if "peaks/run_index" in f:
+                                found_peaks_run = f["peaks/run_index"][start:end]
                     elif "peaks/xyz" in f:
                         found_peaks_xyz = f["peaks/xyz"][()]
                         if "bank" in f: found_peaks_bank = f["bank"][()]
                         elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][()]
+                        if "peaks/run_index" in f: found_peaks_run = f["peaks/run_index"][()]
             except Exception as e:
                 print(f"Failed to load found peaks: {e}")
 
@@ -861,7 +866,7 @@ class Peaks:
             else:
                 current_rub = RUB if RUB.ndim == 2 else RUB[0]
 
-            metrics_info = (found_peaks_xyz, found_peaks_bank, current_rub, sample_offset, ki_vec)
+            metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, sample_offset, ki_vec)
             # Pass viz_label instead of fname_clean
             viz_info = (create_visualizations, file_prefix, viz_label)
             
