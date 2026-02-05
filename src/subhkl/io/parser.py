@@ -320,6 +320,7 @@ def finder(
         radii=detector_peaks.radii,
         xyz=detector_peaks.xyz, # Store XYZ
         bank=detector_peaks.bank,
+        image_index=detector_peaks.image_index,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
         gonio_names=detector_peaks.gonio_names,
@@ -728,7 +729,23 @@ def peak_predictor(
     print(f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}")
 
     # 3. Calculate RUB Stack for Parallel Processing
-    # UB = U @ B
+    # Use nominal rotations from master file as base
+    all_R = peaks.goniometer_rotation
+
+    # Apply refined offsets if present
+    with h5py.File(indexed_hdf5_filename, 'r') as f_idx:
+        if "optimization/goniometer_offsets" in f_idx:
+            offsets = f_idx["optimization/goniometer_offsets"][()]
+            print(f"Applying refined goniometer offsets: {offsets}")
+            # Re-calculate R stack using refined angles
+            # peaks.goniometer_angles_raw is (N_images, 3)
+            # offsets is (3,)
+            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+            all_R = np.stack([
+                calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                for ang in angles_refined
+            ])
+
     UB = U @ B
 
     # Handle R being a stack or single matrix
@@ -850,23 +867,17 @@ def integrator(
     }
 
     # 4. Run Integration
-    # Note: RUB passed here is symbolic; integrate method will calculate 
-    # per-image geometry if we update it, or we pass specific R. 
-    # The current 'Peaks.integrate' iterates the dictionary keys.
-    # Since we loaded 'merged.h5', peaks.ims keys are 0..N.
-    # peak_dict keys are 0..N.
-    # They match!
-    
-    # Construct a composite RUB for the *first* frame just to satisfy the signature,
-    # or rely on metric calculation internals.
-    # ideally 'integrate' should be aware of variable R, but for now we pass identity 
-    # and rely on the fact that prediction is already done.
-    RUB_nominal = np.eye(3) 
+    # Calculate RUB Stack from loaded parameters
+    UB = U @ B
+    if all_R.ndim == 3:
+        RUB = np.matmul(all_R, UB)
+    else:
+        RUB = all_R @ UB
 
     result = peaks.integrate(
         peak_dict,
         integration_params,
-        RUB=RUB_nominal, 
+        RUB=RUB, 
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         create_visualizations=create_visualizations,
