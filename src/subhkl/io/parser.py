@@ -103,7 +103,7 @@ def index(
             refine_goniometer_axes=refine_goniometer_axes
         )
 
-    num, hkl, lamda, U = opt.minimize_evosax(
+    num, hkl, lamda, U = opt.minimize(
         strategy_name=strategy_name,
         population_size=population_size,
         num_generations=gens,
@@ -196,7 +196,7 @@ def index(
         f["sample/U"] = U
         
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
-        # opt.minimize_evosax returns hkl (3, N).
+        # opt.minimize returns hkl (3, N).
         f["peaks/h"] = hkl[:,0]
         f["peaks/k"] = hkl[:,1]
         f["peaks/l"] = hkl[:,2]
@@ -241,6 +241,7 @@ def finder(
     sparse_rbf_chunk_size: int = 4096,  # reduce if OOM
     sparse_rbf_tile_rows: int = 2,      # NEW: Number of row divisions for tiling
     sparse_rbf_tile_cols: int = 2,      # NEW: Number of col divisions for tiling
+    max_workers: int = 16,
 ):
 
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -304,6 +305,7 @@ def finder(
         visualize=create_visualizations,
         show_progress=show_progress,
         file_prefix=filename,
+        max_workers=max_workers,
     )
 
     peaks.write_hdf5(
@@ -681,6 +683,7 @@ def peak_predictor(
     space_group: str = None,
     wavel_min: float = None,
     wavel_max: float = None,
+    max_workers: int = 16,
 ):
     """
     Predicts peaks for a full dataset using the optimized geometry from indexer.
@@ -743,7 +746,8 @@ def peak_predictor(
         RUB=RUB,
         space_group=space_group,
         sample_offset=sample_offset,
-        ki_vec=ki_vec
+        ki_vec=ki_vec,
+        max_workers=max_workers,
     )
 
     # 5. Save Predictions
@@ -796,6 +800,7 @@ def integrator(
     create_visualizations: bool = False,
     show_progress: bool = False,
     found_peaks_file: str = None,
+    max_workers: int = 16,
 ):
     """
     Integrates predicted peaks using the merged image stack.
@@ -869,6 +874,7 @@ def integrator(
         integration_method=integration_method,
         file_prefix=filename,
         found_peaks_file=found_peaks_file,
+        max_workers=max_workers,
     )
 
     # 5. Save Output
