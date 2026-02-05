@@ -64,7 +64,9 @@ class BaseConcatenateMerger:
                     f_out.create_dataset(merge_key, shape, dtype)
 
             offset = 0
-            f_out["files"] = np.array(list(map(lambda s: s.encode('utf-8'), self.h5_files)))
+            f_out["files"] = np.array(
+                list(map(lambda s: s.encode("utf-8"), self.h5_files))
+            )
             f_out.create_dataset("file_offsets", (len(self.h5_files),), dtype=np.int64)
             for i_file, indexed_file in enumerate(self.h5_files):
                 with h5py.File(indexed_file, "r") as f_in:
@@ -113,7 +115,7 @@ class MTZExporter:
             self.k = np.array(f["peaks/k"])
             self.l = np.array(f["peaks/l"])
             self.lamda = np.array(f["peaks/lambda"])
-            self.theta = np.array(f["peaks/two_theta"])/2
+            self.theta = np.array(f["peaks/two_theta"]) / 2
             self.phi = np.array(f["peaks/azimuthal"])
             self.intensity = np.array(f["peaks/intensity"])
             self.sigma = np.array(f["peaks/sigma"])
@@ -157,7 +159,7 @@ class MTZExporter:
         data = []
 
         for i in range(len(self.intensity)):
-            h, k, l = self.h[i], self.k[i], self.l[i]
+            h, k, l = self.h[i], self.k[i], self.l[i]  # noqa: E741
 
             # Drop invalid peaks
             if h == 0 and k == 0 and l == 0:

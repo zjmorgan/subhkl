@@ -609,7 +609,8 @@ class Peaks:
         integration_params: dict,
         show_progress: bool = False,
         visualize: bool = False,
-        file_prefix: str | None = None
+        file_prefix: str | None = None,
+        max_workers: int = None,
     ) -> DetectorPeaks:
         if not self.ims:
             raise Exception("ERROR: Must have images for Peaks first...")
@@ -692,7 +693,7 @@ class Peaks:
 
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context('spawn')
-        with ProcessPoolExecutor(mp_context=ctx) as executor:
+        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_process_single_image, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
@@ -723,7 +724,8 @@ class Peaks:
         )
 
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None):
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None,
+                      max_workers: int = None):
         """
         Predicts peak positions using parallel processing.
         Handles RUB as either a single (3,3) matrix OR a stack (N,3,3) for rotation scans.
@@ -762,7 +764,7 @@ class Peaks:
             
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context('spawn')
-        with ProcessPoolExecutor(mp_context=ctx) as executor:
+        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
             # Use tqdm for progress bar
             for future in tqdm(as_completed(futures), total=len(futures), desc="Predicting"):
@@ -787,7 +789,8 @@ class Peaks:
         create_visualizations=False,
         show_progress=False,
         file_prefix=None,
-        found_peaks_file=None 
+        found_peaks_file=None,
+        max_workers=None,
     ):
         h, k, l = [], [], []
         intensity, sigma = [], []
@@ -850,7 +853,7 @@ class Peaks:
        
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context('spawn')
-        with ProcessPoolExecutor(mp_context=ctx) as executor:
+        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
             
             for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):

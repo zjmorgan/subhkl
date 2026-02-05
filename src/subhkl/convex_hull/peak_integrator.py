@@ -20,32 +20,33 @@ class PeakIntegrator:
     @staticmethod
     def build_from_dictionary(integration_params):
         region_growth_params = {
-            "distance_threshold": integration_params.pop("region_growth_distance_threshold"),
+            "distance_threshold": integration_params.pop(
+                "region_growth_distance_threshold"
+            ),
             "min_intensity": integration_params.pop("region_growth_minimum_intensity"),
-            "max_size": integration_params.pop("region_growth_maximum_pixel_radius")
+            "max_size": integration_params.pop("region_growth_maximum_pixel_radius"),
         }
         other_params = {
             "box_size": integration_params["peak_center_box_size"],
             "smoothing_window_size": integration_params["peak_smoothing_window_size"],
             "min_peak_pixels": integration_params["peak_minimum_pixels"],
             "min_peak_snr": integration_params["peak_minimum_signal_to_noise"],
-            "outlier_threshold": integration_params["peak_pixel_outlier_threshold"]
+            "outlier_threshold": integration_params["peak_pixel_outlier_threshold"],
         }
         integrator = PeakIntegrator(
-            RegionGrower(**region_growth_params),
-            **other_params
+            RegionGrower(**region_growth_params), **other_params
         )
 
         return integrator
 
     def __init__(
-            self,
-            region_grower,
-            box_size: int = 5,
-            smoothing_window_size: int = 5,
-            min_peak_pixels: int = 3,
-            min_peak_snr: float = 1.0,
-            outlier_threshold: float = 2.0,
+        self,
+        region_grower,
+        box_size: int = 5,
+        smoothing_window_size: int = 5,
+        min_peak_pixels: int = 3,
+        min_peak_snr: float = 1.0,
+        outlier_threshold: float = 2.0,
     ):
         """
         Integrates all peaks for an entire bank
@@ -79,13 +80,13 @@ class PeakIntegrator:
         self.outlier_threshold = outlier_threshold
 
     def integrate_peaks(
-            self,
-            bank_id,
-            intensity,
-            peak_centers,
-            integration_method="free_fit",
-            return_hulls=False,
-            return_headers=False
+        self,
+        bank_id,
+        intensity,
+        peak_centers,
+        integration_method="free_fit",
+        return_hulls=False,
+        return_headers=False,
     ):
         """
         Integrates all peaks for the bank
@@ -122,9 +123,9 @@ class PeakIntegrator:
         )
 
         if return_headers:
-            output_data = [[
-                'bank_id', 'peak_idx', 'bg_den', 'peak_int', 'bg_int', 'sigma'
-            ]]
+            output_data = [
+                ["bank_id", "peak_idx", "bg_den", "peak_int", "bg_int", "sigma"]
+            ]
         else:
             output_data = []
 
@@ -148,17 +149,27 @@ class PeakIntegrator:
                         snr = 0.0
 
                     if snr < self.min_peak_snr:
-                        bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
+                        bg_density, peak_intensity, peak_bg_intensity, sigma = (
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
                         is_peak[i_peak] = False
                         peak_masks[i_peak] = None
                         bg_masks[i_peak] = None
                         peak_hulls[i_peak] = (None,) * len(peak_hulls[i_peak])
             else:
-                bg_density, peak_intensity, peak_bg_intensity, sigma = None, None, None, None
+                bg_density, peak_intensity, peak_bg_intensity, sigma = (
+                    None,
+                    None,
+                    None,
+                    None,
+                )
 
-            output_data.append([
-                bank_id, i_peak, bg_density, peak_intensity, peak_bg_intensity, sigma
-            ])
+            output_data.append(
+                [bank_id, i_peak, bg_density, peak_intensity, peak_bg_intensity, sigma]
+            )
 
         if return_hulls:
             return output_data, peak_hulls
@@ -183,13 +194,14 @@ class PeakIntegrator:
         fig, axes = plt.subplots(1, 1, figsize=(5, 5))
         axes.imshow(
             intensity.T,
-            cmap='gray_r',
-            origin='lower',
+            cmap="gray_r",
+            origin="lower",
             extent=(0, 255, 0, 255),
-            vmin=0, vmax=10
+            vmin=0,
+            vmax=10,
         )
         axes.set_title("Bank" + str(bank_id))
-        axes.axis('off')
+        axes.axis("off")
 
         for core_hull, peak_hull, inner_hull, outer_hull in peak_hulls:
             if core_hull is None:
@@ -197,32 +209,44 @@ class PeakIntegrator:
 
             for simplex in core_hull.simplices:
                 axes.plot(
-                    core_hull.points[simplex, 0], core_hull.points[simplex, 1],
-                    'r-', label='Peak Hull', linewidth=0.5
+                    core_hull.points[simplex, 0],
+                    core_hull.points[simplex, 1],
+                    "r-",
+                    label="Peak Hull",
+                    linewidth=0.5,
                 )
             axes.set_xlim([0, 255])
             axes.set_ylim([0, 255])
 
             for simplex in peak_hull.simplices:
                 axes.plot(
-                    peak_hull.points[simplex, 0], peak_hull.points[simplex, 1],
-                    'y-', label='Inner Hull', linewidth=0.5
+                    peak_hull.points[simplex, 0],
+                    peak_hull.points[simplex, 1],
+                    "y-",
+                    label="Inner Hull",
+                    linewidth=0.5,
                 )
 
             for simplex in inner_hull.simplices:
                 axes.plot(
-                    inner_hull.points[simplex, 0], inner_hull.points[simplex, 1],
-                    'b-', label='Inner Hull', linewidth=0.5
+                    inner_hull.points[simplex, 0],
+                    inner_hull.points[simplex, 1],
+                    "b-",
+                    label="Inner Hull",
+                    linewidth=0.5,
                 )
 
             for simplex in outer_hull.simplices:
                 axes.plot(
-                    outer_hull.points[simplex, 0], outer_hull.points[simplex, 1],
-                    'g-', label='Inner Hull', linewidth=0.5
+                    outer_hull.points[simplex, 0],
+                    outer_hull.points[simplex, 1],
+                    "g-",
+                    label="Inner Hull",
+                    linewidth=0.5,
                 )
 
         plt.tight_layout()
-        plt.savefig('Bank_' + str(bank_id) + '.png')
+        plt.savefig("Bank_" + str(bank_id) + ".png")
         plt.close()
 
     def _find_peak_regions(self, intensity, peak_centers):
@@ -288,10 +312,14 @@ class PeakIntegrator:
             # intensity values
             try:
                 if adjusted_center is not None:
-                    adjusted_center = self._find_nearest_nonzero_point(adjusted_center, intensity)
+                    adjusted_center = self._find_nearest_nonzero_point(
+                        adjusted_center, intensity
+                    )
 
                     # Grow region
-                    cluster_points = self.region_grower.get_region(intensity, adjusted_center)
+                    cluster_points = self.region_grower.get_region(
+                        intensity, adjusted_center
+                    )
                 else:
                     cluster_points = np.zeros(0)
             except ValueError:
@@ -302,15 +330,14 @@ class PeakIntegrator:
                 peak_masks.append(None)
                 inner_masks.append(None)
                 bg_masks.append(None)
-                peak_hulls.append([None]*4)
+                peak_hulls.append([None] * 4)
                 continue
             else:
                 is_peak[peak_idx] = True
 
             # Get core points of peak by removing outliers
             core_points = self._remove_outliers(
-                cluster_points,
-                threshold=self.outlier_threshold
+                cluster_points, threshold=self.outlier_threshold
             )
 
             # Build masks and hulls
@@ -390,10 +417,10 @@ class PeakIntegrator:
         total_bg_intensity = intensity[bg_indices[0], bg_indices[1]].sum()
 
         peak_bg_intensity = peak2bg * total_bg_intensity
-        peak_bg_variance = peak2bg ** 2 * total_bg_intensity
+        peak_bg_variance = peak2bg**2 * total_bg_intensity
 
         peak_intensity = total_peak_intensity - peak_bg_intensity
-        sigma = (total_peak_intensity + peak_bg_variance) ** .5
+        sigma = (total_peak_intensity + peak_bg_variance) ** 0.5
 
         bg_density = total_bg_intensity / bg_vol
 
@@ -431,15 +458,19 @@ class PeakIntegrator:
 
         # --- 1. Define Model and Objective Function ---
 
-        def gaussian_2d_model(y, x, amplitude, y0, x0, sigma_y, sigma_x, rho, background):
+        def gaussian_2d_model(
+            y, x, amplitude, y0, x0, sigma_y, sigma_x, rho, background
+        ):
             """2D Gaussian model on a constant background."""
             xy = np.stack([x - x0, y - y0], axis=-1)
-            covariance = np.array([
-                [sigma_x**2, sigma_x*sigma_y*rho],
-                [sigma_x*sigma_y*rho, sigma_y**2]
-            ])
+            covariance = np.array(
+                [
+                    [sigma_x**2, sigma_x * sigma_y * rho],
+                    [sigma_x * sigma_y * rho, sigma_y**2],
+                ]
+            )
             u = np.einsum("...i,ij,...j->...", xy, np.linalg.inv(covariance), xy)
-            model = background + amplitude * np.exp(-u/2)
+            model = background + amplitude * np.exp(-u / 2)
             return model
 
         def negative_log_likelihood(params, y_coords, x_coords, data):
@@ -471,8 +502,8 @@ class PeakIntegrator:
         if len(bg_indices[0]) > 0:
             bg_est = np.mean(intensity[bg_indices[0], bg_indices[1]])
         else:
-            bg_est = np.min(I_peak) # Fallback if bg_mask is empty
-        bg_est = max(bg_est, 1e-6) # Ensure background is positive
+            bg_est = np.min(I_peak)  # Fallback if bg_mask is empty
+        bg_est = max(bg_est, 1e-6)  # Ensure background is positive
 
         # Center guess: centroid of the peak mask
         y0_est = np.mean(y_peak)
@@ -480,7 +511,7 @@ class PeakIntegrator:
 
         # Amplitude guess: max peak intensity minus background
         amp_est = np.max(I_peak) - bg_est
-        amp_est = max(amp_est, 1e-6) # Ensure amplitude is positive
+        amp_est = max(amp_est, 1e-6)  # Ensure amplitude is positive
 
         # Initial parameters
         p0 = [amp_est, y0_est, x0_est, 1.0, 1.0, 0.0, bg_est]
@@ -488,13 +519,13 @@ class PeakIntegrator:
         # Parameter bounds: (amp, y0, x0, sy, sx, rho, bg)
         # Force amplitude, sigmas, and background to be positive
         bounds = [
-            (1e-9, None),     # amplitude
-            (np.min(y_peak), np.max(y_peak)), # y0
-            (np.min(x_peak), np.max(x_peak)), # x0
-            (0.1, 10.0),     # sigma_y (setting a reasonable range)
-            (0.1, 10.0),     # sigma_x (setting a reasonable range)
+            (1e-9, None),  # amplitude
+            (np.min(y_peak), np.max(y_peak)),  # y0
+            (np.min(x_peak), np.max(x_peak)),  # x0
+            (0.1, 10.0),  # sigma_y (setting a reasonable range)
+            (0.1, 10.0),  # sigma_x (setting a reasonable range)
             (-1.0, 1.0),
-            (1e-9, None)      # background
+            (1e-9, None),  # background
         ]
 
         # --- 4. Run Minimization ---
@@ -503,8 +534,8 @@ class PeakIntegrator:
                 negative_log_likelihood,
                 p0,
                 args=(y_peak, x_peak, I_peak),
-                method='L-BFGS-B',
-                bounds=bounds
+                method="L-BFGS-B",
+                bounds=bounds,
             )
 
             if not result.success:
@@ -514,7 +545,9 @@ class PeakIntegrator:
             amplitude, y0, x0, sigma_y, sigma_x, rho, bg_level = result.x
 
             # Calculate the total integral of the Gaussian
-            peak_integral = 2 * np.pi * amplitude * sigma_y * sigma_x * (1-rho**2)**.5
+            peak_integral = (
+                2 * np.pi * amplitude * sigma_y * sigma_x * (1 - rho**2) ** 0.5
+            )
 
             # Background contribution under the peak mask
             peak_bg_integral = bg_level * peak_vol
@@ -537,14 +570,22 @@ class PeakIntegrator:
                 term_A = (2 * np.pi * sigma_y * sigma_x * err_A) ** 2
                 term_sy = (2 * np.pi * amplitude * sigma_x * err_sy) ** 2
                 term_sx = (2 * np.pi * amplitude * sigma_y * err_sx) ** 2
-                term_rho = (2 * np.pi * amplitude * sigma_x * sigma_y * rho / (1-rho**2)**.5) ** 2
+                term_rho = (
+                    2
+                    * np.pi
+                    * amplitude
+                    * sigma_x
+                    * sigma_y
+                    * rho
+                    * err_rho
+                    / (1 - rho**2) ** 0.5
+                ) ** 2
 
                 peak_integral_error = np.sqrt(term_A + term_sy + term_sx + term_rho)
 
             except Exception:
                 # Fallback if Hessian inversion fails
                 peak_integral_error = np.sqrt(peak_integral + peak_bg_integral)
-
 
             return bg_level, peak_integral, peak_bg_integral, peak_integral_error
 
@@ -572,9 +613,7 @@ class PeakIntegrator:
 
         w = self.smoothing_window_size
         smoothed = convolve2d(
-            input_tensor,
-            np.ones((w, w)) / w**2,
-            mode='same', boundary='fill'
+            input_tensor, np.ones((w, w)) / w**2, mode="same", boundary="fill"
         )
 
         return smoothed
@@ -612,13 +651,13 @@ class PeakIntegrator:
 
         # Find the index of the max value in the window
         max_idx_flat = np.argmax(window)
-        max_idx_2d = (
-            max_idx_flat // window.shape[1],
-            max_idx_flat % window.shape[1]
-        )
+        max_idx_2d = (max_idx_flat // window.shape[1], max_idx_flat % window.shape[1])
 
         # Map local index back to global coordinates
-        global_max_idx = (r_start + max_idx_2d[0].item(), c_start + max_idx_2d[1].item())
+        global_max_idx = (
+            r_start + max_idx_2d[0].item(),
+            c_start + max_idx_2d[1].item(),
+        )
         return global_max_idx
 
 
@@ -659,7 +698,7 @@ class PeakIntegrator:
             that has a nonzero intensity
         """
         if np.all(intensity == 0):
-            raise ValueError('Invalid intensity map--all intensities are 0!')
+            raise ValueError("Invalid intensity map--all intensities are 0!")
 
         if intensity[start[0], start[1]] != 0:
             return start
@@ -686,7 +725,7 @@ class PeakIntegrator:
                 if intensity[row, col] != 0:
                     return row, col
 
-        raise ValueError('Invalid intensity map--all intensities are 0!')
+        raise ValueError("Invalid intensity map--all intensities are 0!")
 
     def _make_peak_hulls_and_masks(self, core_points, im_shape):
         """
@@ -740,8 +779,10 @@ class PeakIntegrator:
         # inner region)
         bg_mask = outer_mask - inner_mask
 
-        return ((peak_mask, inner_mask, bg_mask),
-                (core_hull, peak_hull, inner_hull, outer_hull))
+        return (
+            (peak_mask, inner_mask, bg_mask),
+            (core_hull, peak_hull, inner_hull, outer_hull),
+        )
 
     @staticmethod
     def _hull_mask(hull, shape):
@@ -785,7 +826,6 @@ class PeakIntegrator:
 
     @staticmethod
     def _expand_convex_hull(hull, scale_factor):
-
         """
         Expand a convex hull along the radial direction with respect to the mean of the points.
 

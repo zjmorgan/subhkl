@@ -1,5 +1,10 @@
 import os
 import pytest
+import matplotlib
+
+
+# Use non-interactive backend for tests to prevent plot windows from popping up
+matplotlib.use("Agg")
 
 
 @pytest.fixture(name="test_data_dir")

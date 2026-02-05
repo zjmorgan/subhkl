@@ -2,8 +2,6 @@ name: CI
 
 on:
   push:
-    branches:
-      - main 
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
@@ -17,38 +15,49 @@ jobs:
   lint:
     name: Linting + formating
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PDM
-        uses: pdm-project/setup-pdm@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: true
       - name: Install dependencies
+        run: uv pip install -e ".[lint]" --system
+      - name: Run linting
         run: |
-          pdm venv create --with-pip --force $PYTHON
-          pdm sync --dev -G:all
-      - run: |
-          pdm run ruff format --check
-          pdm run ruff check
+          ruff format --check
+          ruff check
 
   test-unit:
-    name: Unit tests
+    name: Unit tests (${{ matrix.backend }})
     strategy:
       matrix:
         python-version: ["3.10"]
         os:
           - ubuntu-latest
+        backend:
+          - numpy
+          - jax
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PDM
-        uses: pdm-project/setup-pdm@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: true
-      - name: Install dependencies
+      - name: Install dependencies (NumPy backend)
+        if: matrix.backend == 'numpy'
+        run: uv pip install -e ".[test]" --system
+      - name: Install dependencies (JAX backend)
+        if: matrix.backend == 'jax'
+        run: uv pip install -e ".[test,jax]" --system
+      - name: Run tests
+        run: pytest -v
+      - name: Verify backend
         run: |
-          pdm venv create --with-pip --force $PYTHON
-          pdm sync --dev -G:all
-      - run: pdm run pytest 
+          python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"

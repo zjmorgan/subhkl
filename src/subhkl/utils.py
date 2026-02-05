@@ -7,6 +7,80 @@ from subhkl.spacegroup import is_systematically_absent
 if typing.TYPE_CHECKING:
     from subhkl.detector import Detector
 
+# ==============================================================================
+# JAX Import with Fallback (shared across modules)
+# ==============================================================================
+
+try:
+    import jax
+    import jax.numpy as jnp
+    import jax.scipy.linalg as jscipy_linalg
+    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
+    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+    from jax import jit, vmap, lax
+    import jax.scipy.optimize
+    import jax.scipy.signal
+
+    HAS_JAX = True
+    OPTIMIZATION_BACKEND = "jax"
+except Exception:
+    # Fallback shim: expose a minimal `jax`-like object and map jax.numpy
+    # to the installed NumPy so code using `jnp` still works.
+    import numpy as jnp
+
+    class _JaxShim:
+        """Minimal JAX shim for when JAX is not installed."""
+
+        @staticmethod
+        def jit(f=None, *, static_argnames=None, **kwargs):
+            if f is None:
+                return lambda fn: fn
+            return f
+
+    jax = _JaxShim()
+    jit = jax.jit
+    vmap = lambda f, **kwargs: f  # Simple fallback, won't vectorize
+    lax = None
+    DifferentialEvolution = None
+    PSO = None
+    CMA_ES = None
+    jscipy_linalg = scipy.linalg
+    Mesh = None
+    NamedSharding = None
+    P = None
+    HAS_JAX = False
+    OPTIMIZATION_BACKEND = "numpy"
+
+
+def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
+    """
+    Scale pixel coordinates to physical coordinates.
+    
+    Parameters
+    ----------
+    xp : float
+        Pixel x-coordinate
+    yp : float
+        Pixel y-coordinate
+    scale_x : float
+        Scale factor in x direction (m/pixel)
+    scale_y : float
+        Scale factor in y direction (m/pixel)
+    nx : int
+        Number of pixels in x direction
+    ny : int
+        Number of pixels in y direction
+    
+    Returns
+    -------
+    x, y : tuple of float
+        Physical coordinates in meters
+    """
+    x = (xp - nx / 2) * scale_x
+    y = (yp - ny / 2) * scale_y
+    return x, y
+
+
 def cartesian_matrix_metric_tensor(a, b, c, alpha, beta, gamma):
     """
     Calculates the B matrix (orientation matrix) and G* (reciprocal metric tensor).

@@ -103,7 +103,7 @@ def index(
             refine_goniometer_axes=refine_goniometer_axes
         )
 
-    num, hkl, lamda, U = opt.minimize_evosax(
+    num, hkl, lamda, U = opt.minimize(
         strategy_name=strategy_name,
         population_size=population_size,
         num_generations=gens,
@@ -196,7 +196,7 @@ def index(
         f["sample/U"] = U
         
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
-        # opt.minimize_evosax returns hkl (3, N).
+        # opt.minimize returns hkl (3, N).
         f["peaks/h"] = hkl[:,0]
         f["peaks/k"] = hkl[:,1]
         f["peaks/l"] = hkl[:,2]
@@ -210,7 +210,7 @@ def finder(
     instrument: str,
     output_filename: str = "output.h5",
     finder_algorithm: str = "peak_local_max",
-    show_progress: bool = False,
+    show_progress: bool = True,
     create_visualizations: bool = False,
     show_steps: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
@@ -241,6 +241,7 @@ def finder(
     sparse_rbf_chunk_size: int = 4096,  # reduce if OOM
     sparse_rbf_tile_rows: int = 2,      # NEW: Number of row divisions for tiling
     sparse_rbf_tile_cols: int = 2,      # NEW: Number of col divisions for tiling
+    max_workers: int = 16,
 ):
 
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -259,7 +260,7 @@ def finder(
             peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
         if peak_local_max_min_relative_intensity > 0:
             peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
-        peak_kwargs['normalize'] = peak_local_max_normalization
+        peak_kwargs["normalize"] = peak_local_max_normalization
     elif finder_algorithm == "thresholding":
         peak_kwargs.update({
             "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
@@ -295,7 +296,7 @@ def finder(
         "peak_smoothing_window_size": peak_smoothing_window_size,
         "peak_minimum_pixels": peak_minimum_pixels,
         "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
     }
 
     detector_peaks = peaks.get_detector_peaks(
@@ -303,7 +304,8 @@ def finder(
         integration_params,
         visualize=create_visualizations,
         show_progress=show_progress,
-        file_prefix=filename
+        file_prefix=filename,
+        max_workers=max_workers,
     )
 
     peaks.write_hdf5(
@@ -373,9 +375,7 @@ def indexer(
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,
     strategy_name: str = typer.Option(
-        "DE", 
-        "--strategy", 
-        help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+        "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
     sigma_init: float = typer.Option(
         None,
@@ -383,24 +383,17 @@ def indexer(
         help="Parameter exploration range."
     ),
     n_runs: int = typer.Option(
-        1, 
-        "--n-runs", "-n", 
-        help="Number of optimization runs with different seeds."
+        1, "--n-runs", "-n", help="Number of optimization runs with different seeds."
     ),
     population_size: int = typer.Option(
-        1000, 
-        "--population-size", "--popsize", 
-        help="Population size for each generation."
+        1000,
+        "--population-size",
+        "--popsize",
+        help="Population size for each generation.",
     ),
-    gens: int = typer.Option(
-        100, 
-        "--gens", 
-        help="Number of generations to run."
-    ),
+    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
     seed: int = typer.Option(
-        0, 
-        "--seed", 
-        help="Base seed for the first optimization run."
+        0, "--seed", help="Base seed for the first optimization run."
     ),
     softness: float = 0.1,
     refine_lattice: bool = typer.Option(
@@ -546,7 +539,7 @@ def indexer(
 
 @app.command()
 def indexer_using_file(
-    hdf5_peaks_filename: str, 
+    hdf5_peaks_filename: str,
     output_peaks_filename: str,
     original_nexus_filename: typing.Optional[str] = None,
     instrument_name: typing.Optional[str] = None,
@@ -690,6 +683,7 @@ def peak_predictor(
     space_group: str = None,
     wavel_min: float = None,
     wavel_max: float = None,
+    max_workers: int = 16,
 ):
     """
     Predicts peaks for a full dataset using the optimized geometry from indexer.
@@ -752,7 +746,8 @@ def peak_predictor(
         RUB=RUB,
         space_group=space_group,
         sample_offset=sample_offset,
-        ki_vec=ki_vec
+        ki_vec=ki_vec,
+        max_workers=max_workers,
     )
 
     # 5. Save Predictions
@@ -803,8 +798,9 @@ def integrator(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     create_visualizations: bool = False,
-    show_progress: bool = False,
+    show_progress: bool = True,
     found_peaks_file: str = None,
+    max_workers: int = 16,
 ):
     """
     Integrates predicted peaks using the merged image stack.
@@ -878,6 +874,7 @@ def integrator(
         integration_method=integration_method,
         file_prefix=filename,
         found_peaks_file=found_peaks_file,
+        max_workers=max_workers,
     )
 
     # 5. Save Output
