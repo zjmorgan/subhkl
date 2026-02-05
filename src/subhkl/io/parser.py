@@ -210,7 +210,7 @@ def finder(
     instrument: str,
     output_filename: str = "output.h5",
     finder_algorithm: str = "peak_local_max",
-    show_progress: bool = False,
+    show_progress: bool = True,
     create_visualizations: bool = False,
     show_steps: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
@@ -798,7 +798,7 @@ def integrator(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     create_visualizations: bool = False,
-    show_progress: bool = False,
+    show_progress: bool = True,
     found_peaks_file: str = None,
     max_workers: int = 16,
 ):
