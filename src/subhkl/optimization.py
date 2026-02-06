@@ -219,7 +219,7 @@ def rotation_matrix_from_rodrigues_jax(w):
 # ==============================================================================
 
 class VectorizedObjective:
-    def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, softness=0.01,
+    def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, tolerance_deg=0.1,
                  cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  goniometer_refine_mask=None, goniometer_nominal_offsets=None,
@@ -234,6 +234,9 @@ class VectorizedObjective:
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
+
+        # Convert tolerance from degrees to radians
+        self.tolerance_rad = jnp.deg2rad(tolerance_deg)
 
         # FIX: Handle Static Rotation (R) correctly
         if static_R is not None:
@@ -271,7 +274,7 @@ class VectorizedObjective:
         if beam_nominal is None: self.beam_nominal = jnp.array([0.0, 0.0, 1.0])
         else: self.beam_nominal = jnp.array(beam_nominal)
 
-        self.softness = softness
+        self.tolerance_deg = tolerance_deg # Store original for reference if needed
         self.loss_method = loss_method
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
@@ -322,8 +325,8 @@ class VectorizedObjective:
         else: self.peak_radii = jnp.array(peak_radii)
         
         self.max_score = jnp.sum(self.weights)
-        self.d_min = d_min
-        self.d_max = d_max
+        self.d_min = d_min if d_min is not None else 0.0
+        self.d_max = d_max if d_max is not None else 1000.0
         self.search_window_size = search_window_size
         self.window_batch_size = window_batch_size
 
@@ -497,7 +500,7 @@ class VectorizedObjective:
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
-    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
+    def indexer_dynamic_soft_jax(self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
@@ -522,7 +525,7 @@ class VectorizedObjective:
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int)**2, axis=1)
             safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
-            effective_sigma = softness + (k_norm / safe_lamb) * self.peak_radii[None, :]
+            effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (k_norm / safe_lamb)
             prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
             
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
@@ -558,16 +561,19 @@ class VectorizedObjective:
         score = -jnp.sum(self.weights * accum_probs, axis=1)
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
-    def indexer_dynamic_cosine_aniso_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01):
+    def indexer_dynamic_cosine_aniso_jax(self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
-        recip_len_sq = jnp.sum(UB**2, axis=1)
-        kappa = recip_len_sq / ((softness + 1e-9)**2 * 4 * jnp.pi**2)
-        kappa = kappa[:, :, None]
+        
+        # kappa for von Mises-Fisher-like concentration in HKL space
+        # Uniform angular tolerance: sigma_h approx tolerance_rad * h. 
+        # kappa = 1 / (4 * pi^2 * tolerance_rad^2)
+        kappa = 1.0 / ((tolerance_rad + 1e-9)**2 * 4 * jnp.pi**2)
+        
         initial_carry = (
             jnp.zeros(max_v_val.shape),         
             jnp.full(max_v_val.shape, -1e9),    
@@ -623,7 +629,7 @@ class VectorizedObjective:
         score = -jnp.sum(self.weights * accum_probs, axis=1)
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
-    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01, window_batch_size=32):
+    def indexer_dynamic_binary_jax(self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002, window_batch_size=32):
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
         UB_inv = jnp.linalg.inv(UB)
@@ -675,7 +681,7 @@ class VectorizedObjective:
             return (new_min_dist, new_best_hkl, new_best_lamb), None
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
-        effective_sigma = softness + (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
+        effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb))
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
         score = -jnp.sum(self.weights * probs, axis=1)
         return score, probs, best_hkl, best_lamb
@@ -683,7 +689,7 @@ class VectorizedObjective:
     # ==========================================================================
     # OPTIMIZED SINKHORN-EM INDEXER (Memory Efficient + Rotation Trick)
     # ==========================================================================
-    def indexer_sinkhorn_jax(self, UB, kf_ki_sample, k_sq_override=None, softness=0.01, num_iters=20, epsilon=1.0, top_k=32,
+    def indexer_sinkhorn_jax(self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002, num_iters=20, epsilon=1.0, top_k=32,
                              chunk_size=256):
         """
         Robust Memory-Efficient Sinkhorn with Rotated-Observer Optimization.
@@ -692,7 +698,7 @@ class VectorizedObjective:
             UB: (Batch, 3, 3) Orientation Matrix
             kf_ki_sample: (Batch, 3, N_obs) Observed directions
             top_k: Number of nearest neighbors to keep (sparsity factor).
-            softness: vMF sigma (controls kernel width).
+            tolerance_rad: vMF sigma (controls kernel width).
             epsilon: Sinkhorn entropy regularizer (kept at 1.0 due to internal scaling).
         """
         # 1. Setup Data
@@ -760,8 +766,8 @@ class VectorizedObjective:
         
         (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (init_vals, init_idxs), jnp.arange(num_chunks))
         
-        # 3. Robust Scaling (vMF kernel: exp((cos(theta)-1)/softness^2))
-        log_K = (top_vals - 1.0) / (softness**2)
+        # 3. Robust Scaling (vMF kernel: exp((cos(theta)-1)/tolerance_rad^2))
+        log_K = (top_vals - 1.0) / (tolerance_rad**2)
         
         # 4. Filter Logic (Re-calculate norms for Top-K only)
         # Gather HKL vectors: (Batch, N_obs, K, 3)
@@ -796,9 +802,9 @@ class VectorizedObjective:
         log_K = jnp.where(valid_mask, log_K, -1e6) # Effectively zero probability
 
         # 5. Outlier (Dustbin) & Softmax
-        # Use an angular threshold for outliers that scales with softness (e.g. 3 sigma)
-        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * softness)
-        log_K_dustbin = (jnp.cos(outlier_threshold_rad) - 1.0) / (softness**2)
+        # Use an angular threshold for outliers that scales with tolerance_rad (e.g. 3 sigma)
+        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * tolerance_rad)
+        log_K_dustbin = (jnp.cos(outlier_threshold_rad) - 1.0) / (tolerance_rad**2)
         log_K_dustbin = jnp.full((batch_size, n_obs, 1), log_K_dustbin)
         log_K_extended = jnp.concatenate([log_K, log_K_dustbin], axis=2)
         
@@ -811,8 +817,8 @@ class VectorizedObjective:
         probs = jnp.max(P_match, axis=2)
         
         # We want to maximize probabilities. Optimization is minimization.
-        # Use (probs / softness^2) to provide a strong gradient.
-        weighted_score = jnp.sum(self.weights * (probs / (softness**2)), axis=1)
+        # Use (probs / tolerance_rad^2) to provide a strong gradient.
+        weighted_score = jnp.sum(self.weights * (probs / (tolerance_rad**2)), axis=1)
 
         # Metrics
         best_k_idx = jnp.argmax(P_match, axis=2)
@@ -856,14 +862,14 @@ class VectorizedObjective:
             kf_ki_vec = q_lab
 
         if self.loss_method == 'forward':
-            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness, window_batch_size=self.window_batch_size)
+            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad, window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
-            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
         elif self.loss_method == 'sinkhorn':
-            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness,
+            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad,
                                                        chunk_size=self.chunk_size, num_iters=self.num_iters, top_k=self.top_k)
         else:
-            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
 
         return score
 
@@ -1003,18 +1009,25 @@ class FindUB:
             active_indices = _get_active_lattice_indices(lat_sys)
             new_params.append(np.full(len(active_indices), 0.5))
 
+        if b_offset is not None:
+            print(f"  > Setting Base Sample Offset: {b_offset}")
+            self.base_sample_offset = b_offset # Store always
+
         if refine_sample:
-            if self.peak_xyz is not None:
-                print(f"  > Setting Base Sample Offset: {b_offset}")
-                self.base_sample_offset = b_offset # Store only
-                new_params.append(np.full(3, 0.5)) 
-            else:
-                new_params.append(np.full(3, 0.5))
+            new_params.append(np.full(3, 0.5))
+
+        if b_ki is not None:
+            print(f"  > Recentered Beam Vector: {b_ki}")
+            self.ki_vec = b_ki # Store always
 
         if refine_beam:
-            print(f"  > Recentered Beam Vector: {b_ki}")
-            self.ki_vec = b_ki 
             new_params.append(np.full(2, 0.5))
+
+        if b_gonio_offsets is not None:
+            print(f"  > Setting Base Goniometer Offsets: {b_gonio_offsets}")
+            self.base_gonio_offset = b_gonio_offsets # Store always
+        else:
+            self.base_gonio_offset = np.zeros(len(self.goniometer_axes)) if self.goniometer_axes is not None else None
 
         if refine_goniometer:
             active_mask = []
@@ -1025,15 +1038,8 @@ class FindUB:
             else:
                 active_mask = [True] * len(self.goniometer_axes)
             
-            if b_gonio_offsets is not None:
-                print(f"  > Setting Base Goniometer Offsets: {b_gonio_offsets}")
-                self.base_gonio_offset = b_gonio_offsets # Store only
-                n_active = sum(active_mask)
-                new_params.append(np.full(n_active, 0.5))
-            else:
-                self.base_gonio_offset = np.zeros(len(self.goniometer_axes))
-                n_active = sum(active_mask)
-                new_params.append(np.full(n_active, 0.5))
+            n_active = sum(active_mask)
+            new_params.append(np.full(n_active, 0.5))
 
         return np.concatenate([np.atleast_1d(p) for p in new_params])
 
@@ -1044,7 +1050,7 @@ class FindUB:
         num_generations: int = 100,
         n_runs: int = 1,
         seed: int = 0,
-        softness: float = 0.01,
+        tolerance_deg: float = 0.1,
         loss_method: str = 'gaussian',
         init_params: np.ndarray = None,
         refine_lattice: bool = False,
@@ -1132,7 +1138,7 @@ class FindUB:
             self._angle_cdf,
             self._angle_t,
             weights=weights,
-            softness=softness,
+            tolerance_deg=tolerance_deg,
             space_group=self.space_group,
             loss_method=loss_method,
             cell_params=cell_params_init,
@@ -1163,7 +1169,7 @@ class FindUB:
             static_R=self.R if self.R is not None else np.eye(3),
             kf_lab_fixed_vectors=kf_ki_dir_lab, # Pass raw Lab vectors
         )
-        print(f"Objective initialized with {loss_method} loss. Softness: {softness}")
+        print(f"Objective initialized with {loss_method} loss. Tolerance: {tolerance_deg} deg")
 
         num_dims = 3
         if refine_lattice: num_dims += num_lattice_params
@@ -1171,7 +1177,7 @@ class FindUB:
             if self.peak_xyz is None: refine_sample = False
             else: num_dims += 3
         if refine_beam:
-            if self.peak_xyz is None: refine_sample = False
+            if self.peak_xyz is None: refine_beam = False
             else: num_dims += 2
         if refine_goniometer:
             if goniometer_refine_mask is not None: num_dims += np.sum(goniometer_refine_mask)
@@ -1372,13 +1378,13 @@ class FindUB:
         UB_final = np.array(UB_final)
 
         if loss_method == 'forward':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=softness, window_batch_size=window_batch_size)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, tolerance_rad=objective.tolerance_rad, window_batch_size=window_batch_size)
         elif loss_method == 'cosine':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn)
         elif loss_method == 'sinkhorn':
-            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
+            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
         else:
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn)
 
         num_peaks_soft = float(np.sum(accum_probs[0]))
         print(f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count).")

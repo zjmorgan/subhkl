@@ -24,7 +24,7 @@ def index(
     gens: int = 100,
     n_runs: int = 1,
     seed: int = 0,
-    softness: float = 0.01,
+    tolerance_deg: float = 0.1,
     sigma_init: float = None,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
@@ -42,7 +42,7 @@ def index(
     hkl_search_range: int = 20,
     d_min: float = None,
     d_max: float = None,
-    search_window_size: int = 256,
+    search_window_size: int = 512,
     batch_size: int = None,
     window_batch_size: int = 32,
     chunk_size: int = 256,
@@ -110,7 +110,7 @@ def index(
         n_runs=n_runs,
         sigma_init=sigma_init,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         init_params=init_params,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
@@ -149,11 +149,16 @@ def index(
         "peaks/azimuthal",
         "peaks/radius",
         "peaks/xyz", 
+        "goniometer/R",
         "goniometer/axes", 
         "goniometer/angles",
         "goniometer/names",
         "files",
         "file_offsets",
+        "peaks/run_index",
+        "bank",
+        "sample/offset",
+        "beam/ki_vec"
     ]
 
     copied_data = {}
@@ -173,26 +178,30 @@ def index(
         for key, value in copied_data.items():
             f[key] = value
 
-        f["goniometer/R"] = opt.R
+        def safe_write(grp, name, data):
+            if name in grp: del grp[name]
+            grp[name] = data
+
+        safe_write(f, "goniometer/R", opt.R)
         
         if opt.goniometer_offsets is not None:
-            f["optimization/goniometer_offsets"] = opt.goniometer_offsets
+            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
             
         if opt.sample_offset is not None:
-            f["sample/offset"] = opt.sample_offset
+            safe_write(f, "sample/offset", opt.sample_offset)
             
         if opt.ki_vec is not None:
-            f["beam/ki_vec"] = opt.ki_vec
+            safe_write(f, "beam/ki_vec", opt.ki_vec)
 
-        f["sample/a"] = opt.a
-        f["sample/b"] = opt.b
-        f["sample/c"] = opt.c
-        f["sample/alpha"] = opt.alpha
-        f["sample/beta"] = opt.beta
-        f["sample/gamma"] = opt.gamma
+        safe_write(f, "sample/a", opt.a)
+        safe_write(f, "sample/b", opt.b)
+        safe_write(f, "sample/c", opt.c)
+        safe_write(f, "sample/alpha", opt.alpha)
+        safe_write(f, "sample/beta", opt.beta)
+        safe_write(f, "sample/gamma", opt.gamma)
 
         B_mat = opt.reciprocal_lattice_B()
-        f["sample/B"] = B_mat
+        safe_write(f, "sample/B", B_mat)
         f["sample/U"] = U
         
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
@@ -320,6 +329,7 @@ def finder(
         radii=detector_peaks.radii,
         xyz=detector_peaks.xyz, # Store XYZ
         bank=detector_peaks.bank,
+        image_index=detector_peaks.image_index,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
         gonio_names=detector_peaks.gonio_names,
@@ -395,7 +405,7 @@ def indexer(
     seed: int = typer.Option(
         0, "--seed", help="Base seed for the first optimization run."
     ),
-    softness: float = 0.1,
+    tolerance_deg: float = 0.1,
     refine_lattice: bool = typer.Option(
         False, 
         "--refine-lattice", 
@@ -450,7 +460,7 @@ def indexer(
     d_min: float = typer.Option(None, "--d-min"),
     d_max: float = typer.Option(None, "--d-max"),
     hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
-    search_window_size: int = typer.Option(256, "--search-window-size"),
+    search_window_size: int = typer.Option(512, "--search-window-size"),
     batch_size: int = typer.Option(None, "--batch-size"),
     window_batch_size: int = typer.Option(32, "--window-batch-size"),
     chunk_size: int = typer.Option(256, "--chunk-size"),
@@ -481,7 +491,8 @@ def indexer(
             "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma", 
             "peaks/radius", "peaks/xyz",
             "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names",
-            "files", "file_offsets",
+            "files", "file_offsets", "peaks/run_index", "bank",
+            "sample/offset", "beam/ki_vec"
         ]
         
         for k in keys_to_load:
@@ -497,6 +508,12 @@ def indexer(
     input_data["sample/space_group"] = sg_to_use
     input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
+    # --- NEW: Check d_max for sanity ---
+    cell_max = max(a, b, c)
+    if d_max is not None and d_max < cell_max:
+        print(f"WARNING: --d-max ({d_max}) is smaller than largest unit cell dimension ({cell_max:.2f}).")
+        print("         This will exclude low-order reflections which are critical for orientation.")
+
     gonio_axes_list = None
     if refine_goniometer_axes:
         gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(',')]
@@ -510,7 +527,7 @@ def indexer(
         sigma_init=sigma_init,
         n_runs=n_runs,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
@@ -552,7 +569,7 @@ def indexer_using_file(
     lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
     refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
     goniometer_bound_deg: float = typer.Option(5.0, "--goniometer-bound-deg"),
-    softness: float = 0.1,
+    tolerance_deg: float = 0.1,
 ):
     index(
         hdf5_peaks_filename=hdf5_peaks_filename,
@@ -562,7 +579,7 @@ def indexer_using_file(
         gens=gens,
         n_runs=n_runs,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
@@ -575,7 +592,8 @@ def indexer_using_file(
 @app.command()
 def metrics(
     filename: str,
-    d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation.")
+    d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation."),
+    per_run: bool = typer.Option(False, "--per-run", help="Calculate and display metrics for each run/image.")
 ):
     try:
         with h5py.File(filename, "r") as f:
@@ -588,6 +606,11 @@ def metrics(
             k = f["peaks/k"][()]
             l = f["peaks/l"][()]
             lam = f["peaks/lambda"][()]
+            run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
+            if run_index is None and "peaks/bank" in f:
+                run_index = f["peaks/bank"][()]
+            if run_index is None and "bank" in f:
+                run_index = f["bank"][()]
 
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
@@ -667,6 +690,35 @@ def metrics(
 
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
+        
+        if per_run:
+            if run_index is not None:
+                # Re-mask run_index to match filtered peaks
+                run_index_filtered = run_index[mask]
+                if d_min is not None:
+                    run_index_filtered = run_index_filtered[d_mask]
+                
+                unique_runs = sorted(np.unique(run_index_filtered))
+                run_errors = []
+                for r in unique_runs:
+                    r_mask = (run_index_filtered == r)
+                    if np.sum(r_mask) > 0:
+                        run_errors.append((int(r), np.median(ang_err[r_mask]), np.sum(r_mask)))
+                
+                # Sort by median error descending
+                run_errors.sort(key=lambda x: x[1], reverse=True)
+                
+                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
+                for r, err, count in run_errors:
+                    status = "BAD" if err > 1.0 else "OK"
+                    print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
+                
+                bad_runs = [r for r, err, _ in run_errors if err > 1.0]
+                if bad_runs:
+                    print(f"\nWARNING: Found {len(bad_runs)} outlier runs with >1.0 deg error.")
+                    print(f"Consider excluding these runs: {bad_runs}")
+            else:
+                print("\nWARNING: --per-run requested but no run information found.")
 
     except Exception as e:
         # print(e)
@@ -708,9 +760,9 @@ def peak_predictor(
         U = f_idx["sample/U"][()]
         B = f_idx["sample/B"][()]
 
-        # Load Geometry Stacks
-        # R is likely (N_images, 3, 3)
-        all_R = f_idx["goniometer/R"][()]
+        # Load optional refinement parameters
+        offsets = f_idx["optimization/goniometer_offsets"][()] if "optimization/goniometer_offsets" in f_idx else None
+        idx_R = f_idx["goniometer/R"][()] if "goniometer/R" in f_idx else None
 
         if "sample/offset" in f_idx:
             sample_offset = f_idx["sample/offset"][()]
@@ -728,7 +780,28 @@ def peak_predictor(
     print(f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}")
 
     # 3. Calculate RUB Stack for Parallel Processing
-    # UB = U @ B
+    # We always start with the nominal geometry of the TARGET file (filename)
+    all_R = peaks.goniometer_rotation
+
+    # Then we apply refined parameters from the INDEXER file
+    if offsets is not None:
+        print(f"Applying refined goniometer offsets from indexer: {offsets}")
+        # Re-calculate refined R stack for the TARGET images
+        if peaks.goniometer_angles_raw is not None and peaks.goniometer_axes_raw is not None:
+            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+            all_R = np.stack([
+                calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                for ang in angles_refined
+            ])
+        else:
+            print("WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack.")
+    elif idx_R is not None:
+        # Fallback: if the indexer has a stack that happens to match the image count, 
+        # we use it, but warn that this is less robust than offsets.
+        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
+            print("Using R stack directly from indexer (matches image count).")
+            all_R = idx_R
+
     UB = U @ B
 
     # Handle R being a stack or single matrix
@@ -765,6 +838,18 @@ def peak_predictor(
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
         f["goniometer/R"] = all_R # Save full stack
+        
+        try:
+            goniometer_angles_to_save = angles_refined
+        except NameError:
+            goniometer_angles_to_save = peaks.goniometer_angles_raw
+            
+        f["goniometer/angles"] = goniometer_angles_to_save
+        f["goniometer/axes"] = peaks.goniometer_axes_raw
+        if peaks.goniometer_names_raw:
+            dt = h5py.string_dtype(encoding='utf-8')
+            f.create_dataset("goniometer/names", data=peaks.goniometer_names_raw, dtype=dt)
+
         f["sample/offset"] = sample_offset
         f["beam/ki_vec"] = ki_vec
 
@@ -807,12 +892,18 @@ def integrator(
     """
     # 1. Load Predictions
     peak_dict = {}
+    angles_stack = None
+    all_R = None
     with h5py.File(integration_peaks_filename, 'r') as f:
         # Load Physics for context (passed to integrate if needed, mainly R)
         if "sample/U" in f: U = f["sample/U"][()]
         if "sample/B" in f: B = f["sample/B"][()]
-        if "goniometer/R" in f: all_R = f["goniometer/R"][()]
-        else: all_R = np.eye(3)[np.newaxis, :, :]
+        
+        if "goniometer/R" in f: 
+            all_R = f["goniometer/R"][()]
+        
+        if "goniometer/angles" in f:
+            angles_stack = f["goniometer/angles"][()]
         
         if "sample/offset" in f: sample_offset = f["sample/offset"][()]
         else: sample_offset = np.zeros(3)
@@ -850,23 +941,26 @@ def integrator(
     }
 
     # 4. Run Integration
-    # Note: RUB passed here is symbolic; integrate method will calculate 
-    # per-image geometry if we update it, or we pass specific R. 
-    # The current 'Peaks.integrate' iterates the dictionary keys.
-    # Since we loaded 'merged.h5', peaks.ims keys are 0..N.
-    # peak_dict keys are 0..N.
-    # They match!
+    # Calculate RUB Stack from loaded parameters
+    if all_R is None:
+        print("Warning: Refined R stack not found in prediction file. Using nominal.")
+        all_R = peaks.goniometer_rotation
     
-    # Construct a composite RUB for the *first* frame just to satisfy the signature,
-    # or rely on metric calculation internals.
-    # ideally 'integrate' should be aware of variable R, but for now we pass identity 
-    # and rely on the fact that prediction is already done.
-    RUB_nominal = np.eye(3) 
+    if angles_stack is None:
+        angles_stack = peaks.goniometer_angles_raw
+
+    UB = U @ B
+    if all_R.ndim == 3:
+        RUB = np.matmul(all_R, UB)
+    else:
+        RUB = all_R @ UB
 
     result = peaks.integrate(
         peak_dict,
         integration_params,
-        RUB=RUB_nominal, 
+        RUB=RUB, 
+        R_stack=all_R,
+        angles_stack=angles_stack,
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         create_visualizations=create_visualizations,
@@ -884,7 +978,7 @@ def integrator(
     copy_keys = [
         "sample/a", "sample/b", "sample/c", "sample/alpha", "sample/beta", "sample/gamma",
         "sample/space_group", "sample/U", "sample/B", "sample/offset",
-        "beam/ki_vec", "instrument/wavelength", "goniometer/R",
+        "beam/ki_vec", "instrument/wavelength",
     ]
 
     with h5py.File(output_filename, "w") as f:
@@ -897,12 +991,23 @@ def integrator(
         f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
+        f["peaks/run_index"] = result.bank # Crucial for metrics --per-run
         f["peaks/xyz"] = result.xyz
+        
+        # Save per-peak goniometer data (standard finder format)
+        if result.R and any(r is not None for r in result.R):
+            f["goniometer/R"] = np.array(result.R)
+        if result.angles and any(a is not None for a in result.angles):
+            f["goniometer/angles"] = np.array(result.angles)
 
         with h5py.File(integration_peaks_filename, 'r') as f_in:
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
+            
+            # Copy axes and names (globals)
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in: f_in.copy(f_in[k], f, k)
 
 @app.command()
 def mtz_exporter(

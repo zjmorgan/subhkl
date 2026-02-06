@@ -52,6 +52,7 @@ DetectorPeaks = namedtuple(
         "radii",
         "xyz",
         "bank",
+        "image_index",
         "gonio_axes",
         "gonio_angles",
         "gonio_names"
@@ -71,6 +72,8 @@ IntegrationResult = namedtuple(
         "wavelength",
         "bank",
         "xyz",
+        "R",
+        "angles"
     ]
 )
 
@@ -238,6 +241,7 @@ def _process_single_image(
             'lamda_min': [wl_min] * num, 'lamda_max': [wl_max] * num,
             'intensity': intensities.tolist(), 'sigma': sigmas.tolist(),
             'radii': radii, 'xyz': lab_coords.tolist(), 'banks': [physical_bank] * num,
+            'image_indices': [img_key] * num,
             'gonio_angles': [gonio_angles] * num if gonio_angles is not None else [],
             'count': num
         }
@@ -299,13 +303,20 @@ def _integrate_single_bank(
 
     # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
-    found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec = metrics_info
+    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, current_angles_val, current_R_val, sample_offset, ki_vec = metrics_info
     
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
-        if found_peaks_bank is not None:
+        
+        # Priority 1: Filter by run index (for merged multi-run files)
+        if found_peaks_run is not None:
+            mask_run = (found_peaks_run == bank_id)
+            f_xyz_valid = found_peaks_xyz[mask_run]
+        # Priority 2: Filter by physical bank ID
+        elif found_peaks_bank is not None:
             mask_bank = (found_peaks_bank == bank_id)
             f_xyz_valid = found_peaks_xyz[mask_bank]
+        # Priority 3: Spatial proximity (for single files)
         else:
             s_off = sample_offset if sample_offset is not None else np.zeros(3)
             det_vec = det.center - s_off
@@ -437,7 +448,9 @@ def _integrate_single_bank(
         'intensity': bank_intensity[keep], 'sigma': bank_sigma[keep],
         'tt': bank_tt[keep], 'az': bank_az[keep],
         'wavelength': bank_wl[keep], 'xyz': lab_coords[keep].tolist(),
-        'bank': [bank_id] * sum(keep)
+        'bank': [bank_id] * sum(keep),
+        'R': [current_R_val] * sum(keep) if current_R_val is not None else [],
+        'angles': [current_angles_val] * sum(keep) if current_angles_val is not None else []
     }
 
 class Peaks:
@@ -626,6 +639,7 @@ class Peaks:
         radii: list[float] = [] 
         xyz_out: list[list[float]] = [] 
         banks: list[int] = []
+        image_indices: list[int] = []
         gonio_angles_out: list[list[float]] = [] 
 
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
@@ -712,6 +726,7 @@ class Peaks:
                         radii.extend(res['radii'])
                         xyz_out.extend(res['xyz'])
                         banks.extend(res['banks'])
+                        image_indices.extend(res['image_indices'])
                         if res['gonio_angles']:
                             gonio_angles_out.extend(res['gonio_angles'])
                 except Exception as e:
@@ -719,7 +734,7 @@ class Peaks:
 
         return DetectorPeaks(
             R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, 
-            radii, xyz_out, banks, 
+            radii, xyz_out, banks, image_indices,
             self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw
         )
 
@@ -783,6 +798,8 @@ class Peaks:
         peak_dict,
         integration_params,
         RUB, 
+        R_stack=None,
+        angles_stack=None,
         sample_offset=None,
         ki_vec=None,
         integration_method="free_fit",
@@ -798,9 +815,12 @@ class Peaks:
         wavelength = []
         banks = []
         xyz = []
+        R_out = []
+        angles_out = []
 
         found_peaks_xyz = None
         found_peaks_bank = None
+        found_peaks_run = None
         if found_peaks_file is not None:
             try:
                 import h5py
@@ -822,10 +842,14 @@ class Peaks:
                             found_peaks_xyz = f["peaks/xyz"][start:end]
                             if "bank" in f: found_peaks_bank = f["bank"][start:end]
                             elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][start:end]
+                            
+                            if "peaks/run_index" in f:
+                                found_peaks_run = f["peaks/run_index"][start:end]
                     elif "peaks/xyz" in f:
                         found_peaks_xyz = f["peaks/xyz"][()]
                         if "bank" in f: found_peaks_bank = f["bank"][()]
                         elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][()]
+                        if "peaks/run_index" in f: found_peaks_run = f["peaks/run_index"][()]
             except Exception as e:
                 print(f"Failed to load found peaks: {e}")
 
@@ -840,7 +864,30 @@ class Peaks:
             img_label = self.get_image_label(bank)
             viz_label = f"{img_label}_bank{physical_bank}"
             
-            metrics_info = (found_peaks_xyz, found_peaks_bank, RUB, sample_offset, ki_vec)
+            # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
+            if RUB.ndim == 3 and RUB.shape[0] > 1:
+                # Use bank ID as index if it's an integer 0..N, otherwise fallback to enumeration index
+                # This matches the logic in predict_peaks
+                idx = bank if isinstance(bank, int) and bank < RUB.shape[0] else len(tasks)
+                if idx >= RUB.shape[0]: idx = -1 
+                current_rub = RUB[idx]
+            else:
+                current_rub = RUB if RUB.ndim == 2 else RUB[0]
+
+            # Resolve R and angles for this image
+            current_R_val = None
+            if R_stack is not None:
+                idx = bank if isinstance(bank, int) and bank < R_stack.shape[0] else len(tasks)
+                if idx >= R_stack.shape[0]: idx = -1
+                current_R_val = R_stack[idx]
+            
+            current_angles_val = None
+            if angles_stack is not None:
+                idx = bank if isinstance(bank, int) and bank < angles_stack.shape[0] else len(tasks)
+                if idx >= angles_stack.shape[0]: idx = -1
+                current_angles_val = angles_stack[idx]
+
+            metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, current_angles_val, current_R_val, sample_offset, ki_vec)
             # Pass viz_label instead of fname_clean
             viz_info = (create_visualizations, file_prefix, viz_label)
             
@@ -865,10 +912,12 @@ class Peaks:
                         tt.extend(res['tt']); az.extend(res['az'])
                         wavelength.extend(res['wavelength']); xyz.extend(res['xyz'])
                         banks.extend(res['bank'])
+                        R_out.extend(res['R'])
+                        angles_out.extend(res['angles'])
                 except Exception as e:
                     print(f"Integration worker failed: {e}")
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz, R_out, angles_out)
 
     def write_hdf5(
         self,
@@ -883,6 +932,7 @@ class Peaks:
         radii: list[float], 
         xyz: list[list[float]], 
         bank: list[int],
+        image_index: list[int] = None,
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
         gonio_names: list[str] = None,
@@ -899,6 +949,13 @@ class Peaks:
             f["peaks/radius"] = radii
             f["peaks/xyz"] = xyz  
             f["bank"] = bank
+            
+            if image_index is not None:
+                f["peaks/run_index"] = image_index
+
+            if hasattr(self, 'image_files_raw') and self.image_files_raw:
+                f["files"] = np.array([s.encode('utf-8') for s in self.image_files_raw])
+                f["file_offsets"] = self.file_offsets
             
             if gonio_axes is not None:
                 f["goniometer/axes"] = gonio_axes
