@@ -939,6 +939,7 @@ class Peaks:
         instrument_wavelength: tuple[float, float] = None
     ):
         with File(output_filename, "w") as f:
+            f.attrs["instrument"] = self.instrument
             f["wavelength_mins"] = wavelength_mins
             f["wavelength_maxes"] = wavelength_maxes
             f["goniometer/R"] = rotations

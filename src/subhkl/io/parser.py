@@ -178,6 +178,8 @@ def index(
 
     print(f"Saving indexed peaks to {output_peaks_filename}...")
     with h5py.File(output_peaks_filename, "w") as f:
+        if instrument_name: f.attrs["instrument"] = instrument_name
+        elif "instrument" in input_data: f.attrs["instrument"] = input_data["instrument"]
         for key, value in copied_data.items():
             f[key] = value
 
@@ -662,12 +664,13 @@ def metrics(
                         
                         xyz_obs_run = xyz_obs[mask_obs]
                         
-                        if run_to_bank:
-                            phys_bank = run_to_bank.get(img_idx, img_idx)
-                        elif bank_ids is not None:
+                        if bank_ids is not None:
                             phys_bank = bank_ids[img_idx]
                         else:
-                            phys_bank = img_idx 
+                            phys_bank = img_idx
+
+                        if run_to_bank:
+                            phys_bank = run_to_bank.get(img_idx, phys_bank)
                             
                         try:
                             det_config = beamlines[instrument][str(phys_bank)]
@@ -929,6 +932,9 @@ def peak_predictor(
         f["sample/c"] = c
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
+        sorted_keys = sorted(peaks.ims.keys())
+        bank_ids = np.array([peaks.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32)
+        f.create_dataset("bank_ids", data=bank_ids)
         f["sample/gamma"] = gamma
         f["sample/space_group"] = space_group
         f["sample/U"] = U
