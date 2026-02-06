@@ -154,6 +154,8 @@ def index(
         "goniometer/names",
         "files",
         "file_offsets",
+        "peaks/run_index",
+        "bank",
     ]
 
     copied_data = {}
@@ -673,18 +675,21 @@ def metrics(
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
         
-        if per_run and run_index is not None:
-            # Re-mask run_index to match filtered peaks
-            run_index_filtered = run_index[mask]
-            if d_min is not None:
-                run_index_filtered = run_index_filtered[d_mask]
-            
-            unique_runs = sorted(np.unique(run_index_filtered))
-            print("\nPER-RUN MEDIAN ANGULAR ERROR (deg):")
-            for r in unique_runs:
-                r_mask = (run_index_filtered == r)
-                if np.sum(r_mask) > 0:
-                    print(f"  Run {int(r):4d}: {np.median(ang_err[r_mask]):.3f} ({np.sum(r_mask)} peaks)")
+        if per_run:
+            if run_index is not None:
+                # Re-mask run_index to match filtered peaks
+                run_index_filtered = run_index[mask]
+                if d_min is not None:
+                    run_index_filtered = run_index_filtered[d_mask]
+                
+                unique_runs = sorted(np.unique(run_index_filtered))
+                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg):")
+                for r in unique_runs:
+                    r_mask = (run_index_filtered == r)
+                    if np.sum(r_mask) > 0:
+                        print(f"  Run {int(r):4d}: {np.median(ang_err[r_mask]):.3f} ({np.sum(r_mask)} peaks)")
+            else:
+                print("\nWARNING: --per-run requested but no run information (peaks/run_index or peaks/bank) found in file.")
 
     except Exception as e:
         # print(e)
@@ -847,12 +852,18 @@ def integrator(
     """
     # 1. Load Predictions
     peak_dict = {}
+    angles_stack = None
+    all_R = None
     with h5py.File(integration_peaks_filename, 'r') as f:
         # Load Physics for context (passed to integrate if needed, mainly R)
         if "sample/U" in f: U = f["sample/U"][()]
         if "sample/B" in f: B = f["sample/B"][()]
-        if "goniometer/R" in f: all_R = f["goniometer/R"][()]
-        else: all_R = np.eye(3)[np.newaxis, :, :]
+        
+        if "goniometer/R" in f: 
+            all_R = f["goniometer/R"][()]
+        
+        if "goniometer/angles" in f:
+            angles_stack = f["goniometer/angles"][()]
         
         if "sample/offset" in f: sample_offset = f["sample/offset"][()]
         else: sample_offset = np.zeros(3)
@@ -891,18 +902,12 @@ def integrator(
 
     # 4. Run Integration
     # Calculate RUB Stack from loaded parameters
-    # Resolve nominal angles stack for this file
-    angles_stack = peaks.goniometer_angles_raw 
-    all_R = peaks.goniometer_rotation
-
-    # Reconstruct refined stacks using same logic as peak_predictor
-    # Load offsets from the INDEXER file (which might be DIFFERENT from the prediction file)
-    # Actually, we should probably load them from the prediction file if they were saved there.
-    with h5py.File(integration_peaks_filename, 'r') as f_in:
-        # Check if goniometer offsets were saved in peak_predictor.h5 (they should be)
-        # Wait, peak_predictor.h5 usually only has 'goniometer/R' stack.
-        # Let's try to load them.
-        pass
+    if all_R is None:
+        print("Warning: Refined R stack not found in prediction file. Using nominal.")
+        all_R = peaks.goniometer_rotation
+    
+    if angles_stack is None:
+        angles_stack = peaks.goniometer_angles_raw
 
     UB = U @ B
     if all_R.ndim == 3:
@@ -946,6 +951,7 @@ def integrator(
         f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
+        f["peaks/run_index"] = result.bank # Crucial for metrics --per-run
         f["peaks/xyz"] = result.xyz
         
         # Save per-peak goniometer data (standard finder format)
