@@ -500,6 +500,12 @@ def indexer(
     input_data["sample/space_group"] = sg_to_use
     input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
+    # --- NEW: Check d_max for sanity ---
+    cell_max = max(a, b, c)
+    if d_max is not None and d_max < cell_max:
+        print(f"WARNING: --d-max ({d_max}) is smaller than largest unit cell dimension ({cell_max:.2f}).")
+        print("         This will exclude low-order reflections which are critical for orientation.")
+
     gonio_axes_list = None
     if refine_goniometer_axes:
         gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(',')]
