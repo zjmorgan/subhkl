@@ -310,8 +310,8 @@ def _integrate_single_bank(
         
         # Priority 1: Filter by run index (for merged multi-run files)
         if found_peaks_run is not None:
-             mask_run = (found_peaks_run == bank_id)
-             f_xyz_valid = found_peaks_xyz[mask_run]
+            mask_run = (found_peaks_run == bank_id)
+            f_xyz_valid = found_peaks_xyz[mask_run]
         # Priority 2: Filter by physical bank ID
         elif found_peaks_bank is not None:
             mask_bank = (found_peaks_bank == bank_id)

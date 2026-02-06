@@ -761,14 +761,24 @@ def peak_predictor(
         if "optimization/goniometer_offsets" in f_idx:
             offsets = f_idx["optimization/goniometer_offsets"][()]
             print(f"Applying refined goniometer offsets: {offsets}")
+            
             # Re-calculate R stack using refined angles
-            # peaks.goniometer_angles_raw is (N_images, 3)
-            # offsets is (3,)
-            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
-            all_R = np.stack([
-                calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
-                for ang in angles_refined
-            ])
+            if peaks.goniometer_angles_raw is not None and peaks.goniometer_axes_raw is not None:
+                angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+                all_R = np.stack([
+                    calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                    for ang in angles_refined
+                ])
+            else:
+                print("WARNING: Cannot apply refined offsets because nominal angles/axes are missing. Using nominal R stack.")
+        elif "goniometer/R" in f_idx:
+            # Check if indexer has a per-image R stack we can use
+            # (My indexer command currently saves a per-peak stack, so this is unlikely to match
+            # unless N_peaks == N_images, but let's be safe).
+            idx_R = f_idx["goniometer/R"][()]
+            if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
+                print("Using refined R stack from indexer file.")
+                all_R = idx_R
 
     UB = U @ B
 
@@ -806,7 +816,13 @@ def peak_predictor(
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
         f["goniometer/R"] = all_R # Save full stack
-        f["goniometer/angles"] = angles_refined if 'angles_refined' in locals() else peaks.goniometer_angles_raw
+        
+        try:
+            goniometer_angles_to_save = angles_refined
+        except NameError:
+            goniometer_angles_to_save = peaks.goniometer_angles_raw
+            
+        f["goniometer/angles"] = goniometer_angles_to_save
         f["goniometer/axes"] = peaks.goniometer_axes_raw
         if peaks.goniometer_names_raw:
             dt = h5py.string_dtype(encoding='utf-8')
@@ -957,10 +973,10 @@ def integrator(
         f["peaks/xyz"] = result.xyz
         
         # Save per-peak goniometer data (standard finder format)
-        if result.R:
-            f["goniometer/R"] = result.R
-        if result.angles:
-            f["goniometer/angles"] = result.angles
+        if result.R and any(r is not None for r in result.R):
+            f["goniometer/R"] = np.array(result.R)
+        if result.angles and any(a is not None for a in result.angles):
+            f["goniometer/angles"] = np.array(result.angles)
 
         with h5py.File(integration_peaks_filename, 'r') as f_in:
             for key in copy_keys:
