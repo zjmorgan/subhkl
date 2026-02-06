@@ -325,8 +325,8 @@ class VectorizedObjective:
         else: self.peak_radii = jnp.array(peak_radii)
         
         self.max_score = jnp.sum(self.weights)
-        self.d_min = d_min
-        self.d_max = d_max
+        self.d_min = d_min if d_min is not None else 0.0
+        self.d_max = d_max if d_max is not None else 1000.0
         self.search_window_size = search_window_size
         self.window_batch_size = window_batch_size
 
@@ -1009,18 +1009,25 @@ class FindUB:
             active_indices = _get_active_lattice_indices(lat_sys)
             new_params.append(np.full(len(active_indices), 0.5))
 
+        if b_offset is not None:
+            print(f"  > Setting Base Sample Offset: {b_offset}")
+            self.base_sample_offset = b_offset # Store always
+
         if refine_sample:
-            if self.peak_xyz is not None:
-                print(f"  > Setting Base Sample Offset: {b_offset}")
-                self.base_sample_offset = b_offset # Store only
-                new_params.append(np.full(3, 0.5)) 
-            else:
-                new_params.append(np.full(3, 0.5))
+            new_params.append(np.full(3, 0.5))
+
+        if b_ki is not None:
+            print(f"  > Recentered Beam Vector: {b_ki}")
+            self.ki_vec = b_ki # Store always
 
         if refine_beam:
-            print(f"  > Recentered Beam Vector: {b_ki}")
-            self.ki_vec = b_ki 
             new_params.append(np.full(2, 0.5))
+
+        if b_gonio_offsets is not None:
+            print(f"  > Setting Base Goniometer Offsets: {b_gonio_offsets}")
+            self.base_gonio_offset = b_gonio_offsets # Store always
+        else:
+            self.base_gonio_offset = np.zeros(len(self.goniometer_axes)) if self.goniometer_axes is not None else None
 
         if refine_goniometer:
             active_mask = []
@@ -1031,15 +1038,8 @@ class FindUB:
             else:
                 active_mask = [True] * len(self.goniometer_axes)
             
-            if b_gonio_offsets is not None:
-                print(f"  > Setting Base Goniometer Offsets: {b_gonio_offsets}")
-                self.base_gonio_offset = b_gonio_offsets # Store only
-                n_active = sum(active_mask)
-                new_params.append(np.full(n_active, 0.5))
-            else:
-                self.base_gonio_offset = np.zeros(len(self.goniometer_axes))
-                n_active = sum(active_mask)
-                new_params.append(np.full(n_active, 0.5))
+            n_active = sum(active_mask)
+            new_params.append(np.full(n_active, 0.5))
 
         return np.concatenate([np.atleast_1d(p) for p in new_params])
 
@@ -1177,7 +1177,7 @@ class FindUB:
             if self.peak_xyz is None: refine_sample = False
             else: num_dims += 3
         if refine_beam:
-            if self.peak_xyz is None: refine_sample = False
+            if self.peak_xyz is None: refine_beam = False
             else: num_dims += 2
         if refine_goniometer:
             if goniometer_refine_mask is not None: num_dims += np.sum(goniometer_refine_mask)

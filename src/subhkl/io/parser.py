@@ -149,6 +149,7 @@ def index(
         "peaks/azimuthal",
         "peaks/radius",
         "peaks/xyz", 
+        "goniometer/R",
         "goniometer/axes", 
         "goniometer/angles",
         "goniometer/names",
@@ -156,6 +157,8 @@ def index(
         "file_offsets",
         "peaks/run_index",
         "bank",
+        "sample/offset",
+        "beam/ki_vec"
     ]
 
     copied_data = {}
@@ -485,6 +488,7 @@ def indexer(
             "peaks/radius", "peaks/xyz",
             "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names",
             "files", "file_offsets", "peaks/run_index", "bank",
+            "sample/offset", "beam/ki_vec"
         ]
         
         for k in keys_to_load:
