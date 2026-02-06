@@ -568,9 +568,12 @@ class VectorizedObjective:
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
-        recip_len_sq = jnp.sum(UB**2, axis=1)
-        kappa = recip_len_sq / ((tolerance_rad + 1e-9)**2 * 4 * jnp.pi**2)
-        kappa = kappa[:, :, None]
+        
+        # kappa for von Mises-Fisher-like concentration in HKL space
+        # Uniform angular tolerance: sigma_h approx tolerance_rad * h. 
+        # kappa = 1 / (4 * pi^2 * tolerance_rad^2)
+        kappa = 1.0 / ((tolerance_rad + 1e-9)**2 * 4 * jnp.pi**2)
+        
         initial_carry = (
             jnp.zeros(max_v_val.shape),         
             jnp.full(max_v_val.shape, -1e9),    
