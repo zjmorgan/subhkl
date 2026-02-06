@@ -235,6 +235,9 @@ class VectorizedObjective:
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
 
+        # Convert softness from degrees to radians
+        self.softness = jnp.deg2rad(softness)
+
         # FIX: Handle Static Rotation (R) correctly
         if static_R is not None:
             self.static_R = jnp.array(static_R)
@@ -271,7 +274,7 @@ class VectorizedObjective:
         if beam_nominal is None: self.beam_nominal = jnp.array([0.0, 0.0, 1.0])
         else: self.beam_nominal = jnp.array(beam_nominal)
 
-        self.softness = softness
+        self.softness_input_deg = softness # Store original for reference if needed
         self.loss_method = loss_method
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
@@ -522,7 +525,7 @@ class VectorizedObjective:
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int)**2, axis=1)
             safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
-            effective_sigma = softness + (k_norm / safe_lamb) * self.peak_radii[None, :]
+            effective_sigma = (softness + self.peak_radii[None, :]) * (k_norm / safe_lamb)
             prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
             
             valid_cand = (lamda_cand >= self.wl_min_val) & (lamda_cand <= self.wl_max_val)
@@ -675,7 +678,7 @@ class VectorizedObjective:
             return (new_min_dist, new_best_hkl, new_best_lamb), None
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
-        effective_sigma = softness + (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb)) * self.peak_radii[None, :]
+        effective_sigma = (softness + self.peak_radii[None, :]) * (k_norm / jnp.where(best_lamb==0, 1.0, best_lamb))
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
         score = -jnp.sum(self.weights * probs, axis=1)
         return score, probs, best_hkl, best_lamb
@@ -1044,7 +1047,7 @@ class FindUB:
         num_generations: int = 100,
         n_runs: int = 1,
         seed: int = 0,
-        softness: float = 0.01,
+        softness: float = 0.1,
         loss_method: str = 'gaussian',
         init_params: np.ndarray = None,
         refine_lattice: bool = False,
@@ -1372,13 +1375,13 @@ class FindUB:
         UB_final = np.array(UB_final)
 
         if loss_method == 'forward':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=softness, window_batch_size=window_batch_size)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, softness=objective.softness, window_batch_size=window_batch_size)
         elif loss_method == 'cosine':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], softness=objective.softness, k_sq_override=k_sq_dyn)
         elif loss_method == 'sinkhorn':
-            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
+            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], softness=objective.softness, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
         else:
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=softness, k_sq_override=k_sq_dyn)
+            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], softness=objective.softness, k_sq_override=k_sq_dyn)
 
         num_peaks_soft = float(np.sum(accum_probs[0]))
         print(f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count).")
