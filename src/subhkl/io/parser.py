@@ -691,13 +691,26 @@ def metrics(
                     run_index_filtered = run_index_filtered[d_mask]
                 
                 unique_runs = sorted(np.unique(run_index_filtered))
-                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg):")
+                run_errors = []
                 for r in unique_runs:
                     r_mask = (run_index_filtered == r)
                     if np.sum(r_mask) > 0:
-                        print(f"  Run {int(r):4d}: {np.median(ang_err[r_mask]):.3f} ({np.sum(r_mask)} peaks)")
+                        run_errors.append((int(r), np.median(ang_err[r_mask]), np.sum(r_mask)))
+                
+                # Sort by median error descending
+                run_errors.sort(key=lambda x: x[1], reverse=True)
+                
+                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
+                for r, err, count in run_errors:
+                    status = "BAD" if err > 1.0 else "OK"
+                    print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
+                
+                bad_runs = [r for r, err, _ in run_errors if err > 1.0]
+                if bad_runs:
+                    print(f"\nWARNING: Found {len(bad_runs)} outlier runs with >1.0 deg error.")
+                    print(f"Consider excluding these runs: {bad_runs}")
             else:
-                print("\nWARNING: --per-run requested but no run information (peaks/run_index or peaks/bank) found in file.")
+                print("\nWARNING: --per-run requested but no run information found.")
 
     except Exception as e:
         # print(e)
