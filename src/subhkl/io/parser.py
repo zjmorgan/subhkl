@@ -772,16 +772,16 @@ def peak_predictor(
     print(f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}")
 
     # 3. Calculate RUB Stack for Parallel Processing
-    # Use nominal rotations from master file as base
+    # We always start with the nominal geometry of the TARGET file (filename)
     all_R = peaks.goniometer_rotation
 
-    # Apply refined offsets if present
+    # Then we apply refined parameters from the INDEXER file (indexed_hdf5_filename)
     with h5py.File(indexed_hdf5_filename, 'r') as f_idx:
         if "optimization/goniometer_offsets" in f_idx:
             offsets = f_idx["optimization/goniometer_offsets"][()]
-            print(f"Applying refined goniometer offsets: {offsets}")
+            print(f"Applying refined goniometer offsets from indexer: {offsets}")
             
-            # Re-calculate R stack using refined angles
+            # Re-calculate refined R stack for the TARGET images
             if peaks.goniometer_angles_raw is not None and peaks.goniometer_axes_raw is not None:
                 angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
                 all_R = np.stack([
@@ -789,14 +789,13 @@ def peak_predictor(
                     for ang in angles_refined
                 ])
             else:
-                print("WARNING: Cannot apply refined offsets because nominal angles/axes are missing. Using nominal R stack.")
+                print("WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack.")
         elif "goniometer/R" in f_idx:
-            # Check if indexer has a per-image R stack we can use
-            # (My indexer command currently saves a per-peak stack, so this is unlikely to match
-            # unless N_peaks == N_images, but let's be safe).
+            # Fallback: if the indexer has a stack that happens to match the image count, 
+            # we use it, but warn that this is less robust than offsets.
             idx_R = f_idx["goniometer/R"][()]
             if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
-                print("Using refined R stack from indexer file.")
+                print("Using R stack directly from indexer (matches image count).")
                 all_R = idx_R
 
     UB = U @ B
