@@ -13,6 +13,9 @@ from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import get_rotation_data_from_nexus, calc_goniometer_rotation_matrix
 from subhkl.utils import calculate_angular_error
+from subhkl.detector import Detector
+from subhkl.config import beamlines
+import scipy.spatial
 
 app = typer.Typer()
 
@@ -592,26 +595,14 @@ def indexer_using_file(
 @app.command()
 def metrics(
     filename: str,
+    found_peaks_file: typing.Optional[str] = typer.Option(None, "--found-peaks", help="Optional file with found peaks to compare against (e.g. finder.h5)."),
+    instrument: typing.Optional[str] = typer.Option(None, "--instrument", help="Instrument name (required if matching peaks)."),
     d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation."),
     per_run: bool = typer.Option(False, "--per-run", help="Calculate and display metrics for each run/image.")
 ):
     try:
+        # Load Global Physics from filename
         with h5py.File(filename, "r") as f:
-            if "peaks/xyz" not in f:
-                print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
-                return
-
-            xyz_det = f["peaks/xyz"][()] 
-            h = f["peaks/h"][()]
-            k = f["peaks/k"][()]
-            l = f["peaks/l"][()]
-            lam = f["peaks/lambda"][()]
-            run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
-            if run_index is None and "peaks/bank" in f:
-                run_index = f["peaks/bank"][()]
-            if run_index is None and "bank" in f:
-                run_index = f["bank"][()]
-
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
             ub_helper.b = f["sample/b"][()]
@@ -619,26 +610,156 @@ def metrics(
             ub_helper.alpha = f["sample/alpha"][()]
             ub_helper.beta = f["sample/beta"][()]
             ub_helper.gamma = f["sample/gamma"][()]
+            B_mat = ub_helper.reciprocal_lattice_B()
+            U = f["sample/U"][()] if "sample/U" in f else np.eye(3)
+            sample_offset = f["sample/offset"][()] if "sample/offset" in f else np.zeros(3)
+            ki_vec = f["beam/ki_vec"][()] if "beam/ki_vec" in f else np.array([0.0, 0.0, 1.0])
+            R_file = f["goniometer/R"][()] if "goniometer/R" in f else None
+            
+            if instrument is None:
+                instrument = f.attrs.get("instrument")
 
-            if "beam/ki_vec" in f:
-                ki_vec = f["beam/ki_vec"][()]
-            else:
-                ki_vec = np.array([0.0, 0.0, 1.0])
+        matched_h, matched_k, matched_l, matched_lam, matched_xyz, matched_R, matched_run = [], [], [], [], [], [], []
 
-            if "goniometer/R" in f:
-                R_all = f["goniometer/R"][()]
-            else:
-                R_all = np.eye(3)[None, ...].repeat(len(h), axis=0)
+        if found_peaks_file is not None:
+            if instrument is None:
+                print("ERROR: --instrument required for matching when not found in file attributes.")
+                return
+            
+            # Load Found Peaks
+            with h5py.File(found_peaks_file, "r") as f_obs:
+                xyz_obs = f_obs["peaks/xyz"][()]
+                run_obs = f_obs["peaks/run_index"][()] if "peaks/run_index" in f_obs else None
+                if run_obs is None:
+                    run_obs = f_obs["bank"][()] if "bank" in f_obs else np.zeros(len(xyz_obs))
+                
+                # Try to get physical bank mapping
+                bank_obs = f_obs["bank"][()] if "bank" in f_obs else None
+                run_to_bank = {}
+                if bank_obs is not None and run_obs is not None:
+                    for r in np.unique(run_obs):
+                        run_to_bank[int(r)] = int(bank_obs[run_obs == r][0])
 
-            if "sample/U" in f:
-                U = f["sample/U"][()]
-            else:
-                U = np.eye(3)
+            # Load Predicted Peaks from filename
+            with h5py.File(filename, "r") as f_pred:
+                if "banks" in f_pred:
+                    # Predictor format
+                    bank_ids = f_pred["bank_ids"][()] if "bank_ids" in f_pred else None
 
-            if "sample/offset" in f:
-                sample_offset = f["sample/offset"][()]
-            else:
-                sample_offset = np.zeros(3)
+                    for img_key_str in f_pred["banks"].keys():
+                        img_idx = int(img_key_str)
+                        grp = f_pred[f"banks/{img_key_str}"]
+                        h_p = grp["h"][()]
+                        k_p = grp["k"][()]
+                        l_p = grp["l"][()]
+                        lam_p = grp["wavelength"][()]
+                        i_p = grp["i"][()]
+                        j_p = grp["j"][()]
+                        
+                        # Get matching observed peaks
+                        mask_obs = (run_obs == img_idx)
+                        if not np.any(mask_obs): continue
+                        
+                        xyz_obs_run = xyz_obs[mask_obs]
+                        
+                        if run_to_bank:
+                            phys_bank = run_to_bank.get(img_idx, img_idx)
+                        elif bank_ids is not None:
+                            phys_bank = bank_ids[img_idx]
+                        else:
+                            phys_bank = img_idx 
+                            
+                        try:
+                            det_config = beamlines[instrument][str(phys_bank)]
+                        except KeyError:
+                            print(f"WARNING: Bank {phys_bank} not found in instrument {instrument} config. Skipping.")
+                            continue
+
+                        det = Detector(det_config)
+                        xyz_pred_run = det.pixel_to_lab(i_p, j_p).T
+                        if xyz_pred_run.ndim == 1: xyz_pred_run = xyz_pred_run[np.newaxis, :]
+                        
+                        # KDTree match
+                        tree = scipy.spatial.KDTree(xyz_pred_run)
+                        dists, idxs = tree.query(xyz_obs_run)
+                        
+                        valid = dists < 0.01 
+                        if np.any(valid):
+                            matched_h.extend(h_p[idxs[valid]])
+                            matched_k.extend(k_p[idxs[valid]])
+                            matched_l.extend(l_p[idxs[valid]])
+                            matched_lam.extend(lam_p[idxs[valid]])
+                            matched_xyz.extend(xyz_obs_run[valid])
+                            matched_run.extend([img_idx] * np.sum(valid))
+                            if R_file is not None:
+                                matched_R.extend([R_file[img_idx]] * np.sum(valid))
+                            else:
+                                matched_R.extend([np.eye(3)] * np.sum(valid))
+                else:
+                    # Non-predictor format (integrator/indexer) but matching requested
+                    # Use peaks/xyz from file as predicted positions
+                    xyz_pred = f_pred["peaks/xyz"][()]
+                    h_p = f_pred["peaks/h"][()]
+                    k_p = f_pred["peaks/k"][()]
+                    l_p = f_pred["peaks/l"][()]
+                    lam_p = f_pred["peaks/lambda"][()]
+                    run_pred = f_pred["peaks/run_index"][()] if "peaks/run_index" in f_pred else None
+                    if run_pred is None: run_pred = f_pred["bank"][()] if "bank" in f_pred else np.zeros(len(h_p))
+
+                    unique_runs = np.unique(run_pred)
+                    for r in unique_runs:
+                        mask_p = (run_pred == r)
+                        mask_o = (run_obs == r)
+                        if not np.any(mask_p) or not np.any(mask_o): continue
+                        
+                        xyz_p_run = xyz_pred[mask_p]
+                        xyz_o_run = xyz_obs[mask_o]
+                        
+                        tree = scipy.spatial.KDTree(xyz_p_run)
+                        dists, idxs = tree.query(xyz_o_run)
+                        valid = dists < 0.01
+                        if np.any(valid):
+                            matched_h.extend(h_p[mask_p][idxs[valid]])
+                            matched_k.extend(k_p[mask_p][idxs[valid]])
+                            matched_l.extend(l_p[mask_p][idxs[valid]])
+                            matched_lam.extend(lam_p[mask_p][idxs[valid]])
+                            matched_xyz.extend(xyz_o_run[valid])
+                            matched_run.extend([r] * np.sum(valid))
+                            if R_file is not None:
+                                matched_R.extend([R_file[int(r)] if R_file.ndim==3 else R_file] * np.sum(valid))
+                            else:
+                                matched_R.extend([np.eye(3)] * np.sum(valid))
+        else:
+            # Standard case: load from filename
+            with h5py.File(filename, "r") as f:
+                if "peaks/h" not in f:
+                    print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+                    return
+                matched_h = f["peaks/h"][()]
+                matched_k = f["peaks/k"][()]
+                matched_l = f["peaks/l"][()]
+                matched_lam = f["peaks/lambda"][()]
+                matched_xyz = f["peaks/xyz"][()]
+                matched_run = f["peaks/run_index"][()] if "peaks/run_index" in f else None
+                if matched_run is None:
+                    matched_run = f["bank"][()] if "bank" in f else np.zeros(len(matched_h))
+                
+                if R_file is not None:
+                    if R_file.ndim == 3 and len(R_file) == len(matched_h):
+                        matched_R = R_file
+                    else:
+                        matched_R = np.array([R_file[int(r)] if R_file.ndim==3 else R_file for r in matched_run])
+                else:
+                    matched_R = np.tile(np.eye(3)[None, ...], (len(matched_h), 1, 1))
+
+        # Convert to numpy arrays
+        h = np.array(matched_h)
+        k = np.array(matched_k)
+        l = np.array(matched_l)
+        lam = np.array(matched_lam)
+        xyz_det = np.array(matched_xyz)
+        R_all = np.array(matched_R)
+        run_index = np.array(matched_run)
 
         mask = (h != 0) | (k != 0) | (l != 0)
         if np.sum(mask) == 0:
@@ -649,36 +770,27 @@ def metrics(
         lam = lam[mask]
         xyz_det = xyz_det[mask]
         R_all = R_all[mask]
+        run_index = run_index[mask]
 
-        B_mat = ub_helper.reciprocal_lattice_B()
-        
-        # --- NEW: Filter by d_min if provided ---
+        # --- Filter by d_min if provided ---
         if d_min is not None:
-            # Calculate d = 1 / |B * hkl|
-            # Note: |B*h| is 1/d in subhkl units (standard crystallographic definition)
-            # hkl shape (N, 3)
             hkl_vecs = np.stack([h, k, l], axis=1)
             q_cryst = hkl_vecs @ B_mat.T
             q_mag = np.linalg.norm(q_cryst, axis=1)
-            
             with np.errstate(divide='ignore'):
                 d_vals = 1.0 / q_mag
-            
-            # Keep peaks where d >= d_min
             d_mask = d_vals >= d_min
-            
             if np.sum(d_mask) == 0:
                 print(f"METRICS: No peaks found with d >= {d_min} A.")
                 return
-
             h, k, l = h[d_mask], k[d_mask], l[d_mask]
             lam = lam[d_mask]
             xyz_det = xyz_det[d_mask]
             R_all = R_all[d_mask]
+            run_index = run_index[d_mask]
             print(f"METRICS: Filtered to {len(h)} peaks with d >= {d_min} A.")
 
         UB = U @ B_mat
-        
         if R_all.ndim == 3:
             RUB = np.matmul(R_all, UB) 
         else:
@@ -692,36 +804,20 @@ def metrics(
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
         
         if per_run:
-            if run_index is not None:
-                # Re-mask run_index to match filtered peaks
-                run_index_filtered = run_index[mask]
-                if d_min is not None:
-                    run_index_filtered = run_index_filtered[d_mask]
-                
-                unique_runs = sorted(np.unique(run_index_filtered))
-                run_errors = []
-                for r in unique_runs:
-                    r_mask = (run_index_filtered == r)
-                    if np.sum(r_mask) > 0:
-                        run_errors.append((int(r), np.median(ang_err[r_mask]), np.sum(r_mask)))
-                
-                # Sort by median error descending
-                run_errors.sort(key=lambda x: x[1], reverse=True)
-                
-                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
-                for r, err, count in run_errors:
-                    status = "BAD" if err > 1.0 else "OK"
-                    print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
-                
-                bad_runs = [r for r, err, _ in run_errors if err > 1.0]
-                if bad_runs:
-                    print(f"\nWARNING: Found {len(bad_runs)} outlier runs with >1.0 deg error.")
-                    print(f"Consider excluding these runs: {bad_runs}")
-            else:
-                print("\nWARNING: --per-run requested but no run information found.")
-
+            unique_runs = sorted(np.unique(run_index))
+            run_errors = []
+            for r in unique_runs:
+                r_mask = (run_index == r)
+                if np.sum(r_mask) > 0:
+                    run_errors.append((int(r), np.median(ang_err[r_mask]), np.sum(r_mask)))
+            run_errors.sort(key=lambda x: x[1], reverse=True)
+            print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
+            for r, err, count in run_errors:
+                status = "BAD" if err > 1.0 else "OK"
+                print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
     except Exception as e:
-        # print(e)
+        # import traceback
+        # traceback.print_exc()
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
 
 @app.command()
@@ -826,6 +922,7 @@ def peak_predictor(
     # 5. Save Predictions
     print(f"Saving predictions to {integration_peaks_filename}")
     with h5py.File(integration_peaks_filename, "w") as f:
+        f.attrs["instrument"] = instrument
         # Save Global Physics
         f["sample/a"] = a
         f["sample/b"] = b
