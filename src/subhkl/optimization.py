@@ -274,7 +274,7 @@ class VectorizedObjective:
         if beam_nominal is None: self.beam_nominal = jnp.array([0.0, 0.0, 1.0])
         else: self.beam_nominal = jnp.array(beam_nominal)
 
-        self.softness_input_deg = softness # Store original for reference if needed
+        self.tolerance_deg = tolerance_deg # Store original for reference if needed
         self.loss_method = loss_method
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
@@ -859,14 +859,14 @@ class VectorizedObjective:
             kf_ki_vec = q_lab
 
         if self.loss_method == 'forward':
-            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness, window_batch_size=self.window_batch_size)
+            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad, window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
-            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
         elif self.loss_method == 'sinkhorn':
-            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness,
+            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad,
                                                        chunk_size=self.chunk_size, num_iters=self.num_iters, top_k=self.top_k)
         else:
-            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, softness=self.softness)
+            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
 
         return score
 
