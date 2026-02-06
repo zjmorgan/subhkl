@@ -484,7 +484,7 @@ def indexer(
             "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma", 
             "peaks/radius", "peaks/xyz",
             "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names",
-            "files", "file_offsets",
+            "files", "file_offsets", "peaks/run_index", "bank",
         ]
         
         for k in keys_to_load:
@@ -595,6 +595,8 @@ def metrics(
             run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
             if run_index is None and "peaks/bank" in f:
                 run_index = f["peaks/bank"][()]
+            if run_index is None and "bank" in f:
+                run_index = f["bank"][()]
 
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
