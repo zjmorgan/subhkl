@@ -752,9 +752,9 @@ def peak_predictor(
         U = f_idx["sample/U"][()]
         B = f_idx["sample/B"][()]
 
-        # Load Geometry Stacks
-        # R is likely (N_images, 3, 3)
-        all_R = f_idx["goniometer/R"][()]
+        # Load optional refinement parameters
+        offsets = f_idx["optimization/goniometer_offsets"][()] if "optimization/goniometer_offsets" in f_idx else None
+        idx_R = f_idx["goniometer/R"][()] if "goniometer/R" in f_idx else None
 
         if "sample/offset" in f_idx:
             sample_offset = f_idx["sample/offset"][()]
@@ -775,28 +775,24 @@ def peak_predictor(
     # We always start with the nominal geometry of the TARGET file (filename)
     all_R = peaks.goniometer_rotation
 
-    # Then we apply refined parameters from the INDEXER file (indexed_hdf5_filename)
-    with h5py.File(indexed_hdf5_filename, 'r') as f_idx:
-        if "optimization/goniometer_offsets" in f_idx:
-            offsets = f_idx["optimization/goniometer_offsets"][()]
-            print(f"Applying refined goniometer offsets from indexer: {offsets}")
-            
-            # Re-calculate refined R stack for the TARGET images
-            if peaks.goniometer_angles_raw is not None and peaks.goniometer_axes_raw is not None:
-                angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
-                all_R = np.stack([
-                    calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
-                    for ang in angles_refined
-                ])
-            else:
-                print("WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack.")
-        elif "goniometer/R" in f_idx:
-            # Fallback: if the indexer has a stack that happens to match the image count, 
-            # we use it, but warn that this is less robust than offsets.
-            idx_R = f_idx["goniometer/R"][()]
-            if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
-                print("Using R stack directly from indexer (matches image count).")
-                all_R = idx_R
+    # Then we apply refined parameters from the INDEXER file
+    if offsets is not None:
+        print(f"Applying refined goniometer offsets from indexer: {offsets}")
+        # Re-calculate refined R stack for the TARGET images
+        if peaks.goniometer_angles_raw is not None and peaks.goniometer_axes_raw is not None:
+            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+            all_R = np.stack([
+                calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                for ang in angles_refined
+            ])
+        else:
+            print("WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack.")
+    elif idx_R is not None:
+        # Fallback: if the indexer has a stack that happens to match the image count, 
+        # we use it, but warn that this is less robust than offsets.
+        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
+            print("Using R stack directly from indexer (matches image count).")
+            all_R = idx_R
 
     UB = U @ B
 
