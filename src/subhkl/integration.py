@@ -72,6 +72,8 @@ IntegrationResult = namedtuple(
         "wavelength",
         "bank",
         "xyz",
+        "R",
+        "angles"
     ]
 )
 
@@ -301,7 +303,7 @@ def _integrate_single_bank(
 
     # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
-    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, sample_offset, ki_vec = metrics_info
+    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, current_angles_val, current_R_val, sample_offset, ki_vec = metrics_info
     
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
@@ -446,7 +448,9 @@ def _integrate_single_bank(
         'intensity': bank_intensity[keep], 'sigma': bank_sigma[keep],
         'tt': bank_tt[keep], 'az': bank_az[keep],
         'wavelength': bank_wl[keep], 'xyz': lab_coords[keep].tolist(),
-        'bank': [bank_id] * sum(keep)
+        'bank': [bank_id] * sum(keep),
+        'R': [current_R_val] * sum(keep) if current_R_val is not None else [],
+        'angles': [current_angles_val] * sum(keep) if current_angles_val is not None else []
     }
 
 class Peaks:
@@ -794,6 +798,8 @@ class Peaks:
         peak_dict,
         integration_params,
         RUB, 
+        R_stack=None,
+        angles_stack=None,
         sample_offset=None,
         ki_vec=None,
         integration_method="free_fit",
@@ -809,6 +815,8 @@ class Peaks:
         wavelength = []
         banks = []
         xyz = []
+        R_out = []
+        angles_out = []
 
         found_peaks_xyz = None
         found_peaks_bank = None
@@ -866,7 +874,20 @@ class Peaks:
             else:
                 current_rub = RUB if RUB.ndim == 2 else RUB[0]
 
-            metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, sample_offset, ki_vec)
+            # Resolve R and angles for this image
+            current_R_val = None
+            if R_stack is not None:
+                idx = bank if isinstance(bank, int) and bank < R_stack.shape[0] else len(tasks)
+                if idx >= R_stack.shape[0]: idx = -1
+                current_R_val = R_stack[idx]
+            
+            current_angles_val = None
+            if angles_stack is not None:
+                idx = bank if isinstance(bank, int) and bank < angles_stack.shape[0] else len(tasks)
+                if idx >= angles_stack.shape[0]: idx = -1
+                current_angles_val = angles_stack[idx]
+
+            metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, current_angles_val, current_R_val, sample_offset, ki_vec)
             # Pass viz_label instead of fname_clean
             viz_info = (create_visualizations, file_prefix, viz_label)
             
@@ -891,10 +912,12 @@ class Peaks:
                         tt.extend(res['tt']); az.extend(res['az'])
                         wavelength.extend(res['wavelength']); xyz.extend(res['xyz'])
                         banks.extend(res['bank'])
+                        R_out.extend(res['R'])
+                        angles_out.extend(res['angles'])
                 except Exception as e:
                     print(f"Integration worker failed: {e}")
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz)
+        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz, R_out, angles_out)
 
     def write_hdf5(
         self,

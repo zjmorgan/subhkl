@@ -42,7 +42,7 @@ def index(
     hkl_search_range: int = 20,
     d_min: float = None,
     d_max: float = None,
-    search_window_size: int = 256,
+    search_window_size: int = 512,
     batch_size: int = None,
     window_batch_size: int = 32,
     chunk_size: int = 256,
@@ -451,7 +451,7 @@ def indexer(
     d_min: float = typer.Option(None, "--d-min"),
     d_max: float = typer.Option(None, "--d-max"),
     hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
-    search_window_size: int = typer.Option(256, "--search-window-size"),
+    search_window_size: int = typer.Option(512, "--search-window-size"),
     batch_size: int = typer.Option(None, "--batch-size"),
     window_batch_size: int = typer.Option(32, "--window-batch-size"),
     chunk_size: int = typer.Option(256, "--chunk-size"),
@@ -576,7 +576,8 @@ def indexer_using_file(
 @app.command()
 def metrics(
     filename: str,
-    d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation.")
+    d_min: float = typer.Option(None, "--d-min", help="Optional minimum d-spacing filter for metrics calculation."),
+    per_run: bool = typer.Option(False, "--per-run", help="Calculate and display metrics for each run/image.")
 ):
     try:
         with h5py.File(filename, "r") as f:
@@ -589,6 +590,9 @@ def metrics(
             k = f["peaks/k"][()]
             l = f["peaks/l"][()]
             lam = f["peaks/lambda"][()]
+            run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
+            if run_index is None and "peaks/bank" in f:
+                run_index = f["peaks/bank"][()]
 
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
@@ -668,6 +672,19 @@ def metrics(
 
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
               f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}")
+        
+        if per_run and run_index is not None:
+            # Re-mask run_index to match filtered peaks
+            run_index_filtered = run_index[mask]
+            if d_min is not None:
+                run_index_filtered = run_index_filtered[d_mask]
+            
+            unique_runs = sorted(np.unique(run_index_filtered))
+            print("\nPER-RUN MEDIAN ANGULAR ERROR (deg):")
+            for r in unique_runs:
+                r_mask = (run_index_filtered == r)
+                if np.sum(r_mask) > 0:
+                    print(f"  Run {int(r):4d}: {np.median(ang_err[r_mask]):.3f} ({np.sum(r_mask)} peaks)")
 
     except Exception as e:
         # print(e)
@@ -782,6 +799,12 @@ def peak_predictor(
         f["sample/B"] = B
         f["instrument/wavelength"] = wavelength
         f["goniometer/R"] = all_R # Save full stack
+        f["goniometer/angles"] = angles_refined if 'angles_refined' in locals() else peaks.goniometer_angles_raw
+        f["goniometer/axes"] = peaks.goniometer_axes_raw
+        if peaks.goniometer_names_raw:
+            dt = h5py.string_dtype(encoding='utf-8')
+            f.create_dataset("goniometer/names", data=peaks.goniometer_names_raw, dtype=dt)
+
         f["sample/offset"] = sample_offset
         f["beam/ki_vec"] = ki_vec
 
@@ -868,6 +891,19 @@ def integrator(
 
     # 4. Run Integration
     # Calculate RUB Stack from loaded parameters
+    # Resolve nominal angles stack for this file
+    angles_stack = peaks.goniometer_angles_raw 
+    all_R = peaks.goniometer_rotation
+
+    # Reconstruct refined stacks using same logic as peak_predictor
+    # Load offsets from the INDEXER file (which might be DIFFERENT from the prediction file)
+    # Actually, we should probably load them from the prediction file if they were saved there.
+    with h5py.File(integration_peaks_filename, 'r') as f_in:
+        # Check if goniometer offsets were saved in peak_predictor.h5 (they should be)
+        # Wait, peak_predictor.h5 usually only has 'goniometer/R' stack.
+        # Let's try to load them.
+        pass
+
     UB = U @ B
     if all_R.ndim == 3:
         RUB = np.matmul(all_R, UB)
@@ -878,6 +914,8 @@ def integrator(
         peak_dict,
         integration_params,
         RUB=RUB, 
+        R_stack=all_R,
+        angles_stack=angles_stack,
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         create_visualizations=create_visualizations,
@@ -895,7 +933,7 @@ def integrator(
     copy_keys = [
         "sample/a", "sample/b", "sample/c", "sample/alpha", "sample/beta", "sample/gamma",
         "sample/space_group", "sample/U", "sample/B", "sample/offset",
-        "beam/ki_vec", "instrument/wavelength", "goniometer/R",
+        "beam/ki_vec", "instrument/wavelength",
     ]
 
     with h5py.File(output_filename, "w") as f:
@@ -909,11 +947,21 @@ def integrator(
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
         f["peaks/xyz"] = result.xyz
+        
+        # Save per-peak goniometer data (standard finder format)
+        if result.R:
+            f["goniometer/R"] = result.R
+        if result.angles:
+            f["goniometer/angles"] = result.angles
 
         with h5py.File(integration_peaks_filename, 'r') as f_in:
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
+            
+            # Copy axes and names (globals)
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in: f_in.copy(f_in[k], f, k)
 
 @app.command()
 def mtz_exporter(
