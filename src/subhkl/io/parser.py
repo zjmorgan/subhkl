@@ -440,7 +440,7 @@ def indexer(
         help="Refine sample position offset."
     ),
     sample_bound_meters: float = typer.Option(
-        2.0,
+        0.005,
         "--sample-bound-meters",
         help="Bound for sample offset in meters."
     ),
