@@ -24,7 +24,7 @@ def index(
     gens: int = 100,
     n_runs: int = 1,
     seed: int = 0,
-    softness: float = 0.01,
+    tolerance_deg: float = 0.1,
     sigma_init: float = None,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
@@ -110,7 +110,7 @@ def index(
         n_runs=n_runs,
         sigma_init=sigma_init,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         init_params=init_params,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
@@ -398,7 +398,7 @@ def indexer(
     seed: int = typer.Option(
         0, "--seed", help="Base seed for the first optimization run."
     ),
-    softness: float = 0.1,
+    tolerance_deg: float = 0.1,
     refine_lattice: bool = typer.Option(
         False, 
         "--refine-lattice", 
@@ -519,7 +519,7 @@ def indexer(
         sigma_init=sigma_init,
         n_runs=n_runs,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         bootstrap_filename=bootstrap_filename,
@@ -561,7 +561,7 @@ def indexer_using_file(
     lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
     refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
     goniometer_bound_deg: float = typer.Option(5.0, "--goniometer-bound-deg"),
-    softness: float = 0.1,
+    tolerance_deg: float = 0.1,
 ):
     index(
         hdf5_peaks_filename=hdf5_peaks_filename,
@@ -571,7 +571,7 @@ def indexer_using_file(
         gens=gens,
         n_runs=n_runs,
         seed=seed,
-        softness=softness,
+        tolerance_deg=tolerance_deg,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
         refine_goniometer=refine_goniometer,
