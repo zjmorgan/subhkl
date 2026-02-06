@@ -178,26 +178,30 @@ def index(
         for key, value in copied_data.items():
             f[key] = value
 
-        f["goniometer/R"] = opt.R
+        def safe_write(grp, name, data):
+            if name in grp: del grp[name]
+            grp[name] = data
+
+        safe_write(f, "goniometer/R", opt.R)
         
         if opt.goniometer_offsets is not None:
-            f["optimization/goniometer_offsets"] = opt.goniometer_offsets
+            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
             
         if opt.sample_offset is not None:
-            f["sample/offset"] = opt.sample_offset
+            safe_write(f, "sample/offset", opt.sample_offset)
             
         if opt.ki_vec is not None:
-            f["beam/ki_vec"] = opt.ki_vec
+            safe_write(f, "beam/ki_vec", opt.ki_vec)
 
-        f["sample/a"] = opt.a
-        f["sample/b"] = opt.b
-        f["sample/c"] = opt.c
-        f["sample/alpha"] = opt.alpha
-        f["sample/beta"] = opt.beta
-        f["sample/gamma"] = opt.gamma
+        safe_write(f, "sample/a", opt.a)
+        safe_write(f, "sample/b", opt.b)
+        safe_write(f, "sample/c", opt.c)
+        safe_write(f, "sample/alpha", opt.alpha)
+        safe_write(f, "sample/beta", opt.beta)
+        safe_write(f, "sample/gamma", opt.gamma)
 
         B_mat = opt.reciprocal_lattice_B()
-        f["sample/B"] = B_mat
+        safe_write(f, "sample/B", B_mat)
         f["sample/U"] = U
         
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
