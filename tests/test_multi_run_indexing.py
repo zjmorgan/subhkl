@@ -23,6 +23,9 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
             R_axis = Rotation.from_rotvec(sign * np.deg2rad(ang) * axis).as_matrix()
             R_run = R_run @ R_axis
             
+        if sample_offset_true is not None: s_lab = R_run @ sample_offset_true
+        else: s_lab = np.zeros(3)
+
         h_range = np.arange(-5, 6)
         k_range = np.arange(-hkl_range_k, hkl_range_k + 1)
         l_range = np.arange(-5, 6)
@@ -32,8 +35,6 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
         
         Q_sample = (U_true @ B @ hkls.T).T
         Q_lab = (R_run @ Q_sample.T).T
-        if sample_offset_true is not None: s_lab = R_run @ sample_offset_true
-        else: s_lab = np.zeros(3)
         ki = np.array([0, 0, 1])
         Q_sq = np.sum(Q_lab**2, axis=1)
         ki_dot_Q = Q_lab @ ki
@@ -53,6 +54,7 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
         dist_det = 0.4
         xyz_det = s_lab[None, :] + dist_det * kf_target
         all_xyz.append(xyz_det)
+        
         kf_norm = kf_target
         
         all_tt.append(np.rad2deg(np.arccos(np.clip(kf_norm[:, 2], -1, 1))))
@@ -79,7 +81,6 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
     }
 
 def test_multi_run_indexing_refinement():
-    """Verify that multi-run physics is correct by refining from truth."""
     np.random.seed(42)
     a, b, c = 10.1, 11.2, 12.3
     U_true = Rotation.from_euler('xyz', [15, 25, 35], degrees=True).as_matrix()
@@ -97,7 +98,7 @@ def test_multi_run_indexing_refinement():
         num_generations=100,
         n_runs=1,
         init_params=w_true,
-        sigma_init=None,
+        sigma_init=0.001,
         tolerance_deg=0.1,
         loss_method="gaussian"
     )
@@ -139,7 +140,6 @@ def test_clipping_logic_direct():
     assert bool(is_allowed[3]) == True
 
 def test_sample_offset_refinement_multirun():
-    """Verify that Sample-frame offset can be recovered in multi-run."""
     np.random.seed(42)
     a, b, c = 10.0, 10.0, 10.0
     U_true = np.eye(3)
@@ -154,7 +154,6 @@ def test_sample_offset_refinement_multirun():
     assert error < 1e-4
 
 def test_stage1_multirun_rotation_bypass():
-    """Confirm that Stage 1 (no refinement) correctly uses static rotations."""
     a, b, c = 10.0, 10.0, 10.0
     B = np.eye(3)
     tt = np.array([20.0, 20.0])
@@ -165,5 +164,22 @@ def test_stage1_multirun_rotation_bypass():
     R2 = Rotation.from_euler('y', 90, degrees=True).as_matrix()
     static_R = np.stack([R1, R2], axis=0)
     obj = VectorizedObjective(B=B, kf_ki_dir=kf_ki_dir, peak_xyz_lab=None, wavelength=[1.0, 2.0], angle_cdf=np.zeros(100), angle_t=np.zeros(100), refine_goniometer=False, static_R=static_R)
-    # Currently this fails (asserts False)
     assert obj.input_is_rotated == False
+
+def test_predictor_multirun_sample_rotation():
+    from subhkl.utils import predict_reflections_on_panel
+    from subhkl.detector import Detector
+    det_config = { 'm': 256, 'n': 256, 'width': 0.256, 'height': 0.256, 'center': [0, 0, 0.4], 'vhat': [0, 1, 0], 'uhat': [1, 0, 0], 'panel': 'flat' }
+    det = Detector(det_config)
+    s_sample = np.array([0.01, 0.0, 0.0])
+    # RUB choice such that kf is towards detector center
+    # ki = [0,0,1]. Q = [0,0,-0.1]. kf = [0,0,0.9] -> center.
+    RUB = np.array([[0.1, 0, 0], [0, 0.1, 0], [0, 0, -0.1]])
+    h, k, l = np.array([0]), np.array([0]), np.array([1])
+    R1 = np.eye(3)
+    R2 = Rotation.from_euler('z', 180, degrees=True).as_matrix()
+    res1 = predict_reflections_on_panel(det, h, k, l, R1 @ RUB, 0.1, 100.0, sample_offset=s_sample, R_all=R1)
+    res2 = predict_reflections_on_panel(det, h, k, l, R2 @ RUB, 0.1, 100.0, sample_offset=s_sample, R_all=R2)
+    assert len(res1[0]) > 0, "Peak not on panel in Run 1"
+    assert len(res2[0]) > 0, "Peak not on panel in Run 2"
+    assert np.abs(res1[0][0] - res2[0][0]) > 1e-3, "Predictor ignored goniometer rotation for sample offset!"
