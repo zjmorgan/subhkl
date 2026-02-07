@@ -800,7 +800,7 @@ def metrics(
             RUB = R_all @ UB 
 
         d_err, ang_err = calculate_angular_error(
-            xyz_det, h, k, l, lam, RUB, sample_offset, ki_vec
+            xyz_det, h, k, l, lam, RUB, sample_offset, ki_vec, R_all
         )
 
         print(f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "

@@ -834,7 +834,16 @@ class VectorizedObjective:
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
         
         if self.refine_sample:
-            s = sample_total[:, :, None]
+            # CORRECTED: Sample offset should be in the Sample Frame and rotated to Lab Frame
+            if R is not None:
+                if R.ndim == 4:
+                    s_lab = jnp.einsum('snij,sj->sni', R, sample_total)
+                    s = s_lab.transpose(0, 2, 1)
+                else:
+                    s_lab = jnp.einsum('sij,sj->si', R, sample_total)
+                    s = s_lab[:, :, None]
+            else:
+                s = sample_total[:, :, None]
             p = self.peak_xyz[None, :, :]
             v = p - s
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
@@ -1356,9 +1365,18 @@ class FindUB:
 
         # Final Score Recalculation
         if refine_sample:
-            s = self.sample_offset
-            p = self.peak_xyz.T + self.base_sample_offset[:, None] # Reconstruct P_raw
-            v = p - s[:, None]
+            # CORRECTED: Sample offset should be in the Sample Frame and rotated to Lab Frame
+            if self.R is not None:
+                if self.R.ndim == 3:
+                    s_lab = np.einsum('nij,j->ni', self.R, self.sample_offset)
+                    s = s_lab.T
+                else:
+                    s_lab = self.R @ self.sample_offset
+                    s = s_lab[:, None]
+            else:
+                s = self.sample_offset[:, None]
+            p = self.peak_xyz.T + self.base_sample_offset[:, None]
+            v = p - s
             dist = np.linalg.norm(v, axis=0)
             kf = v / dist
             ki = self.ki_vec[:, None]

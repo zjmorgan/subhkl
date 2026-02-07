@@ -160,7 +160,7 @@ def calculate_angular_error(
     lam: npt.NDArray,
     RUB: npt.NDArray,
     sample_offset: npt.NDArray = None,
-    ki_vec: npt.NDArray = None
+    ki_vec: npt.NDArray = None, R_all: npt.NDArray = None
 ):
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
@@ -177,7 +177,11 @@ def calculate_angular_error(
 
     # 2. Calculate Q_obs (Lab Frame) from Detector Pixel Position
     # v = Pixel_Position - Sample_Position
-    v = xyz_det - sample_offset
+    if R_all is not None:
+        if R_all.ndim == 3: s_lab = np.einsum('nij,j->ni', R_all, sample_offset)
+        else: s_lab = R_all @ sample_offset
+        v = xyz_det - s_lab
+    else: v = xyz_det - sample_offset
     dist = np.linalg.norm(v, axis=1, keepdims=True)
     kf_dir = v / dist # Unit vector pointing from sample to pixel
     
@@ -222,7 +226,7 @@ def predict_reflections_on_panel(
     wavelength_min: float,
     wavelength_max: float,
     sample_offset: npt.NDArray = None,
-    ki_vec: npt.NDArray = None
+    ki_vec: npt.NDArray = None, R_all: npt.NDArray = None
 ):
     """
     Predicts which HKLs fall on a specific detector panel using the RUB matrix.
