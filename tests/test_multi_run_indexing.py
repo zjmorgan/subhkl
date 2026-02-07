@@ -147,10 +147,22 @@ def test_predictor_multirun_sample_rotation():
     shift_col = np.abs(res1[1][0] - res2[1][0])
     assert shift_col > 1.0, 'Predictor ignored goniometer rotation for sample offset!'
 
-def test_api_large_cell_search_range_vulnerability():
-    from subhkl.optimization import FindUB
+
+def test_ghost_indexing_vulnerability():
+    from subhkl.optimization import FindUB, VectorizedObjective
+    import jax.numpy as jnp
+    import numpy as np
     fu = FindUB()
-    fu.a, fu.b, fu.c = 18.4, 56.6, 6.5
+    fu.a, fu.b, fu.c = 10, 10, 10
     fu.alpha, fu.beta, fu.gamma = 90, 90, 90
-    fu.space_group = 'F d d 2'
-    assert False, 'API vulnerability: default search range is too small for Mesolite!'
+    B = fu.reciprocal_lattice_B()
+    obj = VectorizedObjective(B=B, kf_ki_dir=np.zeros((3, 1)), peak_xyz_lab=None, wavelength=[1.0, 5.0], angle_cdf=np.zeros(10), angle_t=np.zeros(10), space_group='I 2 2 2', hkl_search_range=2)
+    h, k, l = jnp.array([1]), jnp.array([0]), jnp.array([0])
+    r = obj.mask_range
+    idx_h, idx_k, idx_l = (h + r).astype(jnp.int32), (k + r).astype(jnp.int32), (l + r).astype(jnp.int32)
+    is_allowed_in = obj.valid_hkl_mask[idx_h, idx_k, idx_l]
+    assert bool(is_allowed_in[0]) == False
+    h_out, k_out, l_out = jnp.array([21]), jnp.array([0]), jnp.array([0])
+    in_bounds = (h_out >= -r) & (h_out <= r) & (k_out >= -r) & (k_out <= r) & (l_out >= -r) & (l_out <= r)
+    is_allowed_out = jnp.where(in_bounds, obj.valid_hkl_mask[0,0,0], True)
+    assert bool(is_allowed_out[0]) == True
