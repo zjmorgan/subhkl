@@ -99,7 +99,7 @@ class Detector:
             du = dr + dvr
 
         xyz = self.center + du + dv
-        return xyz.T if xyz.ndim > 1 else xyz
+        return xyz
 
     def lab_to_pixel(self, x: float, y: float, z: float, clip: bool = False) -> tuple[npt.NDArray, npt.NDArray]:
         """
@@ -165,18 +165,9 @@ class Detector:
         Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
         """
         xyz = self.pixel_to_lab(row, col) # Returns (N, 3) or (3,)
+        v = xyz - (sample_offset if sample_offset is not None else 0)
         
-        if sample_offset is not None:
-            # xyz is (N, 3) or (3,), sample_offset is (3,) or (N, 3)
-            v = xyz - sample_offset
-        else:
-            v = xyz
-
-        if v.ndim == 2:
-            X, Y, Z = v[:, 0], v[:, 1], v[:, 2]
-        else:
-            X, Y, Z = v[0], v[1], v[2]
-
+        X, Y, Z = v.T
         R_mag = np.sqrt(X**2 + Y**2 + Z**2)
         two_theta = np.rad2deg(np.arccos(np.clip(Z / R_mag, -1.0, 1.0)))
         az_phi = np.rad2deg(np.arctan2(Y, X))

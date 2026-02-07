@@ -213,9 +213,8 @@ def _process_single_image(
         intensities = bank_intensity[keep]
         sigmas = bank_sigma[keep]
         tt, az = det.pixel_to_angles(i, j)
-        lab_coords_T = det.pixel_to_lab(i, j)
-        if lab_coords_T.ndim == 1: lab_coords = lab_coords_T[np.newaxis, :]
-        else: lab_coords = lab_coords_T.T
+        lab_coords = det.pixel_to_lab(i, j)
+        if lab_coords.ndim == 1: lab_coords = lab_coords[np.newaxis, :]
         num = len(tt)
         
         # Radii Calculation
@@ -293,20 +292,19 @@ def _integrate_single_bank(
     centers = np.stack([bank_i, bank_j], axis=-1)
     
     det = Detector(det_config)
+    
+    # --- METRICS: Comparison with found peaks ---
+    metrics_str = ""
+    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, current_angles_val, current_R_val, sample_offset, ki_vec = metrics_info
+
     # CORRECTED: Account for Sample-frame offset rotation
     s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
     bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
     
     # Correctly handle lab coordinate shape (N, 3)
-    lab_coords_raw = det.pixel_to_lab(bank_i, bank_j) # Returns (3, N)
-    if lab_coords_raw.ndim == 1: 
-        lab_coords = lab_coords_raw[np.newaxis, :] # (1, 3) -> (N=1, 3)
-    else: 
-        lab_coords = lab_coords_raw.T # (N, 3)
-
-    # --- METRICS: Comparison with found peaks ---
-    metrics_str = ""
-    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, current_angles_val, current_R_val, sample_offset, ki_vec = metrics_info
+    lab_coords = det.pixel_to_lab(bank_i, bank_j) 
+    if lab_coords.ndim == 1: 
+        lab_coords = lab_coords[np.newaxis, :] # (1, 3) -> (N=1, 3)
     
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
@@ -709,7 +707,7 @@ class Peaks:
             run_id = self.get_run_id(img_key)
 
             tasks.append((
-                run_id, img_label, physical_bank, self.ims[img_key], 
+                img_key, img_label, physical_bank, self.ims[img_key], 
                 det_config, finder_info, integration_params, 
                 mask_info, geo_info, viz_info
             ))
