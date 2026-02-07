@@ -607,6 +607,12 @@ class Peaks:
         det_config = beamlines[self.instrument][bank_id]
         return Detector(det_config)
 
+    def get_run_id(self, img_key: int) -> int:
+        """Helper to resolve the run ID for an image key."""
+        if hasattr(self, 'file_offsets') and self.file_offsets is not None:
+            return int(np.searchsorted(self.file_offsets, img_key, side='right') - 1)
+        return img_key
+
     def get_image_label(self, img_key):
         """Helper to resolve a readable label for an image key."""
         if hasattr(self, 'image_files_raw') and self.image_files_raw and hasattr(self, 'file_offsets'):
@@ -700,10 +706,7 @@ class Peaks:
             geo_info = (current_R, current_angles, self.wavelength_min, self.wavelength_max)
             viz_info = (visualize, file_prefix)
 
-            # Map image index to run index if file_offsets available
-            run_id = img_key
-            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
-                run_id = np.searchsorted(self.file_offsets, img_key, side='right') - 1
+            run_id = self.get_run_id(img_key)
 
             tasks.append((
                 run_id, img_label, physical_bank, self.ims[img_key], 
@@ -768,28 +771,15 @@ class Peaks:
         
         for i, bank in enumerate(sorted_keys):
             det_config = beamlines[self.instrument][str(self.bank_mapping.get(bank, bank))]
-            
-            # Map bank to run ID
-            run_id = bank
-            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
-                run_id = np.searchsorted(self.file_offsets, bank, side='right') - 1
+            run_id = self.get_run_id(bank)
 
             if use_stack:
-                # Use run ID as index if it's within stack size, else fallback to enumeration
-                idx = run_id if run_id < RUB.shape[0] else i
-                if idx >= RUB.shape[0]: idx = -1 # Safety fallback to last frame
+                idx = run_id if run_id < RUB.shape[0] else -1
                 rub_val = RUB[idx]
             else:
                 rub_val = RUB if RUB.ndim == 2 else RUB[0]
 
-            current_R_val = None
-            if R_all is not None:
-                if R_all.ndim == 3:
-                    idx = run_id if run_id < R_all.shape[0] else i
-                    if idx >= R_all.shape[0]: idx = -1
-                    current_R_val = R_all[idx]
-                else:
-                    current_R_val = R_all
+            current_R_val = R_all[run_id if (R_all is not None and R_all.ndim == 3 and run_id < R_all.shape[0]) else 0] if R_all is not None else None
 
             tasks.append((
                 bank, det_config, 
@@ -882,11 +872,7 @@ class Peaks:
         for bank, peaks in peak_dict.items():
             physical_bank = self.bank_mapping.get(bank, bank)
             det_config = beamlines[self.instrument][str(physical_bank)]
-            
-            # Map bank to run ID
-            run_id = bank
-            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
-                run_id = np.searchsorted(self.file_offsets, bank, side='right') - 1
+            run_id = self.get_run_id(bank)
 
             # UPDATED: Generate nice labels for visualization
             img_label = self.get_image_label(bank)
