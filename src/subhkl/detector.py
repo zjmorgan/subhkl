@@ -214,9 +214,15 @@ class Detector:
                 t = np.where((t2 > 0), t2, t1)
                 t = np.where(delta < 0, -1.0, t)
 
-        X = s[0] + t * dir_vec[0]
-        Y = s[1] + t * dir_vec[1]
-        Z = s[2] + t * dir_vec[2]
+        # Handle stacked sample offsets (N, 3) or single offset (3,)
+        if s.ndim == 2:
+            X = s[:, 0] + t * dir_vec[0]
+            Y = s[:, 1] + t * dir_vec[1]
+            Z = s[:, 2] + t * dir_vec[2]
+        else:
+            X = s[0] + t * dir_vec[0]
+            Y = s[1] + t * dir_vec[1]
+            Z = s[2] + t * dir_vec[2]
         
         row, col = self.lab_to_pixel(X, Y, Z)
         mask = (row > 0) & (col > 0) & (row < self.n - 1) & (col < self.m - 1) & (t > 0)

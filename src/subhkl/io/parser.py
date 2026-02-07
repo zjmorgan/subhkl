@@ -920,6 +920,7 @@ def peak_predictor(
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         max_workers=max_workers,
+        R_all=all_R,
     )
 
     # 5. Save Predictions

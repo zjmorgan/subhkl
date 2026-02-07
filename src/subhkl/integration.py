@@ -257,7 +257,8 @@ def _predict_single_bank(
     unit_cell_params, 
     RUB, 
     wavelength_min, wavelength_max, 
-    sample_offset, ki_vec
+    sample_offset, ki_vec,
+    R_all=None
 ):
     """
     Worker function for predicting peaks on a single detector bank.
@@ -271,7 +272,7 @@ def _predict_single_bank(
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
         detector=det, h=h, k=k, l=l, RUB=RUB,
         wavelength_min=wavelength_min, wavelength_max=wavelength_max,
-        sample_offset=sample_offset, ki_vec=ki_vec
+        sample_offset=sample_offset, ki_vec=ki_vec, R_all=R_all
     )
     if len(row) > 0:
         return bank_id, [row, col, h_f, k_f, l_f, wl_f]
@@ -739,7 +740,7 @@ class Peaks:
         )
 
 
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None,
+    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None, R_all=None,
                       max_workers: int = None):
         """
         Predicts peak positions using parallel processing.
@@ -769,12 +770,22 @@ class Peaks:
             else:
                 rub_val = RUB if RUB.ndim == 2 else RUB[0]
 
+            current_R_val = None
+            if R_all is not None:
+                if R_all.ndim == 3:
+                    idx = bank if isinstance(bank, int) and bank < R_all.shape[0] else i
+                    if idx >= R_all.shape[0]: idx = -1
+                    current_R_val = R_all[idx]
+                else:
+                    current_R_val = R_all
+
             tasks.append((
                 bank, det_config, 
                 unit_cell_params, # Pass tuple instead of arrays
                 rub_val, 
                 self.wavelength_min, self.wavelength_max, 
-                sample_offset, ki_vec
+                sample_offset, ki_vec,
+                current_R_val
             ))
             
         # Use 'spawn' to be safe with JAX threading

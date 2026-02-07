@@ -269,6 +269,15 @@ def predict_reflections_on_panel(
     x, y, z = kf_dirs[0], kf_dirs[1], kf_dirs[2]
 
     # 5. Ray Trace intersection with Panel
-    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=sample_offset)
+    # CORRECTED: Rotate sample offset to Lab frame
+    if R_all is not None and sample_offset is not None:
+        if R_all.ndim == 3:
+            s_lab = np.einsum('nij,j->ni', R_all, sample_offset)
+        else:
+            s_lab = R_all @ sample_offset
+    else:
+        s_lab = sample_offset
+
+    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=s_lab)
     
     return row[mask_panel], col[mask_panel], h[mask_panel], k[mask_panel], l[mask_panel], lamda[mask_panel]
