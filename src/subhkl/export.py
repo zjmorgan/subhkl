@@ -23,7 +23,6 @@ class BaseConcatenateMerger:
         self.copy_keys = copy_keys
         self.merge_keys = merge_keys
 
-
     def merge(self, output_filename):
         """
         Merges the indexed datasets into a single dataset
@@ -81,6 +80,7 @@ class BaseConcatenateMerger:
 
                     offset += num_items
 
+
 class FinderConcatenateMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
         merge_keys = [
@@ -97,11 +97,9 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "bank",
             "peaks/run_index",
         ]
-        copy_keys = [
-            "goniometer/axes",
-            "goniometer/names"
-        ]
+        copy_keys = ["goniometer/axes", "goniometer/names"]
         super().__init__(h5_files, copy_keys, merge_keys)
+
 
 class MTZExporter:
     def __init__(self, peaks_file, space_group="P 1"):
@@ -199,15 +197,16 @@ class MTZExporter:
         mtz.set_data(data)
         mtz.write_to_file(filename)
 
+
 class ImageStackMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
         """
         Merges reduced image HDF5 files into a single stack for batch processing.
         """
         merge_keys = [
-            "images",              # The stack of 2D images
-            "goniometer/angles",   # Per-image angles
-            "bank_ids",            # Per-image detector ID
+            "images",  # The stack of 2D images
+            "goniometer/angles",  # Per-image angles
+            "bank_ids",  # Per-image detector ID
         ]
 
         # Keys that should be identical across all files (metadata)

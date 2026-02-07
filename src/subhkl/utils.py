@@ -55,7 +55,7 @@ except Exception:
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
     Scale pixel coordinates to physical coordinates.
-    
+
     Parameters
     ----------
     xp : float
@@ -70,7 +70,7 @@ def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
         Number of pixels in x direction
     ny : int
         Number of pixels in y direction
-    
+
     Returns
     -------
     x, y : tuple of float
@@ -85,14 +85,17 @@ def cartesian_matrix_metric_tensor(a, b, c, alpha, beta, gamma):
     """
     Calculates the B matrix (orientation matrix) and G* (reciprocal metric tensor).
     """
-    G = np.array([
-        [a ** 2, a * b * np.cos(gamma), a * c * np.cos(beta)],
-        [b * a * np.cos(gamma), b ** 2, b * c * np.cos(alpha)],
-        [c * a * np.cos(beta), c * b * np.cos(alpha), c ** 2],
-    ])
+    G = np.array(
+        [
+            [a**2, a * b * np.cos(gamma), a * c * np.cos(beta)],
+            [b * a * np.cos(gamma), b**2, b * c * np.cos(alpha)],
+            [c * a * np.cos(beta), c * b * np.cos(alpha), c**2],
+        ]
+    )
     Gstar = np.linalg.inv(G)
     B = scipy.linalg.cholesky(Gstar, lower=False)
     return B, Gstar
+
 
 def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2.0):
     """
@@ -100,57 +103,58 @@ def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2
     """
     constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
     B, Gstar = cartesian_matrix_metric_tensor(*constants)
-    
+
     astar, bstar, cstar = np.sqrt(np.diag(Gstar))
-    
+
     h_max = int(np.floor(1 / d_min / astar))
     k_max = int(np.floor(1 / d_min / bstar))
     l_max = int(np.floor(1 / d_min / cstar))
-    
+
     h, k, l = np.meshgrid(
         np.arange(-h_max, h_max + 1),
         np.arange(-k_max, k_max + 1),
         np.arange(-l_max, l_max + 1),
         indexing="ij",
     )
-    
+
     h_flat, k_flat, l_flat = h.flatten(), k.flatten(), l.flatten()
-    
+
     # Filter by resolution (1/d^2 = hkl . G* . hkl)
-    hkl_sq = np.einsum("ij,jl,il->l", Gstar, [h_flat, k_flat, l_flat], [h_flat, k_flat, l_flat])
-    
+    hkl_sq = np.einsum(
+        "ij,jl,il->l", Gstar, [h_flat, k_flat, l_flat], [h_flat, k_flat, l_flat]
+    )
+
     with np.errstate(divide="ignore"):
         d = 1 / np.sqrt(hkl_sq)
-        
+
     res_mask = (d > d_min) & (d < np.inf)
     absent_mask = is_systematically_absent(h_flat, k_flat, l_flat, space_group)
-    
+
     final_mask = res_mask & (~absent_mask)
-    
+
     return h_flat[final_mask], k_flat[final_mask], l_flat[final_mask]
 
+
 def get_q_lab(
-    h: npt.ArrayLike, 
-    k: npt.ArrayLike, 
-    l: npt.ArrayLike, 
-    RUB: npt.ArrayLike
+    h: npt.ArrayLike, k: npt.ArrayLike, l: npt.ArrayLike, RUB: npt.ArrayLike
 ) -> npt.NDArray:
     """
     Calculate Q vectors in the Lab Frame.
     Q_lab = RUB * hkl
     RUB should be the composite matrix (R @ U @ B).
     """
-    hkl = np.stack([h, k, l], axis=1) # (N, 3)
-    
+    hkl = np.stack([h, k, l], axis=1)  # (N, 3)
+
     # Handle RUB shape: (3,3) or (N,3,3)
     if RUB.ndim == 3:
         # Einsum: n=batch, i=row, j=col. RUB[n,i,j] * hkl[n,j] -> out[n,i]
-        q_lab = np.einsum('nij,nj->ni', RUB, hkl)
+        q_lab = np.einsum("nij,nj->ni", RUB, hkl)
     else:
         # Standard matmul: hkl @ RUB.T
         q_lab = hkl @ RUB.T
-        
+
     return q_lab
+
 
 def calculate_angular_error(
     xyz_det: npt.NDArray,
@@ -160,7 +164,7 @@ def calculate_angular_error(
     lam: npt.NDArray,
     RUB: npt.NDArray,
     sample_offset: npt.NDArray = None,
-    ki_vec: npt.NDArray = None
+    ki_vec: npt.NDArray = None,
 ):
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
@@ -179,16 +183,16 @@ def calculate_angular_error(
     # v = Pixel_Position - Sample_Position
     v = xyz_det - sample_offset
     dist = np.linalg.norm(v, axis=1, keepdims=True)
-    kf_dir = v / dist # Unit vector pointing from sample to pixel
-    
+    kf_dir = v / dist  # Unit vector pointing from sample to pixel
+
     ki_dir = ki_vec / np.linalg.norm(ki_vec)
-    
+
     # Scattering vector direction matches delta_k = kf - ki
     delta_k = kf_dir - ki_dir[None, :]
     two_sin_theta = np.linalg.norm(delta_k, axis=1)
-    
+
     # Q_obs direction
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         q_obs_norm = delta_k / two_sin_theta[:, None]
 
     # 3. Angular Error (Angle between Q_calc direction and Q_obs direction)
@@ -198,20 +202,21 @@ def calculate_angular_error(
 
     # 4. D-Spacing Error
     # d_obs = lambda / 2sin(theta)
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         d_obs = np.divide(lam, two_sin_theta)
-    
+
     # d_calc = 1 / |RUB * hkl|
     # Since R and U are rotations (unitary), they preserve length.
     # |R * U * B * h| == |B * h| == 1/d
     q_lab_mag = np.linalg.norm(q_lab_calc, axis=1)
-    
-    with np.errstate(divide='ignore', invalid='ignore'):
+
+    with np.errstate(divide="ignore", invalid="ignore"):
         d_calc = np.divide(1.0, q_lab_mag)
 
     d_err = np.abs(d_obs - d_calc)
-    
+
     return d_err, ang_err
+
 
 def predict_reflections_on_panel(
     detector: "Detector",
@@ -222,7 +227,7 @@ def predict_reflections_on_panel(
     wavelength_min: float,
     wavelength_max: float,
     sample_offset: npt.NDArray = None,
-    ki_vec: npt.NDArray = None
+    ki_vec: npt.NDArray = None,
 ):
     """
     Predicts which HKLs fall on a specific detector panel using the RUB matrix.
@@ -234,37 +239,53 @@ def predict_reflections_on_panel(
 
     # 1. Calculate Q vectors (Units: 2pi/d)
     # get_q_lab returns 1/d units. Multiply by 2pi.
-    q_lab_direction = get_q_lab(h, k, l, RUB) 
-    Q_vecs = 2 * np.pi * q_lab_direction.T # Shape (3, N)
-    
+    q_lab_direction = get_q_lab(h, k, l, RUB)
+    Q_vecs = 2 * np.pi * q_lab_direction.T  # Shape (3, N)
+
     Q_sq = np.sum(Q_vecs**2, axis=0)
 
     # 2. Calculate Wavelength (Generalized Laue)
     # lambda = -4pi * (Q . ki) / Q^2
     Q_dot_ki = np.sum(Q_vecs * ki_hat[:, None], axis=0)
-    
-    with np.errstate(divide='ignore', invalid='ignore'):
-         lamda = -4 * np.pi * Q_dot_ki / Q_sq
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lamda = -4 * np.pi * Q_dot_ki / Q_sq
 
     # 3. Filter Wavelength
     mask = (lamda > wavelength_min) & (lamda < wavelength_max)
     if not np.any(mask):
-        return np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([]),
+            np.array([]),
+        )
 
     Q_vecs = Q_vecs[:, mask]
     lamda = lamda[mask]
     h, k, l = h[mask], k[mask], l[mask]
-    
+
     # 4. Calculate kf direction
     k_mag = 2 * np.pi / lamda
     kf_vecs = Q_vecs + k_mag * ki_hat[:, None]
-    
+
     kf_norms = np.linalg.norm(kf_vecs, axis=0)
-    kf_dirs = kf_vecs / kf_norms # Shape (3, N_filtered)
+    kf_dirs = kf_vecs / kf_norms  # Shape (3, N_filtered)
 
     x, y, z = kf_dirs[0], kf_dirs[1], kf_dirs[2]
 
     # 5. Ray Trace intersection with Panel
-    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=sample_offset)
-    
-    return row[mask_panel], col[mask_panel], h[mask_panel], k[mask_panel], l[mask_panel], lamda[mask_panel]
+    mask_panel, row, col = detector.reflections_mask(
+        x, y, z, sample_offset=sample_offset
+    )
+
+    return (
+        row[mask_panel],
+        col[mask_panel],
+        h[mask_panel],
+        k[mask_panel],
+        l[mask_panel],
+        lamda[mask_panel],
+    )

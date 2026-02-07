@@ -10,7 +10,10 @@ from scipy.optimize import minimize
 try:
     from scipy.spatial.qhull import QhullError
 except ImportError:
-    class QhullError(Exception): pass
+
+    class QhullError(Exception):
+        pass
+
 
 from subhkl.convex_hull.offset_mask import OffsetMask
 from subhkl.convex_hull.region_grower import RegionGrower
@@ -134,9 +137,7 @@ class PeakIntegrator:
             # Check the length of the first array in the tuple (the row indices)
             if is_peak[i_peak] and len(bg_masks[i_peak].nonzero()[0]) > 0:
                 stats = self._calculate_statistics(
-                    intensity,
-                    peak_masks[i_peak],
-                    bg_masks[i_peak]
+                    intensity, peak_masks[i_peak], bg_masks[i_peak]
                 )
                 bg_density, peak_intensity, peak_bg_intensity, sigma = map(float, stats)
 
@@ -342,14 +343,14 @@ class PeakIntegrator:
 
             # Build masks and hulls
             masks, hulls = self._make_peak_hulls_and_masks(core_points, im_shape)
-            
+
             # Check for failure (degenerate hulls)
             if masks is None:
                 peak_masks.append(None)
                 inner_masks.append(None)
                 bg_masks.append(None)
-                peak_hulls.append([None]*4)
-                is_peak[peak_idx] = False # Mark as invalid
+                peak_hulls.append([None] * 4)
+                is_peak[peak_idx] = False  # Mark as invalid
                 continue
 
             peak_hulls.append(hulls)
@@ -660,7 +661,6 @@ class PeakIntegrator:
         )
         return global_max_idx
 
-
     @staticmethod
     def _remove_outliers(data, threshold=3.0):
         """
@@ -669,16 +669,16 @@ class PeakIntegrator:
         """
         if len(data) < 2:
             return data
-            
+
         mean = np.mean(data, axis=0)
         std = np.std(data, axis=0)
-        
+
         # Avoid division by zero: if std is 0, the data is constant, so z-score is 0 (keep point)
         # We replace 0 with 1 in the divisor to perform valid division, yielding 0/1 = 0
         safe_std = np.where(std == 0, 1.0, std)
-        
+
         z_scores = np.abs((data - mean) / safe_std)
-        
+
         return data[(z_scores < threshold).all(axis=1)]
 
     @staticmethod
