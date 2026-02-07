@@ -147,22 +147,24 @@ def test_predictor_multirun_sample_rotation():
     shift_col = np.abs(res1[1][0] - res2[1][0])
     assert shift_col > 1.0, 'Predictor ignored goniometer rotation for sample offset!'
 
-
 def test_ghost_indexing_vulnerability():
     from subhkl.optimization import FindUB, VectorizedObjective
-    import jax.numpy as jnp
-    import numpy as np
     fu = FindUB()
     fu.a, fu.b, fu.c = 10, 10, 10
     fu.alpha, fu.beta, fu.gamma = 90, 90, 90
     B = fu.reciprocal_lattice_B()
     obj = VectorizedObjective(B=B, kf_ki_dir=np.zeros((3, 1)), peak_xyz_lab=None, wavelength=[1.0, 5.0], angle_cdf=np.zeros(10), angle_t=np.zeros(10), space_group='I 2 2 2', hkl_search_range=2)
-    h, k, l = jnp.array([1]), jnp.array([0]), jnp.array([0])
-    r = obj.mask_range
-    idx_h, idx_k, idx_l = (h + r).astype(jnp.int32), (k + r).astype(jnp.int32), (l + r).astype(jnp.int32)
-    is_allowed_in = obj.valid_hkl_mask[idx_h, idx_k, idx_l]
-    assert bool(is_allowed_in[0]) == False
     h_out, k_out, l_out = jnp.array([21]), jnp.array([0]), jnp.array([0])
+    r = obj.mask_range
     in_bounds = (h_out >= -r) & (h_out <= r) & (k_out >= -r) & (k_out <= r) & (l_out >= -r) & (l_out <= r)
     is_allowed_out = jnp.where(in_bounds, obj.valid_hkl_mask[0,0,0], True)
-    assert bool(is_allowed_out[0]) == True
+    assert bool(is_allowed_out[0]) == False, 'VULNERABILITY: Forbidden reflection allowed outside mask range!'
+
+def test_stage1_blindness_vulnerability():
+    from subhkl.optimization import VectorizedObjective
+    B = np.eye(3)
+    xyz_lab = np.array([[0.0, 0.0, 0.4]])
+    s_nom = np.array([0.01, 0.0, 0.0])
+    obj = VectorizedObjective(B=B, kf_ki_dir=np.array([[0,0,1]]).T, peak_xyz_lab=xyz_lab, wavelength=[1,2], angle_cdf=np.zeros(10), angle_t=np.zeros(10), refine_sample=False, sample_nominal=s_nom)
+    kf_internal = obj.kf_lab_fixed
+    assert np.abs(kf_internal[0,0] - 0.0) > 1e-3, 'VULNERABILITY: Stage 1 is blind to nominal sample offset!'
