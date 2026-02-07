@@ -43,7 +43,7 @@ def get_centering(space_group_name):
     return sg.centring_type()
 
 
-def is_systematically_absent(h, k, l, space_group_name):
+def is_systematically_absent(h, k, l, space_group_name):  # noqa: E741
     """
     Check systematic absences for arrays of h, k, l using Gemmi.
     """
@@ -51,7 +51,7 @@ def is_systematically_absent(h, k, l, space_group_name):
     ops = sg.operations()  # <--- FIXED: Get operations object
 
     result = []
-    for hi, ki, li in zip(h, k, l):
+    for hi, ki, li in zip(h, k, l):  # noqa: E741
         if hi == 0 and ki == 0 and li == 0:
             result.append(True)  # 000 is physically absent
             continue
@@ -75,15 +75,15 @@ def generate_hkl_mask(h_max, k_max, l_max, space_group_name):
 
     h_range = np.arange(-h_max, h_max + 1)
     k_range = np.arange(-k_max, k_max + 1)
-    l_range = np.arange(-l_max, l_max + 1)
+    l_range = np.arange(-l_max, l_max + 1)  # noqa: E741
 
-    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")
+    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")  # noqa: E741
 
     mask = np.ones(H.shape, dtype=bool)
 
     # Iterate and check
     it = np.nditer([H, K, L], flags=["multi_index"])
-    for h, k, l in it:
+    for h, k, l in it:  # noqa: E741
         if h == 0 and k == 0 and l == 0:
             mask[it.multi_index] = False
             continue

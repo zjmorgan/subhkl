@@ -1,6 +1,5 @@
 import numpy as np
 from functools import partial
-import sys
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 

@@ -24,7 +24,9 @@ try:
     from tqdm import tqdm
 except ImportError:
     # Fallback if tqdm is not installed
-    tqdm = lambda x, **kwargs: x
+    def tqdm(iterable, **kwargs):
+        return iterable
+
 
 from subhkl.config import (
     beamlines,
@@ -36,7 +38,6 @@ from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
-from subhkl.spacegroup import is_systematically_absent
 from subhkl.utils import (
     predict_reflections_on_panel,
     calculate_angular_error,
@@ -319,7 +320,7 @@ def _predict_single_bank(
     """
     # 1. Generate Reflections locally
     a, b, c, alpha, beta, gamma, space_group, d_min = unit_cell_params
-    h, k, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    h, k, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)  # noqa: E741
 
     det = Detector(det_config)
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
@@ -547,7 +548,7 @@ def _integrate_single_bank(
                     clip_on=True,
                 )
 
-        plt_im = axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+        axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
         forbidden = ~mask
         overlay = np.zeros((*forbidden.shape, 4))
         overlay[forbidden] = [0, 1, 1, 0.3]
@@ -1032,7 +1033,7 @@ class Peaks:
         found_peaks_file=None,
         max_workers=None,
     ):
-        h, k, l = [], [], []
+        h, k, l = [], [], []  # noqa: E741
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
@@ -1091,8 +1092,6 @@ class Peaks:
                 print(f"Failed to load found peaks: {e}")
 
         tasks = []
-        fname_clean = os.path.basename(self.filename)
-
         for bank, peaks in peak_dict.items():
             physical_bank = self.bank_mapping.get(bank, bank)
             det_config = beamlines[self.instrument][str(physical_bank)]
@@ -1149,7 +1148,7 @@ class Peaks:
                 sample_offset,
                 ki_vec,
             )
-            # Pass viz_label instead of fname_clean
+            # Pass viz_label
             viz_info = (create_visualizations, file_prefix, viz_label)
 
             tasks.append(

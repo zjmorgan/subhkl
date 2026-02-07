@@ -3,7 +3,6 @@ import numpy as np
 from scipy.signal import convolve2d
 from scipy.spatial import ConvexHull
 from scipy.spatial import Delaunay
-from scipy.stats import zscore
 from scipy.optimize import minimize
 
 # Try to import QhullError for specific catching, fallback to ValueError/Exception

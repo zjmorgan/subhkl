@@ -13,7 +13,6 @@ if typing.TYPE_CHECKING:
 
 try:
     import jax
-    import jax.numpy as jnp
     import jax.scipy.linalg as jscipy_linalg
     from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
     from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
@@ -26,7 +25,6 @@ try:
 except Exception:
     # Fallback shim: expose a minimal `jax`-like object and map jax.numpy
     # to the installed NumPy so code using `jnp` still works.
-    import numpy as jnp
 
     class _JaxShim:
         """Minimal JAX shim for when JAX is not installed."""
@@ -39,7 +37,11 @@ except Exception:
 
     jax = _JaxShim()
     jit = jax.jit
-    vmap = lambda f, **kwargs: f  # Simple fallback, won't vectorize
+
+    def vmap(f, **kwargs):
+        """Fallback vmap: returns the function unchanged."""
+        return f
+
     lax = None
     DifferentialEvolution = None
     PSO = None
@@ -110,7 +112,7 @@ def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2
     k_max = int(np.floor(1 / d_min / bstar))
     l_max = int(np.floor(1 / d_min / cstar))
 
-    h, k, l = np.meshgrid(
+    h, k, l = np.meshgrid(  # noqa: E741
         np.arange(-h_max, h_max + 1),
         np.arange(-k_max, k_max + 1),
         np.arange(-l_max, l_max + 1),
@@ -136,7 +138,10 @@ def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2
 
 
 def get_q_lab(
-    h: npt.ArrayLike, k: npt.ArrayLike, l: npt.ArrayLike, RUB: npt.ArrayLike
+    h: npt.ArrayLike,
+    k: npt.ArrayLike,
+    l: npt.ArrayLike,  # noqa: E741
+    RUB: npt.ArrayLike,
 ) -> npt.NDArray:
     """
     Calculate Q vectors in the Lab Frame.
@@ -160,12 +165,12 @@ def calculate_angular_error(
     xyz_det: npt.NDArray,
     h: npt.NDArray,
     k: npt.NDArray,
-    l: npt.NDArray,
+    l: npt.NDArray,  # noqa: E741
     lam: npt.NDArray,
     RUB: npt.NDArray,
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
-):
+):  # noqa: E741
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
     Uses the RUB matrix (R @ U @ B) for all coordinate transformations.
@@ -222,13 +227,13 @@ def predict_reflections_on_panel(
     detector: "Detector",
     h: npt.NDArray,
     k: npt.NDArray,
-    l: npt.NDArray,
+    l: npt.NDArray,  # noqa: E741
     RUB: npt.NDArray,
     wavelength_min: float,
     wavelength_max: float,
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
-):
+):  # noqa: E741
     """
     Predicts which HKLs fall on a specific detector panel using the RUB matrix.
     Returns: (row, col, h, k, l, wavelength)
@@ -265,7 +270,7 @@ def predict_reflections_on_panel(
 
     Q_vecs = Q_vecs[:, mask]
     lamda = lamda[mask]
-    h, k, l = h[mask], k[mask], l[mask]
+    h, k, l = h[mask], k[mask], l[mask]  # noqa: E741
 
     # 4. Calculate kf direction
     k_mag = 2 * np.pi / lamda

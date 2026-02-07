@@ -9,15 +9,12 @@ import scipy.spatial
 import scipy.interpolate
 
 
-import gemmi
-
 # Import JAX with fallback from utils (centralized)
 from subhkl.utils import (
     jax,
     jnp,
     jscipy_linalg,
     HAS_JAX,
-    OPTIMIZATION_BACKEND,
     DifferentialEvolution,
     PSO,
     CMA_ES,
@@ -27,7 +24,7 @@ from subhkl.utils import (
 )
 
 from subhkl.detector import scattering_vector_from_angles
-from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
+from subhkl.spacegroup import generate_hkl_mask, get_space_group_object
 
 try:
     from tqdm import trange
@@ -141,9 +138,14 @@ def get_lattice_system(
         expected = "Monoclinic"
 
     # --- 2. Check Constraints & Warn ---
-    is_90 = lambda x: np.isclose(x, 90.0, atol=atol_ang)
-    is_120 = lambda x: np.isclose(x, 120.0, atol=atol_ang)
-    eq = lambda x, y: np.isclose(x, y, atol=atol_len)
+    def is_90(x):
+        return np.isclose(x, 90.0, atol=atol_ang)
+
+    def is_120(x):
+        return np.isclose(x, 120.0, atol=atol_ang)
+
+    def eq(x, y):
+        return np.isclose(x, y, atol=atol_len)
 
     violation_msg = []
 
@@ -270,7 +272,7 @@ def rotation_matrix_from_rodrigues_jax(w):
     theta = jnp.linalg.norm(w) + 1e-9
     k = w / theta
     K = jnp.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
-    I = jnp.eye(3)
+    I = jnp.eye(3)  # noqa: E741
     R = I + jnp.sin(theta) * K + (1 - jnp.cos(theta)) * (K @ K)
     return R
 
@@ -486,7 +488,7 @@ class VectorizedObjective:
 
         # --- HKL Mask Generation ---
         r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
-        h, k, l = jnp.meshgrid(r, r, r, indexing="ij")
+        h, k, l = jnp.meshgrid(r, r, r, indexing="ij")  # noqa: E741
         hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
         zero_mask = ~jnp.all(hkl_pool == 0, axis=0)
         hkl_pool = hkl_pool[:, zero_mask]
@@ -695,7 +697,7 @@ class VectorizedObjective:
             d_pred = 1.0 / jnp.sqrt(q_sq_pred + 1e-9)
             valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
 
-            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
+            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]  # noqa: E741
             r = self.mask_range
             idx_h = jnp.clip(h + r, 0, 2 * r).astype(jnp.int32)
             idx_k = jnp.clip(k + r, 0, 2 * r).astype(jnp.int32)
@@ -769,7 +771,7 @@ class VectorizedObjective:
 
             # 2. Symmetry Mask
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
+            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]  # noqa: E741
             r = self.mask_range
             idx_h = jnp.clip(h + r, 0, 2 * r).astype(jnp.int32)
             idx_k = jnp.clip(k + r, 0, 2 * r).astype(jnp.int32)
@@ -842,7 +844,7 @@ class VectorizedObjective:
             q_sq = jnp.sum(q_pred**2, axis=3)
             d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9)  # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
-            h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]
+            h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]  # noqa: E741
             r = self.mask_range
             idx_h = jnp.clip(h + r, 0, 2 * r).astype(jnp.int32)
             idx_k = jnp.clip(k + r, 0, 2 * r).astype(jnp.int32)
@@ -1479,13 +1481,11 @@ class FindUB:
                 kf = v / dist
                 ki = ki_vec[:, np.newaxis]
                 q_lab = kf - ki
-                k_sq_dyn = np.sum(q_lab**2, axis=0)
             else:
                 kf_lab_fixed = kf_ki_input + np.array([0.0, 0.0, 1.0])[:, None]
                 kf_lab_fixed = kf_lab_fixed / np.linalg.norm(kf_lab_fixed, axis=0)
                 ki = ki_vec[:, np.newaxis]
                 q_lab = kf_lab_fixed - ki
-                k_sq_dyn = np.sum(q_lab**2, axis=0)
 
             # Apply goniometer rotation if present
             if goniometer_axes is not None:
@@ -1532,7 +1532,7 @@ class FindUB:
                 x0 = x0[:num_dims]
 
         # Run optimization
-        print(f"\n--- Starting SciPy Differential Evolution ---")
+        print("\n--- Starting SciPy Differential Evolution ---")
         print(f"Population: {population_size}, Generations: {num_generations}")
 
         result = differential_evolution(
@@ -1546,7 +1546,7 @@ class FindUB:
             tol=0.01,
         )
 
-        print(f"\n--- Optimization Complete ---")
+        print("\n--- Optimization Complete ---")
         print(f"Best score: {-result.fun:.2f}")
 
         # Store results
@@ -1617,7 +1617,7 @@ class FindUB:
         theta = np.linalg.norm(w) + 1e-9
         k = w / theta
         K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
-        I = np.eye(3)
+        I = np.eye(3)  # noqa: E741
         R = I + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
         return R
 
@@ -1687,12 +1687,12 @@ class FindUB:
         """NumPy version of goniometer rotation matrices."""
         R = np.eye(3)
         for i in range(len(axes)):
-            axis_spec = axes[i]
-            direction = axis_spec[:3]
-            sign = axis_spec[3]
+            axis_spec = axes[i]  # noqa: F841
+            direction = axis_spec[:3]  # noqa: F841
+            sign = axis_spec[3]  # noqa: F841
 
             # Compute rotation matrix for this axis
-            theta = np.deg2rad(sign * angles[i, :])
+            theta = np.deg2rad(sign * angles[i, :])  # noqa: F841
             # For simplicity, assume single angle (not batch)
             # This needs to match the R shape expected
             # Simplified for now - may need adjustment
@@ -1731,6 +1731,7 @@ class FindUB:
         top_k: int = 32,
         batch_size: int = None,
         sigma_init: float = None,
+        softness: float = 0.01,
         B_sharpen: float = 50,
     ):
         """
@@ -1826,14 +1827,14 @@ class FindUB:
         )
 
         if refine_lattice:
-            print(f"Lattice Refinement Enabled.")
+            print("Lattice Refinement Enabled.")
             print(
                 f"Detected System: {lattice_system} ({num_lattice_params} free parameters)."
             )
 
         if loss_method == "forward" and (d_min is None or d_max is None):
             raise ValueError(
-                f"Need to supply --d_min and --d_max for loss_method=='forward'"
+                "Need to supply --d_min and --d_max for loss_method=='forward'"
             )
 
         objective = VectorizedObjective(
@@ -2049,7 +2050,7 @@ class FindUB:
         best_overall_fitness = all_fitness[best_idx]
         best_overall_member = all_solutions[best_idx]
 
-        print(f"\n--- Optimization Complete ---")
+        print("\n--- Optimization Complete ---")
         print(
             f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})"
         )
@@ -2092,7 +2093,7 @@ class FindUB:
             self.alpha, self.beta, self.gamma = p_full[3], p_full[4], p_full[5]
 
         if refine_sample:
-            print(f"--- Refined Sample Offset (mm) ---")
+            print("--- Refined Sample Offset (mm) ---")
             print(
                 f"X: {1000*self.sample_offset[0]:.4f}, Y: {1000*self.sample_offset[1]:.4f}, Z: {1000*self.sample_offset[2]:.4f}"
             )

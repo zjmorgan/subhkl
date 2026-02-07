@@ -2,20 +2,17 @@ import typing
 import h5py
 import numpy as np
 import typer
-import uuid
-import os
-import re
 import glob
 
 from subhkl.export import FinderConcatenateMerger, MTZExporter
-from subhkl.export import FinderConcatenateMerger, MTZExporter, ImageStackMerger
+from subhkl.export import ImageStackMerger
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.config.goniometer import (
     get_rotation_data_from_nexus,
     calc_goniometer_rotation_matrix,
 )
-from subhkl.utils import calculate_angular_error, HAS_JAX
+from subhkl.utils import calculate_angular_error
 
 app = typer.Typer()
 
@@ -148,9 +145,6 @@ def index(
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
-
-    B = opt.reciprocal_lattice_B()
-    refined_R = opt.R
 
     copy_keys = [
         "sample/space_group",
@@ -640,7 +634,7 @@ def metrics(
             xyz_det = f["peaks/xyz"][()]
             h = f["peaks/h"][()]
             k = f["peaks/k"][()]
-            l = f["peaks/l"][()]
+            l = f["peaks/l"][()]  # noqa: E741
             lam = f["peaks/lambda"][()]
             run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
             if run_index is None and "peaks/bank" in f:
@@ -676,12 +670,12 @@ def metrics(
             else:
                 sample_offset = np.zeros(3)
 
-        mask = (h != 0) | (k != 0) | (l != 0)
+        mask = (h != 0) | (k != 0) | (l != 0)  # noqa: E741
         if np.sum(mask) == 0:
             print("METRICS: 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000")
             return
 
-        h, k, l = h[mask], k[mask], l[mask]
+        h, k, l = h[mask], k[mask], l[mask]  # noqa: E741
         lam = lam[mask]
         xyz_det = xyz_det[mask]
         R_all = R_all[mask]
@@ -693,7 +687,7 @@ def metrics(
             # Calculate d = 1 / |B * hkl|
             # Note: |B*h| is 1/d in subhkl units (standard crystallographic definition)
             # hkl shape (N, 3)
-            hkl_vecs = np.stack([h, k, l], axis=1)
+            hkl_vecs = np.stack([h, k, l], axis=1)  # noqa: E741
             q_cryst = hkl_vecs @ B_mat.T
             q_mag = np.linalg.norm(q_cryst, axis=1)
 
@@ -707,7 +701,7 @@ def metrics(
                 print(f"METRICS: No peaks found with d >= {d_min} A.")
                 return
 
-            h, k, l = h[d_mask], k[d_mask], l[d_mask]
+            h, k, l = h[d_mask], k[d_mask], l[d_mask]  # noqa: E741
             lam = lam[d_mask]
             xyz_det = xyz_det[d_mask]
             R_all = R_all[d_mask]
@@ -762,7 +756,7 @@ def metrics(
             else:
                 print("\nWARNING: --per-run requested but no run information found.")
 
-    except Exception as e:
+    except Exception:
         # print(e)
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
 
@@ -923,7 +917,7 @@ def peak_predictor(
 
         # Save Peaks
         # Structure: banks/{img_key}/...
-        for img_key, (i, j, h, k, l, wl) in results_map.items():
+        for img_key, (i, j, h, k, l, wl) in results_map.items():  # noqa: E741
             grp = f.create_group(f"banks/{img_key}")
             grp.create_dataset("i", data=i)
             grp.create_dataset("j", data=j)
