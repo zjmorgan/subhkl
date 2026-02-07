@@ -168,3 +168,31 @@ def test_stage1_blindness_vulnerability():
     obj = VectorizedObjective(B=B, kf_ki_dir=np.array([[0,0,1]]).T, peak_xyz_lab=xyz_lab, wavelength=[1,2], angle_cdf=np.zeros(10), angle_t=np.zeros(10), refine_sample=False, sample_nominal=s_nom)
     kf_internal = obj.kf_lab_fixed
     assert np.abs(kf_internal[0,0] - 0.0) > 1e-3, 'VULNERABILITY: Stage 1 is blind to nominal sample offset!'
+
+def test_multirun_peaks_per_image_vulnerability():
+    """Verify if Indexer crashes or miscalculates when multiple peaks belong to the same run."""
+    from subhkl.optimization import VectorizedObjective
+    import numpy as np
+    
+    num_runs = 2
+    peaks_per_run = 5
+    total_peaks = num_runs * peaks_per_run
+    
+    B = np.eye(3)
+    kf_ki_dir = np.random.randn(3, total_peaks)
+    R_stack = np.stack([np.eye(3), np.eye(3)], axis=0)
+    
+    obj = VectorizedObjective(
+        B=B, kf_ki_dir=kf_ki_dir, peak_xyz_lab=None,
+        wavelength=[1.0, 2.0], angle_cdf=np.zeros(10), angle_t=np.zeros(10),
+        static_R=R_stack
+    )
+    x = np.zeros((1, 3)) 
+    
+    # THIS SHOULD CRASH if mapping is missing
+    try:
+        obj(x)
+    except Exception as e:
+        pytest.fail(f'Indexer CRASHED on multi-peak-per-run mapping: {e}')
+    
+    assert hasattr(obj, 'peak_run_indices'), 'VULNERABILITY: Indexer lacks peak-to-run mapping metadata!'
