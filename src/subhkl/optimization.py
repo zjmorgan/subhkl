@@ -324,7 +324,12 @@ class VectorizedObjective:
 
         if goniometer_axes is not None:
             self.gonio_axes = jnp.array(goniometer_axes) 
-            self.gonio_angles = jnp.array(goniometer_angles) 
+            angles = jnp.array(goniometer_angles)
+            if angles.ndim == 2:
+                # Expecting (num_axes, num_runs). If (num_runs, num_axes), transpose.
+                if angles.shape[0] != self.gonio_axes.shape[0] and angles.shape[1] == self.gonio_axes.shape[0]:
+                    angles = angles.T
+            self.gonio_angles = angles
             self.num_gonio_axes = self.gonio_axes.shape[0]
             if goniometer_refine_mask is not None: self.gonio_mask = np.array(goniometer_refine_mask, dtype=bool)
             else: self.gonio_mask = np.ones(self.num_gonio_axes, dtype=bool)

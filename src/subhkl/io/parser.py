@@ -77,14 +77,21 @@ def index(
     goniometer_names = None
     if refine_goniometer:
         if nexus_filename and instrument_name:
-             print(f"Refining goniometer angles with {goniometer_bound_deg} deg bounds.")
+             print(f"Refining goniometer angles from Nexus with {goniometer_bound_deg} deg bounds.")
              axes, angles, names = get_rotation_data_from_nexus(nexus_filename, instrument_name)
              opt.goniometer_axes = np.array(axes)
-             num_peaks = len(opt.two_theta)
-             opt.goniometer_angles = np.array(angles)[np.newaxis, :].repeat(num_peaks, axis=0)
+             
+             # If multi-run, we need to provide angles for each run (num_axes, num_runs)
+             if opt.run_indices is not None:
+                 num_runs = np.max(opt.run_indices) + 1
+                 opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_runs, axis=1)
+             else:
+                 num_peaks = len(opt.two_theta)
+                 opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_peaks, axis=1)
              goniometer_names = names
         elif opt.goniometer_axes is not None:
              print(f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds.")
+             # opt.goniometer_angles is already loaded in FindUB.__init__
              pass
         else:
             print("WARNING: refine_goniometer requested but goniometer data not found. Skipping goniometer refinement.")
