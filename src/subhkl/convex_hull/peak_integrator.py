@@ -7,11 +7,14 @@ from scipy.optimize import minimize
 
 # Try to import QhullError for specific catching, fallback to ValueError/Exception
 try:
-    from scipy.spatial.qhull import QhullError
-except ImportError:
+    from scipy.spatial import QhullError
+except Exception:
+    try:
+        from scipy.spatial.qhull import QhullError
+    except Exception:
 
-    class QhullError(Exception):
-        pass
+        class QhullError(Exception):
+            pass
 
 
 from subhkl.convex_hull.offset_mask import OffsetMask
