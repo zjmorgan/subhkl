@@ -5,13 +5,13 @@ from scipy.spatial.transform import Rotation
 import jax
 import jax.numpy as jnp
 
-def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, gonio_axes, space_group="P 1", hkl_range_k=None):
+def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, gonio_axes, sample_offset_true=None, space_group='P 1', hkl_range_k=None):
     fu_helper = FindUB()
     fu_helper.a, fu_helper.b, fu_helper.c = a, b, c
     fu_helper.alpha, fu_helper.beta, fu_helper.gamma = alpha, beta, gamma
     B = fu_helper.reciprocal_lattice_B()
     
-    all_tt, all_az, all_run, all_angles, all_R = [], [], [], [], []
+    all_tt, all_az, all_run, all_angles, all_R, all_xyz = [], [], [], [], [], []
     
     if hkl_range_k is None: hkl_range_k = 10
 
@@ -32,6 +32,8 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
         
         Q_sample = (U_true @ B @ hkls.T).T
         Q_lab = (R_run @ Q_sample.T).T
+        if sample_offset_true is not None: s_lab = R_run @ sample_offset_true
+        else: s_lab = np.zeros(3)
         ki = np.array([0, 0, 1])
         Q_sq = np.sum(Q_lab**2, axis=1)
         ki_dot_Q = Q_lab @ ki
@@ -46,8 +48,12 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
             idx = np.random.choice(len(hkls), 20, replace=False)
             hkls, lambdas, Q_lab = hkls[idx], lambdas[idx], Q_lab[idx]
             
-        kf_phys = ki[None, :] + Q_lab * lambdas[:, None]
-        kf_norm = kf_phys / np.linalg.norm(kf_phys, axis=1, keepdims=True)
+        kf_target = ki[None, :] + Q_lab * lambdas[:, None]
+        kf_target = kf_target / np.linalg.norm(kf_target, axis=1, keepdims=True)
+        dist_det = 0.4
+        xyz_det = s_lab[None, :] + dist_det * kf_target
+        all_xyz.append(xyz_det)
+        kf_norm = kf_target
         
         all_tt.append(np.rad2deg(np.arccos(np.clip(kf_norm[:, 2], -1, 1))))
         all_az.append(np.rad2deg(np.arctan2(kf_norm[:, 1], kf_norm[:, 0])))
@@ -69,6 +75,7 @@ def generate_synthetic_data(a, b, c, alpha, beta, gamma, U_true, rotations, goni
         "goniometer/angles": np.concatenate(all_angles),
         "goniometer/R": np.concatenate(all_R),
         "bank": np.concatenate(all_run),
+        'peaks/xyz': np.concatenate(all_xyz),
     }
 
 def test_multi_run_indexing_refinement():
@@ -90,7 +97,7 @@ def test_multi_run_indexing_refinement():
         num_generations=100,
         n_runs=1,
         init_params=w_true,
-        sigma_init=0.001,
+        sigma_init=None,
         tolerance_deg=0.1,
         loss_method="gaussian"
     )
@@ -130,3 +137,33 @@ def test_clipping_logic_direct():
     assert bool(is_allowed[1]) == (not expected_absent[1])
     assert bool(is_allowed[2]) == True
     assert bool(is_allowed[3]) == True
+
+def test_sample_offset_refinement_multirun():
+    """Verify that Sample-frame offset can be recovered in multi-run."""
+    np.random.seed(42)
+    a, b, c = 10.0, 10.0, 10.0
+    U_true = np.eye(3)
+    gonio_axes = np.array([[0, 0, 1, 1]])
+    rotations = [[0.0], [90.0]]
+    s_true = np.array([0.002, 0.001, -0.001])
+    data = generate_synthetic_data(a, b, c, 90, 90, 90, U_true, rotations, gonio_axes, sample_offset_true=s_true)
+    fu = FindUB(data=data)
+    num_peaks, hkl_res, lam_res, U_res = fu.minimize(strategy_name='DE', population_size=100, num_generations=500, n_runs=1, init_params=np.zeros(3), sigma_init=None, refine_sample=True, sample_bound_meters=0.005, tolerance_deg=0.1, loss_method='gaussian')
+    recovered_s = fu.sample_offset
+    error = np.linalg.norm(recovered_s - s_true)
+    assert error < 1e-4
+
+def test_stage1_multirun_rotation_bypass():
+    """Confirm that Stage 1 (no refinement) correctly uses static rotations."""
+    a, b, c = 10.0, 10.0, 10.0
+    B = np.eye(3)
+    tt = np.array([20.0, 20.0])
+    az = np.array([0.0, 0.0])
+    from subhkl.optimization import scattering_vector_from_angles
+    kf_ki_dir = scattering_vector_from_angles(tt, az)
+    R1 = np.eye(3)
+    R2 = Rotation.from_euler('y', 90, degrees=True).as_matrix()
+    static_R = np.stack([R1, R2], axis=0)
+    obj = VectorizedObjective(B=B, kf_ki_dir=kf_ki_dir, peak_xyz_lab=None, wavelength=[1.0, 2.0], angle_cdf=np.zeros(100), angle_t=np.zeros(100), refine_goniometer=False, static_R=static_R)
+    # Currently this fails (asserts False)
+    assert obj.input_is_rotated == False
