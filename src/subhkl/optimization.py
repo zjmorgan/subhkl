@@ -220,12 +220,12 @@ def rotation_matrix_from_rodrigues_jax(w):
 
 class VectorizedObjective:
     def __init__(self, B, kf_ki_dir, peak_xyz_lab, wavelength, angle_cdf, angle_t, weights=None, tolerance_deg=0.1,
-                 cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system='Triclinic',
+                 cell_params=None, refine_lattice=False, lattice_bound_frac=0.05, lattice_system="Triclinic",
                  goniometer_axes=None, goniometer_angles=None, refine_goniometer=False, goniometer_bound_deg=5.0,
                  goniometer_refine_mask=None, goniometer_nominal_offsets=None,
                  refine_sample=False, sample_bound_meters=0.002, sample_nominal=None,
                  refine_beam=False, beam_bound_deg=1.0, beam_nominal=None,
-                 peak_radii=None, loss_method='gaussian', 
+                 peak_radii=None, loss_method="gaussian", 
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
                  chunk_size=4096, num_iters=20, top_k=32,
                  space_group="P 1",
@@ -244,21 +244,6 @@ class VectorizedObjective:
         else:
             self.static_R = jnp.eye(3)
 
-        # Reconstruct kf from Q (kf = Q + ki)
-        # Note: self.kf_ki_dir_init was passed as kf_ki_input.
-        if kf_lab_fixed_vectors is not None:
-            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
-            self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + jnp.array([0., 0., 1.])[:, None]
-            self.input_is_rotated = False
-        else:
-            # Fallback: input was already rotated to Sample Frame (or R=I).
-            # This matches the earlier branch behavior where kf_lab_fixed = kf_ki_input + [0,0,1].
-            # If pre-rotated, this is actually kf_sample (assuming ki_sample = [0,0,1]).
-            self.kf_lab_fixed = self.kf_ki_dir_init + jnp.array([0., 0., 1.])[:, None]
-            self.input_is_rotated = True
-
-        self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
-
         if peak_xyz_lab is not None:
             self.peak_xyz = jnp.array(peak_xyz_lab.T) 
         else:
@@ -274,7 +259,19 @@ class VectorizedObjective:
         if beam_nominal is None: self.beam_nominal = jnp.array([0.0, 0.0, 1.0])
         else: self.beam_nominal = jnp.array(beam_nominal)
 
-        self.tolerance_deg = tolerance_deg # Store original for reference if needed
+        # Reconstruct kf from Q (kf = Q + ki)
+        if kf_lab_fixed_vectors is not None:
+            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
+            self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + self.beam_nominal[:, None]
+            self.input_is_rotated = False
+        else:
+            # Fallback: input was already rotated to Sample Frame (or R=I).
+            self.kf_lab_fixed = self.kf_ki_dir_init + self.beam_nominal[:, None]
+            self.input_is_rotated = True
+
+        self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
+
+        self.tolerance_deg = tolerance_deg 
         self.loss_method = loss_method
         self.angle_cdf = jnp.array(angle_cdf)
         self.angle_t = jnp.array(angle_t)
@@ -289,12 +286,12 @@ class VectorizedObjective:
         if self.refine_lattice:
             if cell_params is None: raise ValueError("cell_params required")
             self.cell_init = jnp.array(cell_params) 
-            if self.lattice_system == 'Cubic': self.free_params_init = self.cell_init[0:1]
-            elif self.lattice_system == 'Hexagonal': self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
-            elif self.lattice_system == 'Tetragonal': self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
-            elif self.lattice_system == 'Rhombohedral': self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[3]])
-            elif self.lattice_system == 'Orthorhombic': self.free_params_init = self.cell_init[0:3]
-            elif self.lattice_system == 'Monoclinic': self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[1], self.cell_init[2], self.cell_init[4]])
+            if self.lattice_system == "Cubic": self.free_params_init = self.cell_init[0:1]
+            elif self.lattice_system == "Hexagonal": self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
+            elif self.lattice_system == "Tetragonal": self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[2]])
+            elif self.lattice_system == "Rhombohedral": self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[3]])
+            elif self.lattice_system == "Orthorhombic": self.free_params_init = self.cell_init[0:3]
+            elif self.lattice_system == "Monoclinic": self.free_params_init = jnp.array([self.cell_init[0], self.cell_init[1], self.cell_init[2], self.cell_init[4]])
             else: self.free_params_init = self.cell_init
 
         if goniometer_axes is not None:
@@ -335,7 +332,7 @@ class VectorizedObjective:
         self.top_k = top_k
 
         # --- Search Window Heuristic Warning ---
-        if self.loss_method == 'forward':
+        if self.loss_method == "forward":
             # Calculate Volume (Real Space) from B matrix (Reciprocal Basis, 2pi included)
             # V_real = (2pi)^3 / det(B)
             det_B = float(np.abs(np.linalg.det(self.B)))
@@ -357,7 +354,7 @@ class VectorizedObjective:
 
         # --- HKL Mask Generation ---
         r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
-        h, k, l = jnp.meshgrid(r, r, r, indexing='ij')
+        h, k, l = jnp.meshgrid(r, r, r, indexing="ij")
         hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
         zero_mask = ~jnp.all(hkl_pool == 0, axis=0)
         hkl_pool = hkl_pool[:, zero_mask]
@@ -1090,10 +1087,9 @@ class FindUB:
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
         num_obs = kf_ki_dir_lab.shape[1]
         
-        if goniometer_axes is not None:
-            kf_ki_input = kf_ki_dir_lab
-        else:
-            kf_ki_input = np.einsum("mji,jm->im", self.R, kf_ki_dir_lab)
+        # Always use Lab frame vectors for Objective initialization.
+        # The objective handles internal rotation via R or static_R.
+        kf_ki_input = kf_ki_dir_lab
 
         goniometer_refine_mask = None
         if refine_goniometer and refine_goniometer_axes is not None:
