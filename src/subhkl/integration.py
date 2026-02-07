@@ -700,8 +700,13 @@ class Peaks:
             geo_info = (current_R, current_angles, self.wavelength_min, self.wavelength_max)
             viz_info = (visualize, file_prefix)
 
+            # Map image index to run index if file_offsets available
+            run_id = img_key
+            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
+                run_id = np.searchsorted(self.file_offsets, img_key, side='right') - 1
+
             tasks.append((
-                img_key, img_label, physical_bank, self.ims[img_key], 
+                run_id, img_label, physical_bank, self.ims[img_key], 
                 det_config, finder_info, integration_params, 
                 mask_info, geo_info, viz_info
             ))
@@ -764,9 +769,14 @@ class Peaks:
         for i, bank in enumerate(sorted_keys):
             det_config = beamlines[self.instrument][str(self.bank_mapping.get(bank, bank))]
             
+            # Map bank to run ID
+            run_id = bank
+            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
+                run_id = np.searchsorted(self.file_offsets, bank, side='right') - 1
+
             if use_stack:
-                # Use bank ID as index if it's an integer 0..N, otherwise fallback to enumeration index
-                idx = bank if isinstance(bank, int) and bank < RUB.shape[0] else i
+                # Use run ID as index if it's within stack size, else fallback to enumeration
+                idx = run_id if run_id < RUB.shape[0] else i
                 if idx >= RUB.shape[0]: idx = -1 # Safety fallback to last frame
                 rub_val = RUB[idx]
             else:
@@ -775,7 +785,7 @@ class Peaks:
             current_R_val = None
             if R_all is not None:
                 if R_all.ndim == 3:
-                    idx = bank if isinstance(bank, int) and bank < R_all.shape[0] else i
+                    idx = run_id if run_id < R_all.shape[0] else i
                     if idx >= R_all.shape[0]: idx = -1
                     current_R_val = R_all[idx]
                 else:

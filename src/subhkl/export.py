@@ -103,6 +103,21 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
         ]
         super().__init__(h5_files, copy_keys, merge_keys)
 
+    def merge(self, output_filename):
+        # First call base merge to concatenate everything
+        super().merge(output_filename)
+        
+        # Now fix run_index to be the file index
+        with h5py.File(output_filename, "r+") as f_out:
+            if "peaks/run_index" in f_out:
+                offset = 0
+                for i_file, h5_file in enumerate(self.h5_files):
+                    with h5py.File(h5_file, "r") as f_in:
+                        num_items = len(f_in[self.merge_keys[0]])
+                        if num_items > 0:
+                            f_out["peaks/run_index"][offset:offset+num_items] = i_file
+                        offset += num_items
+
 class MTZExporter:
     def __init__(self, peaks_file, space_group="P 1"):
         with h5py.File(peaks_file) as f:

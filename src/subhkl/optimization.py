@@ -229,11 +229,13 @@ class VectorizedObjective:
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
                  chunk_size=4096, num_iters=20, top_k=32,
                  space_group="P 1",
-                 static_R=None, kf_lab_fixed_vectors=None):
+                 static_R=None, kf_lab_fixed_vectors=None,
+                 peak_run_indices=None):
         
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
+        num_peaks = self.kf_ki_dir_init.shape[1]
 
         # Convert tolerance from degrees to radians
         self.tolerance_rad = jnp.deg2rad(tolerance_deg)
@@ -243,6 +245,17 @@ class VectorizedObjective:
             self.static_R = jnp.array(static_R)
         else:
             self.static_R = jnp.eye(3)
+
+        # Handle Peak-to-Run mapping metadata
+        if peak_run_indices is not None:
+            self.peak_run_indices = jnp.array(peak_run_indices, dtype=jnp.int32)
+        else:
+            # Default: If R is a stack of N rotations, and we have N peaks, assume 1-to-1.
+            # Otherwise, map everything to run 0.
+            if self.static_R.ndim == 3 and self.static_R.shape[0] == num_peaks:
+                self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
+            else:
+                self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
 
         if peak_xyz_lab is not None:
             # peak_xyz_lab is (N, 3) or (3, N). We want (3, N).
@@ -848,20 +861,31 @@ class VectorizedObjective:
     def __call__(self, x):
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
         
+        # Determine current rotations (Lab -> Sample)
+        R_curr = R
+        if R_curr is None and not self.input_is_rotated:
+            if self.static_R.ndim == 3:
+                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+            else:
+                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+
+        # Expand rotations to per-peak if mapping is provided
+        if R_curr is not None and R_curr.ndim == 4:
+            # R_curr is (S, N_runs, 3, 3). Map to (S, N_peaks, 3, 3)
+            R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+        else:
+            R_per_peak = R_curr
+
         # Reconstruct kf from Q (kf = Q + ki)
         if self.peak_xyz is not None:
             # CORRECTED: Always use physical detector positions and nominal sample offset
             # to calculate the scattered beam directions.
-            R_curr = R
-            if R_curr is None and not self.input_is_rotated:
-                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
-
-            if R_curr is not None:
-                if R_curr.ndim == 4:
-                    s_lab = jnp.einsum('snij,sj->sni', R_curr, sample_total)
+            if R_per_peak is not None:
+                if R_per_peak.ndim == 4:
+                    s_lab = jnp.einsum('snij,sj->sni', R_per_peak, sample_total)
                     s = s_lab.transpose(0, 2, 1)
                 else:
-                    s_lab = jnp.einsum('sij,sj->si', R_curr, sample_total)
+                    s_lab = jnp.einsum('sij,sj->si', R_per_peak, sample_total)
                     s = s_lab[:, :, None]
             else:
                 s = sample_total[:, :, None]
@@ -880,20 +904,10 @@ class VectorizedObjective:
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         # Rotate to SAMPLE FRAME
-        if R is not None:
-            # R is (S, 3, 3) or (S, N, 3, 3). q_lab is (S, 3, N).
+        if R_per_peak is not None:
             # We want q_sample = R^T * q_lab.
-            if R.ndim == 4: kf_ki_vec = jnp.einsum("snij,sin->sjn", R, q_lab)
-            else: kf_ki_vec = jnp.einsum("sij,sin->sjn", R, q_lab)
-        elif not self.input_is_rotated:
-            if self.static_R.ndim == 3: # (N, 3, 3)
-                R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0) # (S, N, 3, 3)
-                # We want q_sample = R^T * q_lab
-                kf_ki_vec = jnp.einsum("snij,sin->sjn", R_static, q_lab)
-            else: # (3, 3)
-                R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0) # (S, 3, 3)
-                # We want q_sample = R^T * q_lab
-                kf_ki_vec = jnp.einsum("sij,sin->sjn", R_static, q_lab)
+            if R_per_peak.ndim == 4: kf_ki_vec = jnp.einsum("snij,sin->sjn", R_per_peak, q_lab)
+            else: kf_ki_vec = jnp.einsum("sij,sin->sjn", R_per_peak, q_lab)
         else:
             kf_ki_vec = q_lab
 
@@ -951,6 +965,7 @@ class FindUB:
         self.intensity = data["peaks/intensity"]
         self.sigma_intensity = data["peaks/sigma"]
         self.radii = data["peaks/radius"]
+        self.run_indices = data.get("peaks/run_index", None)
         
         # Handle bytes vs string for Space Group
         sg = data["sample/space_group"]
@@ -988,6 +1003,7 @@ class FindUB:
             data["peaks/intensity"] = f["peaks/intensity"][()]
             data["peaks/sigma"] = f["peaks/sigma"][()]
             data["peaks/radius"] = f["peaks/radius"][()]
+            if "peaks/run_index" in f: data["peaks/run_index"] = f["peaks/run_index"][()]
             data["sample/space_group"] = f["sample/space_group"][()]
             
             if "peaks/xyz" in f: data["peaks/xyz"] = f["peaks/xyz"][()]
@@ -1203,6 +1219,7 @@ class FindUB:
             top_k=top_k,
             static_R=self.R if self.R is not None else np.eye(3),
             kf_lab_fixed_vectors=kf_ki_dir_lab, # Pass raw Lab vectors
+            peak_run_indices=self.run_indices,
         )
         print(f"Objective initialized with {loss_method} loss. Tolerance: {tolerance_deg} deg")
 
