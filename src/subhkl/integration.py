@@ -883,15 +883,19 @@ class Peaks:
             physical_bank = self.bank_mapping.get(bank, bank)
             det_config = beamlines[self.instrument][str(physical_bank)]
             
+            # Map bank to run ID
+            run_id = bank
+            if hasattr(self, 'file_offsets') and self.file_offsets is not None:
+                run_id = np.searchsorted(self.file_offsets, bank, side='right') - 1
+
             # UPDATED: Generate nice labels for visualization
             img_label = self.get_image_label(bank)
             viz_label = f"{img_label}_bank{physical_bank}"
             
             # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
             if RUB.ndim == 3 and RUB.shape[0] > 1:
-                # Use bank ID as index if it's an integer 0..N, otherwise fallback to enumeration index
-                # This matches the logic in predict_peaks
-                idx = bank if isinstance(bank, int) and bank < RUB.shape[0] else len(tasks)
+                # Use run ID as index
+                idx = run_id if run_id < RUB.shape[0] else len(tasks)
                 if idx >= RUB.shape[0]: idx = -1 
                 current_rub = RUB[idx]
             else:
@@ -900,13 +904,13 @@ class Peaks:
             # Resolve R and angles for this image
             current_R_val = None
             if R_stack is not None:
-                idx = bank if isinstance(bank, int) and bank < R_stack.shape[0] else len(tasks)
+                idx = run_id if run_id < R_stack.shape[0] else len(tasks)
                 if idx >= R_stack.shape[0]: idx = -1
                 current_R_val = R_stack[idx]
             
             current_angles_val = None
             if angles_stack is not None:
-                idx = bank if isinstance(bank, int) and bank < angles_stack.shape[0] else len(tasks)
+                idx = run_id if run_id < angles_stack.shape[0] else len(tasks)
                 if idx >= angles_stack.shape[0]: idx = -1
                 current_angles_val = angles_stack[idx]
 
