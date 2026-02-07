@@ -264,6 +264,11 @@ class VectorizedObjective:
             # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
             self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + self.beam_nominal[:, None]
             self.input_is_rotated = False
+        elif static_R is not None and static_R.ndim == 3:
+            # HEURISTIC: If a stack of rotations is provided (multi-run), 
+            # we assume the input peaks are in the Lab frame.
+            self.kf_lab_fixed = self.kf_ki_dir_init + self.beam_nominal[:, None]
+            self.input_is_rotated = False
         else:
             # Fallback: input was already rotated to Sample Frame (or R=I).
             self.kf_lab_fixed = self.kf_ki_dir_init + self.beam_nominal[:, None]
