@@ -21,7 +21,7 @@ def scattering_vector_from_angles(two_theta: npt.ArrayLike, az_phi: npt.ArrayLik
     kz = np.cos(tt)
 
     # ki direction is (0, 0, 1)
-    return np.array([kx, ky, kz - 1])
+    return np.stack([kx, ky, kz - 1], axis=0)
 
 def angles_from_kf(kf_vectors):
     """
@@ -164,22 +164,21 @@ class Detector:
         """
         Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
         """
-        xyz = self.pixel_to_lab(row, col)
+        xyz = self.pixel_to_lab(row, col) # Returns (N, 3) or (3,)
         
         if sample_offset is not None:
-            # Shift to sample-relative frame
-            # xyz is (3, N), sample_offset is (3,) or (N, 3)
-            if sample_offset.ndim == 2:
-                v = xyz.T - sample_offset
-                X, Y, Z = v[:, 0], v[:, 1], v[:, 2]
-            else:
-                X, Y, Z = xyz[0] - sample_offset[0], xyz[1] - sample_offset[1], xyz[2] - sample_offset[2]
+            # xyz is (N, 3) or (3,), sample_offset is (3,) or (N, 3)
+            v = xyz - sample_offset
         else:
-            X, Y, Z = xyz[0], xyz[1], xyz[2]
+            v = xyz
 
-        R = np.sqrt(X**2 + Y**2 + Z**2)
-        # Avoid division by zero
-        two_theta = np.rad2deg(np.arccos(np.clip(Z / R, -1.0, 1.0)))
+        if v.ndim == 2:
+            X, Y, Z = v[:, 0], v[:, 1], v[:, 2]
+        else:
+            X, Y, Z = v[0], v[1], v[2]
+
+        R_mag = np.sqrt(X**2 + Y**2 + Z**2)
+        two_theta = np.rad2deg(np.arccos(np.clip(Z / R_mag, -1.0, 1.0)))
         az_phi = np.rad2deg(np.arctan2(Y, X))
 
         return two_theta, az_phi

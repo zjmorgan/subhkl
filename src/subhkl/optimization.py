@@ -245,7 +245,10 @@ class VectorizedObjective:
             self.static_R = jnp.eye(3)
 
         if peak_xyz_lab is not None:
-            self.peak_xyz = jnp.array(peak_xyz_lab.T) 
+            # peak_xyz_lab is (N, 3) or (3, N). We want (3, N).
+            p_xyz = jnp.array(peak_xyz_lab)
+            if p_xyz.shape[0] != 3 and p_xyz.shape[1] == 3: p_xyz = p_xyz.T
+            self.peak_xyz = p_xyz 
         else:
             self.peak_xyz = None
 
@@ -260,21 +263,28 @@ class VectorizedObjective:
         else: self.beam_nominal = jnp.array(beam_nominal)
 
         # Reconstruct kf from Q (kf = Q + ki)
-        if kf_lab_fixed_vectors is not None:
-            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
-            self.kf_lab_fixed = jnp.array(kf_lab_fixed_vectors) + self.beam_nominal[:, None]
+        if self.peak_xyz is not None:
+            # Always calculate kf from physical detector positions and sample offset
+            # peak_xyz is (3, N), sample_nominal is (3,)
+            v = self.peak_xyz - self.sample_nominal[:, None]
+            dist = jnp.linalg.norm(v, axis=0)
+            self.kf_lab_fixed = v / jnp.where(dist == 0, 1.0, dist[None, :])
             self.input_is_rotated = False
-        elif static_R is not None and static_R.ndim == 3:
-            # HEURISTIC: If a stack of rotations is provided (multi-run), 
-            # we assume the input peaks are in the Lab frame.
-            self.kf_lab_fixed = self.kf_ki_dir_init + self.beam_nominal[:, None]
+        elif kf_lab_fixed_vectors is not None:
+            # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
+            q_vecs = jnp.array(kf_lab_fixed_vectors)
+            if q_vecs.shape[0] != 3 and q_vecs.shape[1] == 3: q_vecs = q_vecs.T
+            self.kf_lab_fixed = q_vecs + self.beam_nominal[:, None]
+            self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
             self.input_is_rotated = False
         else:
-            # Fallback: input was already rotated to Sample Frame (or R=I).
-            self.kf_lab_fixed = self.kf_ki_dir_init + self.beam_nominal[:, None]
-            self.input_is_rotated = True
-
-        self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
+            # Fallback
+            q_vecs = self.kf_ki_dir_init
+            if q_vecs.shape[0] != 3 and q_vecs.shape[1] == 3: q_vecs = q_vecs.T
+            self.kf_lab_fixed = q_vecs + self.beam_nominal[:, None]
+            self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
+            # Heuristic: if we have a stack of rotations, it's Lab frame
+            self.input_is_rotated = not (static_R is not None and static_R.ndim == 3)
 
         self.tolerance_deg = tolerance_deg 
         self.loss_method = loss_method
@@ -838,17 +848,24 @@ class VectorizedObjective:
     def __call__(self, x):
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
         
-        if self.refine_sample:
-            # CORRECTED: Sample offset should be in the Sample Frame and rotated to Lab Frame
-            if R is not None:
-                if R.ndim == 4:
-                    s_lab = jnp.einsum('snij,sj->sni', R, sample_total)
+        # Reconstruct kf from Q (kf = Q + ki)
+        if self.peak_xyz is not None:
+            # CORRECTED: Always use physical detector positions and nominal sample offset
+            # to calculate the scattered beam directions.
+            R_curr = R
+            if R_curr is None and not self.input_is_rotated:
+                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+
+            if R_curr is not None:
+                if R_curr.ndim == 4:
+                    s_lab = jnp.einsum('snij,sj->sni', R_curr, sample_total)
                     s = s_lab.transpose(0, 2, 1)
                 else:
-                    s_lab = jnp.einsum('sij,sj->si', R, sample_total)
+                    s_lab = jnp.einsum('sij,sj->si', R_curr, sample_total)
                     s = s_lab[:, :, None]
             else:
                 s = sample_total[:, :, None]
+            
             p = self.peak_xyz[None, :, :]
             v = p - s
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
@@ -864,14 +881,19 @@ class VectorizedObjective:
 
         # Rotate to SAMPLE FRAME
         if R is not None:
-            if R.ndim == 4: kf_ki_vec = jnp.einsum("smji,sjm->sim", R, q_lab)
-            else: kf_ki_vec = jnp.einsum("sji,sjm->sim", R, q_lab)
+            # R is (S, 3, 3) or (S, N, 3, 3). q_lab is (S, 3, N).
+            # We want q_sample = R^T * q_lab.
+            if R.ndim == 4: kf_ki_vec = jnp.einsum("snij,sin->sjn", R, q_lab)
+            else: kf_ki_vec = jnp.einsum("sij,sin->sjn", R, q_lab)
         elif not self.input_is_rotated:
-            R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0)
-            if R_static.ndim == 4:
-                kf_ki_vec = jnp.einsum("smji,sjm->sim", R_static, q_lab)
-            else:
-                kf_ki_vec = jnp.einsum("sji,sjm->sim", R_static, q_lab)
+            if self.static_R.ndim == 3: # (N, 3, 3)
+                R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0) # (S, N, 3, 3)
+                # We want q_sample = R^T * q_lab
+                kf_ki_vec = jnp.einsum("snij,sin->sjn", R_static, q_lab)
+            else: # (3, 3)
+                R_static = self.static_R[None, ...].repeat(x.shape[0], axis=0) # (S, 3, 3)
+                # We want q_sample = R^T * q_lab
+                kf_ki_vec = jnp.einsum("sij,sin->sjn", R_static, q_lab)
         else:
             kf_ki_vec = q_lab
 

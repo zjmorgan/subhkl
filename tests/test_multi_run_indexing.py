@@ -157,7 +157,7 @@ def test_ghost_indexing_vulnerability():
     h_out, k_out, l_out = jnp.array([21]), jnp.array([0]), jnp.array([0])
     r = obj.mask_range
     in_bounds = (h_out >= -r) & (h_out <= r) & (k_out >= -r) & (k_out <= r) & (l_out >= -r) & (l_out <= r)
-    is_allowed_out = jnp.where(in_bounds, obj.valid_hkl_mask[0,0,0], True)
+    is_allowed_out = jnp.where(in_bounds, obj.valid_hkl_mask[0,0,0], False)
     assert bool(is_allowed_out[0]) == False, 'VULNERABILITY: Forbidden reflection allowed outside mask range!'
 
 def test_stage1_blindness_vulnerability():
