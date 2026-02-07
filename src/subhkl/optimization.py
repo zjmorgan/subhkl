@@ -443,15 +443,10 @@ class VectorizedObjective:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
 
         if self.refine_goniometer:
-            n_active = self.num_active_gonio
-            if n_active > 0:
-                active_params = x[:, idx:idx+n_active]
-                idx += n_active
-                batch_size = x.shape[0]
-                gonio_norm = jnp.full((batch_size, self.num_gonio_axes), 0.5)
-                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(active_params)
-            else:
-                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+            gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+            if self.num_active_gonio > 0:
+                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(x[:, idx:idx+self.num_active_gonio])
+                idx += self.num_active_gonio
             
             offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
             offsets_total = self.gonio_nominal_offsets + offsets_delta
@@ -869,10 +864,7 @@ class VectorizedObjective:
         # Determine current rotations (Lab -> Sample)
         R_curr = R
         if R_curr is None and not self.input_is_rotated:
-            if self.static_R.ndim == 3:
-                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
-            else:
-                R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+            R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
 
         # Expand rotations to per-peak if mapping is provided
         if R_curr is not None and R_curr.ndim == 4:
