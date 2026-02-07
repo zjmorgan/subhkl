@@ -160,12 +160,22 @@ class Detector:
 
         return row_f, col_f
 
-    def pixel_to_angles(self, row: npt.ArrayLike, col: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
+    def pixel_to_angles(self, row: npt.ArrayLike, col: npt.ArrayLike, sample_offset: npt.ArrayLike = None) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
         """
         xyz = self.pixel_to_lab(row, col)
-        X, Y, Z = xyz[0], xyz[1], xyz[2]
+        
+        if sample_offset is not None:
+            # Shift to sample-relative frame
+            # xyz is (3, N), sample_offset is (3,) or (N, 3)
+            if sample_offset.ndim == 2:
+                v = xyz.T - sample_offset
+                X, Y, Z = v[:, 0], v[:, 1], v[:, 2]
+            else:
+                X, Y, Z = xyz[0] - sample_offset[0], xyz[1] - sample_offset[1], xyz[2] - sample_offset[2]
+        else:
+            X, Y, Z = xyz[0], xyz[1], xyz[2]
 
         R = np.sqrt(X**2 + Y**2 + Z**2)
         # Avoid division by zero
@@ -198,12 +208,18 @@ class Detector:
                 
         else:
             v = self.vhat
-            B_vec = np.cross(s, v)
-            D_vec = np.cross(dir_vec.T, v).T
-            
-            QA = np.sum(D_vec**2, axis=0)
-            QB = 2 * np.dot(B_vec, D_vec)
-            QC = np.dot(B_vec, B_vec) - self.radius**2
+            if s.ndim == 2:
+                B_vec = np.cross(s, v) # (N, 3)
+                D_vec = np.cross(dir_vec.T, v) # (N, 3)
+                QA = np.sum(D_vec**2, axis=1) # (N,)
+                QB = 2 * np.sum(B_vec * D_vec, axis=1) # (N,)
+                QC = np.sum(B_vec**2, axis=1) - self.radius**2 # (N,)
+            else:
+                B_vec = np.cross(s, v)
+                D_vec = np.cross(dir_vec.T, v).T
+                QA = np.sum(D_vec**2, axis=0)
+                QB = 2 * np.dot(B_vec, D_vec)
+                QC = np.dot(B_vec, B_vec) - self.radius**2
             
             delta = QB**2 - 4*QA*QC
             

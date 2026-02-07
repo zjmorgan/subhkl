@@ -230,7 +230,7 @@ def _process_single_image(
                 continue
             verts = hull.points[hull.vertices]
             v_i, v_j = verts[:, 0], verts[:, 1]
-            v_tt, v_az = det.pixel_to_angles(v_i, v_j)
+            v_tt, v_az = det.pixel_to_angles(v_i, v_j, sample_offset=None)
             v_tt_r, v_az_r = np.deg2rad(v_tt), np.deg2rad(v_az)
             v_vecs = np.stack([np.sin(v_tt_r) * np.cos(v_az_r), np.sin(v_tt_r) * np.sin(v_az_r), np.cos(v_tt_r)], axis=1)
             dots = np.clip(v_vecs @ v_centers[k_idx], -1.0, 1.0)
@@ -293,7 +293,9 @@ def _integrate_single_bank(
     centers = np.stack([bank_i, bank_j], axis=-1)
     
     det = Detector(det_config)
-    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j)
+    # CORRECTED: Account for Sample-frame offset rotation
+    s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
+    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
     
     # Correctly handle lab coordinate shape (N, 3)
     lab_coords_raw = det.pixel_to_lab(bank_i, bank_j) # Returns (3, N)
@@ -352,7 +354,7 @@ def _integrate_single_bank(
                     d_err, ang_err = calculate_angular_error(
                         f_xyz_matched, 
                         bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs], 
-                        RUB, sample_offset, ki_vec
+                        RUB, sample_offset, ki_vec, current_R_val
                     )
                     metrics_str = f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, $\\Delta d$={np.median(d_err):.3f}$\\AA$"
 
