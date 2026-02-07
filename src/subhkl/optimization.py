@@ -1380,7 +1380,7 @@ class FindUB:
                     s = s_lab[:, None]
             else:
                 s = self.sample_offset[:, None]
-            p = self.peak_xyz.T + self.base_sample_offset[:, None]
+            p = self.peak_xyz.T
             v = p - s
             dist = np.linalg.norm(v, axis=0)
             kf = v / dist
