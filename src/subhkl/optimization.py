@@ -2059,7 +2059,7 @@ class FindUB:
                     current_gen_best = b_min
             if trange is not None:
                 pbar.set_description(
-                    f"Gen {gen+1} | Best: {-current_gen_best:.1f}/{num_obs}"
+                    f"Gen {gen + 1} | Best: {-current_gen_best:.1f}/{num_obs}"
                 )
 
         all_fitness_list = []
@@ -2077,7 +2077,7 @@ class FindUB:
 
         print("\n--- Optimization Complete ---")
         print(
-            f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})"
+            f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx + 1})"
         )
 
         self.x = np.array(best_overall_member)
@@ -2120,7 +2120,7 @@ class FindUB:
         if refine_sample:
             print("--- Refined Sample Offset (mm) ---")
             print(
-                f"X: {1000*self.sample_offset[0]:.4f}, Y: {1000*self.sample_offset[1]:.4f}, Z: {1000*self.sample_offset[2]:.4f}"
+                f"X: {1000 * self.sample_offset[0]:.4f}, Y: {1000 * self.sample_offset[1]:.4f}, Z: {1000 * self.sample_offset[2]:.4f}"
             )
 
         if refine_beam:

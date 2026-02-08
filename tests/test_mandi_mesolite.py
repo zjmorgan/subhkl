@@ -236,9 +236,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Verify output
-        assert os.path.exists(
-            predictor_output
-        ), "Peak predictor output file was not created"
+        assert os.path.exists(predictor_output), (
+            "Peak predictor output file was not created"
+        )
 
         with h5py.File(predictor_output, "r") as f:
             # Check predicted peaks
@@ -313,9 +313,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Verify output
-        assert os.path.exists(
-            integrator_output
-        ), "Integrator output file was not created"
+        assert os.path.exists(integrator_output), (
+            "Integrator output file was not created"
+        )
 
         with h5py.File(integrator_output, "r") as f:
             # Check for integrated intensities in peaks group
