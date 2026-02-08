@@ -873,13 +873,20 @@ class VectorizedObjective:
             R_curr = self.static_R # (N_runs, 3, 3) or (3, 3)
 
         # Expand rotations to per-peak if mapping is provided
+        num_peaks = self.kf_ki_dir_init.shape[1]
         if R_curr is not None:
             if R_curr.ndim == 4:
                 # (S, N_runs, 3, 3) -> (S, N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+                if R_curr.shape[1] == num_peaks:
+                    R_per_peak = R_curr
+                else:
+                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
             elif R_curr.ndim == 3:
                 # (N_runs, 3, 3) -> (N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+                if R_curr.shape[0] == num_peaks:
+                    R_per_peak = R_curr
+                else:
+                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
             else:
                 # (3, 3)
                 R_per_peak = R_curr
