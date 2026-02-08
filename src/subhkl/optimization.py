@@ -226,7 +226,7 @@ class VectorizedObjective:
                  refine_sample=False, sample_bound_meters=0.002, sample_nominal=None,
                  refine_beam=False, beam_bound_deg=1.0, beam_nominal=None,
                  peak_radii=None, loss_method="gaussian", 
-                 hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
+                 hkl_search_range=15, d_min=None, d_max=100.0, search_window_size=256, window_batch_size=32,
                  chunk_size=4096, num_iters=20, top_k=32,
                  space_group="P 1",
                  centering="P",
@@ -393,26 +393,48 @@ class VectorizedObjective:
                     )
 
         # --- HKL Mask Generation ---
-        print(f"Generating HKL mask for Space Group: {self.space_group} (Range: +/-{hkl_search_range})")
-        mask_cpu = generate_hkl_mask(hkl_search_range, hkl_search_range, hkl_search_range, self.space_group)
-        self.valid_hkl_mask = jnp.array(mask_cpu)
-        self.mask_range = hkl_search_range
-
-        r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
-        h, k, l = jnp.meshgrid(r, r, r, indexing="ij")
+        # Robustly determine search range from cell and observed resolution
+        astar, bstar, cstar = jnp.sqrt(jnp.diag(jnp.linalg.inv(self.B @ self.B.T)))
+        
+        # Calculate resolution of observed peaks
+        q_obs_max = jnp.max(jnp.linalg.norm(self.kf_ki_dir_init, axis=0))
+        d_min_obs = 1.0 / (q_obs_max + 1e-9)
+        
+        # Determine pool resolution limit
+        d_limit = self.d_min if self.d_min > 0 else d_min_obs
+        
+        h_max_res = int(jnp.ceil(1.0 / d_limit / astar))
+        k_max_res = int(jnp.ceil(1.0 / d_limit / bstar))
+        l_max_res = int(jnp.ceil(1.0 / d_limit / cstar))
+        h_max = max(hkl_search_range, h_max_res)
+        k_max = max(hkl_search_range, k_max_res)
+        l_max = max(hkl_search_range, l_max_res)
+        
+        # Clamp to a reasonable maximum to prevent OOM
+        h_max = min(h_max, 64); k_max = min(k_max, 64); l_max = min(l_max, 64)
+        
+        print(f"Generating HKL pool for Space Group: {self.space_group} (Range: {h_max},{k_max},{l_max})")
+        
+        r_h = jnp.arange(-h_max, h_max + 1)
+        r_k = jnp.arange(-k_max, k_max + 1)
+        r_l = jnp.arange(-l_max, l_max + 1)
+        h, k, l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")
         hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
         
         # Apply Symmetry Mask to Pool
-        idx_h = hkl_pool[0] + hkl_search_range
-        idx_k = hkl_pool[1] + hkl_search_range
-        idx_l = hkl_pool[2] + hkl_search_range
-        allowed_pool = mask_cpu[idx_h, idx_k, idx_l]
+        mask_cpu = generate_hkl_mask(h_max, k_max, l_max, self.space_group)
+        self.valid_hkl_mask = jnp.array(mask_cpu)
+        self.mask_range_h = h_max; self.mask_range_k = k_max; self.mask_range_l = l_max
+
+        idx_h = hkl_pool[0] + h_max
+        idx_k = hkl_pool[1] + k_max
+        idx_l = hkl_pool[2] + l_max
+        allowed_pool = self.valid_hkl_mask[idx_h, idx_k, idx_l]
         
         hkl_pool = hkl_pool[:, allowed_pool]
         q_cart = self.B @ hkl_pool 
 
         # NOTE: For Sinkhorn, we keep the flat pool available directly
-        # It is now pre-filtered by symmetry.
         self.pool_hkl_flat = hkl_pool
 
         phis = jnp.arctan2(q_cart[1], q_cart[0])
@@ -721,29 +743,16 @@ class VectorizedObjective:
     def indexer_sinkhorn_jax(self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002, num_iters=20, epsilon=1.0, top_k=32,
                              chunk_size=256):
         """
-        Robust Memory-Efficient Sinkhorn with Rotated-Observer Optimization.
-        
-        Args:
-            UB: (Batch, 3, 3) Orientation Matrix
-            kf_ki_sample: (Batch, 3, N_obs) Observed directions
-            top_k: Number of nearest neighbors to keep (sparsity factor).
-            tolerance_rad: vMF sigma (controls kernel width).
-            epsilon: Sinkhorn entropy regularizer (kept at 1.0 due to internal scaling).
+        Robust Memory-Efficient Sinkhorn with Soft-Masking and Log-Stability.
         """
         # 1. Setup Data
         hkl_pool = self.pool_hkl_flat # (3, N_hkl)
-        
-        # --- Observer Rotation Trick ---
-        # Instead of q_theory = UB @ h, we project Obs into Crystal frame:
-        # Cost = r_obs . (UB h) = (r_obs @ UB) . h
-        # kf_ki_sample shape is (Batch, 3, N_obs) -> Axis 1 is spatial (x,y,z)
         
         # Normalize Obs
         norm_obs = jnp.linalg.norm(kf_ki_sample, axis=1, keepdims=True)
         r_obs_unit = kf_ki_sample / (norm_obs + 1e-9)
         
-        # Re-project Unit Obs: (Batch, 3, N_obs) x (Batch, 3, 3) -> (Batch, N_obs, 3)
-        # We contract spatial dim 'i' (size 3)
+        # Re-project Unit Obs into Crystal Frame
         r_obs_proj_unit = jnp.einsum("sin,sij->snj", r_obs_unit, UB)
         
         k_sq_obs = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
@@ -751,111 +760,130 @@ class VectorizedObjective:
         batch_size, _, n_obs = kf_ki_sample.shape
         _, n_hkl = hkl_pool.shape
         
-        # 2. Block-wise Top-K Search
-        # Chunk size significantly reduced to prevent OOM / thrashing
-        num_chunks = (n_hkl + chunk_size - 1) // chunk_size
+        # Pad pool for chunking
+        pad_len = (chunk_size - (n_hkl % chunk_size)) % chunk_size
+        hkl_pool_padded = jnp.pad(hkl_pool, ((0, 0), (0, pad_len)), constant_values=0) if pad_len > 0 else hkl_pool
+        n_hkl_padded = n_hkl + pad_len
+
+        num_chunks = n_hkl_padded // chunk_size
         
         def scan_topk(carry, i):
             curr_vals, curr_idxs = carry 
             idx_start = i * chunk_size
+            hkl_chunk = jax.lax.dynamic_slice(hkl_pool_padded, (0, idx_start), (3, chunk_size))
             
-            # Slice HKL Pool (Static, small)
-            # Use dynamic_slice to handle last chunk boundary gracefully
-            # (If last chunk < 256, JAX will pad or error depending on implementation, 
-            # here we use simple slicing assuming hkl_pool is sufficient or padding isn't critical for top-k)
-            hkl_chunk = jax.lax.dynamic_slice(hkl_pool, (0, idx_start), (3, chunk_size))
-            
-            # 1. Compute Norms |UB h| for this chunk
-            # q_chunk = UB @ h_chunk. Shape (Batch, 3, Chunk).
+            # cosine = (r_obs @ UB) . h / |UB h|
             q_chunk = jnp.einsum("sij,jk->sik", UB, hkl_chunk)
             q_sq_chunk = jnp.sum(q_chunk**2, axis=1)
-            norm_q_chunk = jnp.sqrt(q_sq_chunk + 1e-9) # (Batch, Chunk)
+            norm_q_chunk = jnp.sqrt(q_sq_chunk + 1e-9)
             
-            # 2. Dot Product using Rotated Observer
-            # (Batch, N_obs, 3) @ (3, Chunk) -> (Batch, N_obs, Chunk)
             dot_raw = jnp.matmul(r_obs_proj_unit, hkl_chunk)
-            
-            # 3. Apply Norm
-            # cosine = dot_raw / |UB h|
             dots_chunk = dot_raw / (norm_q_chunk[:, None, :] + 1e-9)
             
-            # 4. Top-K Selection
-            global_idxs = jnp.arange(chunk_size) + idx_start
-            global_idxs_broadcast = jnp.tile(global_idxs[None, None, :], (batch_size, n_obs, 1))
+            # --- FIX: Resolution & Wavelength Aware Top-K ---
+            # lambda = k_sq_obs / (norm_obs * dot_raw)
+            # norm_obs is (batch, 1, n_obs), dot_raw is (batch, n_obs, chunk)
+            safe_dot = jnp.maximum(dot_raw, 1e-6)
+            est_lambda = k_sq_obs[:, :, None] / (norm_obs.transpose(0, 2, 1) * safe_dot + 1e-9)
             
-            combined_vals = jnp.concatenate([curr_vals, dots_chunk], axis=2)
-            combined_idxs = jnp.concatenate([curr_idxs, global_idxs_broadcast], axis=2)
+            wl_mid = 0.5 * (self.wl_min_val + self.wl_max_val)
+            wl_half_width = 0.5 * (self.wl_max_val - self.wl_min_val)
+            wl_penalty = -jnp.abs(est_lambda - wl_mid) / (wl_half_width + 1e-9)
+            
+            # norm_q_chunk is (batch, chunk)
+            d_chunk = 1.0 / (norm_q_chunk + 1e-9)
+            res_mid = 0.5 * (self.d_min + self.d_max)
+            res_half_width = 0.5 * (self.d_max - self.d_min)
+            res_penalty = -jnp.abs(d_chunk - res_mid) / (res_half_width + 1e-9)
+            
+            selection_metric = dots_chunk + 0.1 * wl_penalty + 0.1 * res_penalty[:, None, :]
+            
+            # Handle padded 0,0,0 vectors (norm 0) by ensuring they have low metrics
+            selection_metric = jnp.where(norm_q_chunk[:, None, :] < 1e-6, -1e9, selection_metric)
+            
+            global_idxs = jnp.arange(chunk_size) + idx_start
+            combined_vals = jnp.concatenate([curr_vals, selection_metric], axis=2)
+            combined_idxs = jnp.concatenate([curr_idxs, jnp.tile(global_idxs[None, None, :], (batch_size, n_obs, 1))], axis=2)
             
             vals, top_k_indices = jax.lax.top_k(combined_vals, top_k)
             idxs = jnp.take_along_axis(combined_idxs, top_k_indices, axis=2)
             return (vals, idxs), None
 
-        init_vals = jnp.full((batch_size, n_obs, top_k), -1e9)
-        init_idxs = jnp.zeros((batch_size, n_obs, top_k), dtype=jnp.int32)
+        (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (jnp.full((batch_size, n_obs, top_k), -1e9), jnp.zeros((batch_size, n_obs, top_k), dtype=jnp.int32)), jnp.arange(num_chunks))
         
-        (top_vals, top_idxs), _ = jax.lax.scan(scan_topk, (init_vals, init_idxs), jnp.arange(num_chunks))
-        
-        # 3. Robust Scaling (vMF kernel: exp((cos(theta)-1)/tolerance_rad^2))
-        log_K = (top_vals - 1.0) / (tolerance_rad**2)
-        
-        # 4. Filter Logic (Re-calculate norms for Top-K only)
-        # Gather HKL vectors: (Batch, N_obs, K, 3)
-        hkl_selected = jnp.take(hkl_pool.T, top_idxs, axis=0) 
-        
-        # Compute q_selected = UB @ hkl_selected
-        # (Batch, 3, 3) @ (Batch, N_obs, K, 3) -> (Batch, N_obs, K, 3)
-        hkl_flat_sel = hkl_selected.reshape(batch_size, -1, 3)
-        q_flat_sel = jnp.einsum("sij,smj->smi", UB, hkl_flat_sel)
-        q_selected = q_flat_sel.reshape(batch_size, n_obs, top_k, 3)
-        
+        # 3. Log-Kernel with Soft Penalties
+        # Gather HKL vectors and re-calculate full geometry for top-k
+        hkl_selected = jnp.take(hkl_pool_padded.T, top_idxs, axis=0) 
+        q_selected = jnp.einsum("sij,snkj->snki", UB, hkl_selected)
         q_sq_selected = jnp.sum(q_selected**2, axis=3)
+        norm_q_selected = jnp.sqrt(q_sq_selected + 1e-9)
         
-        # 1. Transpose k_obs from (Batch, 3, N_obs) -> (Batch, N_obs, 3)
-        #    and expand to (Batch, N_obs, 1, 3) to match q_selected (Batch, N_obs, K, 3)
+        # Actual cosines for top-k HKLs
+        # (Batch, 3, N_obs) -> (Batch, N_obs, 3)
+        k_obs_unit = r_obs_unit.transpose(0, 2, 1)[:, :, None, :]
+        dot_selected = jnp.sum(k_obs_unit * q_selected, axis=3)
+        top_cosines = dot_selected / (norm_q_selected + 1e-9)
+
+        # Wavelength penalty
         k_obs_aligned = kf_ki_sample.transpose(0, 2, 1)[:, :, None, :]
-
-        # 2. Project predicted Q onto the observed scattering vector k
         k_dot_q = jnp.sum(k_obs_aligned * q_selected, axis=-1)
-
-        # 3. Calculate Lambda: |k|^2 / (k . q)
-        #    k_sq_obs shape is (Batch, N_obs), expand to (Batch, N_obs, 1)
         lambda_sparse = k_sq_obs[:, :, None] / (k_dot_q + 1e-9)
-
-        # Clip to valid bandwidth to prevent numerical explosions
-        mask_lambda = (lambda_sparse >= self.wl_min_val) & (lambda_sparse <= self.wl_max_val)
         
-        d_sparse = 1.0 / jnp.sqrt(q_sq_selected + 1e-9)
-        mask_res = (d_sparse >= self.d_min) & (d_sparse <= self.d_max)
+        # Soft Lambda Penalty (Gaussian penalty for being outside bandwidth)
+        bw_width = self.wl_max_val - self.wl_min_val
+        dist_wl = jnp.maximum(0.0, self.wl_min_val - lambda_sparse) + jnp.maximum(0.0, lambda_sparse - self.wl_max_val)
+        log_P_wl = -0.5 * (dist_wl / (0.01 * bw_width + 1e-9))**2
         
-        valid_mask = mask_lambda & mask_res
-        log_K = jnp.where(valid_mask, log_K, -1e6) # Effectively zero probability
-
-        # 5. Outlier (Dustbin) & Softmax
-        # Use an angular threshold for outliers that scales with tolerance_rad (e.g. 3 sigma)
-        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * tolerance_rad)
-        log_K_dustbin = (jnp.cos(outlier_threshold_rad) - 1.0) / (tolerance_rad**2)
+        # Soft Resolution Penalty
+        d_sparse = 1.0 / norm_q_selected
+        dist_res = jnp.maximum(0.0, self.d_min - d_sparse) + jnp.maximum(0.0, d_sparse - self.d_max)
+        log_P_res = -0.5 * (dist_res / (0.01 * self.d_min + 1e-9))**2
+        
+        # Angular kernel (Multi-scale: Peak + Wide Background)
+        # Using a mixture of a narrow peak and a heavy-tailed background ensures
+        # we have a strong gradient near the peak and a stable signal far away.
+        dist_ang = 1.0 - top_cosines
+        
+        # log_K_peak = -dist_ang / tolerance^2
+        # log_K_wide = -log(1 + dist_ang / (wide_tol^2))
+        # We use LogSumExp to smoothly combine them
+        log_K_peak = -dist_ang / (tolerance_rad**2 + 1e-9)
+        
+        wide_tol = jnp.deg2rad(5.0) # Always have a 5 degree capture range
+        log_K_wide = -jnp.log(1.0 + dist_ang / (wide_tol**2 + 1e-9))
+        
+        # Combine (mixing weight 0.5 implicitly via LogSumExp if we don't scale)
+        log_K = jax.nn.logsumexp(jnp.stack([log_K_peak, log_K_wide]), axis=0)
+        
+        # Combine into robust log-likelihood
+        log_K_robust = log_K + log_P_wl + log_P_res
+        
+        # 5. Dustbin & Softmax
+        # Dustbin represents the "null" HKL match
+        # Match to dustbin if outside the wide capture range (e.g. 3 * wide_tol)
+        outlier_threshold_rad = jnp.minimum(jnp.deg2rad(45.0), 3.0 * wide_tol)
+        dist_outlier = 1.0 - jnp.cos(outlier_threshold_rad)
+        log_K_dustbin_peak = -dist_outlier / (tolerance_rad**2 + 1e-9)
+        log_K_dustbin_wide = -jnp.log(1.0 + dist_outlier / (wide_tol**2 + 1e-9))
+        log_K_dustbin = jax.nn.logsumexp(jnp.stack([log_K_dustbin_peak, log_K_dustbin_wide]))
         log_K_dustbin = jnp.full((batch_size, n_obs, 1), log_K_dustbin)
-        log_K_extended = jnp.concatenate([log_K, log_K_dustbin], axis=2)
         
-        # Row Normalization (Softmax)
-        log_P = log_K_extended - jax.nn.logsumexp(log_K_extended, axis=2, keepdims=True)
-        P = jnp.exp(log_P)
+        log_K_extended = jnp.concatenate([log_K_robust, log_K_dustbin], axis=2)
+        log_P_softmax = log_K_extended - jax.nn.logsumexp(log_K_extended, axis=2, keepdims=True)
         
         # 6. Score
-        P_match = P[:, :, :-1]
-        probs = jnp.max(P_match, axis=2)
-        
-        # We want to maximize probabilities. Optimization is minimization.
-        # Use (probs / tolerance_rad^2) to provide a strong gradient.
-        weighted_score = jnp.sum(self.weights * (probs / (tolerance_rad**2)), axis=1)
+        # We want to maximize the probability of matching ANY valid HKL (non-outlier).
+        log_P_match = log_P_softmax[:, :, :-1]
+        log_prob_any = jax.nn.logsumexp(log_P_match, axis=2)
+        weighted_score = -jnp.sum(self.weights * log_prob_any, axis=1)
 
-        # Metrics
-        best_k_idx = jnp.argmax(P_match, axis=2)
+        # Metrics for reporting
+        best_k_idx = jnp.argmax(log_P_match, axis=2)
         best_hkl_idx = jnp.take_along_axis(top_idxs, best_k_idx[:, :, None], axis=2).squeeze(2)
-        best_hkl = jnp.take(hkl_pool.T, best_hkl_idx, axis=0)
+        best_hkl = jnp.take(hkl_pool_padded.T, best_hkl_idx, axis=0)
         best_lamb = jnp.take_along_axis(lambda_sparse, best_k_idx[:, :, None], axis=2).squeeze(2)
 
-        return -weighted_score, probs, best_hkl, best_lamb
+        return weighted_score, jnp.exp(log_prob_any), best_hkl, best_lamb
 
 
     def is_allowed_jax(self, h, k, l):
@@ -863,12 +891,12 @@ class VectorizedObjective:
         Robust symmetry check in JAX. Uses pre-computed mask for speed, 
         and falls back to centring parity checks for out-of-bounds HKLs.
         """
-        r = self.mask_range
-        idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
-        idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
-        idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
+        rh, rk, rl = self.mask_range_h, self.mask_range_k, self.mask_range_l
+        idx_h = jnp.clip(h + rh, 0, 2*rh).astype(jnp.int32)
+        idx_k = jnp.clip(k + rk, 0, 2*rk).astype(jnp.int32)
+        idx_l = jnp.clip(l + rl, 0, 2*rl).astype(jnp.int32)
         
-        in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
+        in_bounds = (h >= -rh) & (h <= rh) & (k >= -rk) & (k <= rk) & (l >= -rl) & (l <= rl)
         
         # Parity checks for centring
         h_even = (h % 2 == 0)
