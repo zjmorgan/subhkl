@@ -873,20 +873,13 @@ class VectorizedObjective:
             R_curr = self.static_R # (N_runs, 3, 3) or (3, 3)
 
         # Expand rotations to per-peak if mapping is provided
-        num_peaks = self.kf_ki_dir_init.shape[1]
         if R_curr is not None:
             if R_curr.ndim == 4:
                 # (S, N_runs, 3, 3) -> (S, N_peaks, 3, 3)
-                if R_curr.shape[1] == num_peaks:
-                    R_per_peak = R_curr
-                else:
-                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
             elif R_curr.ndim == 3:
                 # (N_runs, 3, 3) -> (N_peaks, 3, 3)
-                if R_curr.shape[0] == num_peaks:
-                    R_per_peak = R_curr
-                else:
-                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
             else:
                 # (3, 3)
                 R_per_peak = R_curr
@@ -1175,10 +1168,19 @@ class FindUB:
 
         kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
         num_obs = kf_ki_dir_lab.shape[1]
+
+        # --- Gonio Mapping Fix ---
+        # If goniometer data is per-peak, reduce it to per-run (image) to allow 
+        # consistent mapping via run_indices in VectorizedObjective.
+        static_R_input = self.R if self.R is not None else np.eye(3)
+        if self.run_indices is not None:
+            unique_runs, first_indices = np.unique(self.run_indices, return_index=True)
+            if goniometer_angles is not None and goniometer_angles.shape[1] == num_obs:
+                goniometer_angles = goniometer_angles[:, first_indices]
+            if self.R is not None and self.R.ndim == 3 and self.R.shape[0] == num_obs:
+                static_R_input = self.R[first_indices]
         
         # Always use Lab frame vectors for Objective initialization.
-        # The objective handles internal rotation via R or static_R.
-        kf_ki_input = kf_ki_dir_lab
 
         goniometer_refine_mask = None
         if refine_goniometer and refine_goniometer_axes is not None:
@@ -1254,7 +1256,7 @@ class FindUB:
             chunk_size=chunk_size,
             num_iters=num_iters,
             top_k=top_k,
-            static_R=self.R if self.R is not None else np.eye(3),
+            static_R=static_R_input,
             kf_lab_fixed_vectors=kf_ki_dir_lab, # Pass raw Lab vectors
             peak_run_indices=self.run_indices,
         )
