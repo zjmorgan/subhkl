@@ -229,6 +229,7 @@ class VectorizedObjective:
                  hkl_search_range=15, d_min=5.0, d_max=100.0, search_window_size=256, window_batch_size=32,
                  chunk_size=4096, num_iters=20, top_k=32,
                  space_group="P 1",
+                 centering="P",
                  static_R=None, kf_lab_fixed_vectors=None,
                  peak_run_indices=None):
         
@@ -236,6 +237,8 @@ class VectorizedObjective:
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
+
+        self.centering = centering
 
         # Convert tolerance from degrees to radians
         self.tolerance_rad = jnp.deg2rad(tolerance_deg)
@@ -567,12 +570,7 @@ class VectorizedObjective:
             valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
 
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            r = self.mask_range
-            idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
-            idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
-            idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
-            in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], False)
+            is_allowed = self.is_allowed_jax(h, k, l)
             
             # Combine masks
             final_mask = valid_cand & is_allowed & valid_res
@@ -635,12 +633,7 @@ class VectorizedObjective:
             # 2. Symmetry Mask
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            r = self.mask_range
-            idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
-            idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
-            idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
-            in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], False)
+            is_allowed = self.is_allowed_jax(h, k, l)
             
             # Combine all masks
             final_mask = valid_cand & valid_res & is_allowed
@@ -691,12 +684,7 @@ class VectorizedObjective:
             d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9) # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
             h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]
-            r = self.mask_range
-            idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
-            idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
-            idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
-            in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-            valid_sym = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], True)
+            valid_sym = self.is_allowed_jax(h, k, l)
             valid_mask = valid_lamb & valid_res & valid_sym
             q_obs_opt = k_obs / jnp.where(lambda_opt==0, 1.0, lambda_opt)[..., None]
             diff = q_obs_opt - q_pred
@@ -860,6 +848,44 @@ class VectorizedObjective:
 
         return -weighted_score, probs, best_hkl, best_lamb
 
+
+    def is_allowed_jax(self, h, k, l):
+        """
+        Robust symmetry check in JAX. Uses pre-computed mask for speed, 
+        and falls back to centring parity checks for out-of-bounds HKLs.
+        """
+        r = self.mask_range
+        idx_h = jnp.clip(h + r, 0, 2*r).astype(jnp.int32)
+        idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
+        idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
+        
+        in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
+        
+        # Parity checks for centring
+        h_even = (h % 2 == 0)
+        k_even = (k % 2 == 0)
+        l_even = (l % 2 == 0)
+        
+        if self.centering == "F":
+            # All odd or all even
+            allowed_out = (h_even == k_even) & (k_even == l_even)
+        elif self.centering == "I":
+            # h+k+l is even
+            allowed_out = ((h + k + l) % 2 == 0)
+        elif self.centering == "A":
+            # k+l is even
+            allowed_out = ((k + l) % 2 == 0)
+        elif self.centering == "B":
+            # h+l is even
+            allowed_out = ((h + l) % 2 == 0)
+        elif self.centering == "C":
+            # h+k is even
+            allowed_out = ((h + k) % 2 == 0)
+        else:
+            # P or R: Assume allowed unless we have a specific reason to reject
+            allowed_out = True
+            
+        return jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], allowed_out)
 
     @partial(jax.jit, static_argnames='self')
     def get_results(self, x):
@@ -1242,6 +1268,7 @@ class FindUB:
             weights=weights,
             tolerance_deg=tolerance_deg,
             space_group=self.space_group,
+            centering=get_centering(self.space_group),
             loss_method=loss_method,
             cell_params=cell_params_init,
             peak_radii=self.radii,
