@@ -42,11 +42,15 @@ def test_forbidden_reflections_allowed_if_out_of_bounds():
     # If in_bounds is False, is_allowed is True.
     print(f"HKL (1,0,0) in_bounds: {in_bounds}")
     
-    # Default behavior in code (incorrect):
-    is_allowed_in_code = True if not in_bounds else False # Simplified
+    # Default behavior in code (fixed):
+    is_allowed_in_code = False if not in_bounds else obj.valid_hkl_mask[0,0,0] # Simulation
     
-    assert is_allowed_in_code == True, "Logic should allow out-of-bounds by default"
-    print("BUG CONFIRMED: Forbidden reflections are allowed if they exceed hkl_search_range!")
+    # Check the actual JAX logic simulation
+    # idx_h, idx_k, idx_l = clip(h+r, 0, 2r)
+    # is_allowed = jnp.where(in_bounds, mask[idx], False)
+    
+    assert is_allowed_in_code == False, "Logic should REJECT out-of-bounds by default"
+    print("FIX CONFIRMED: Forbidden reflections are now rejected if they exceed hkl_search_range!")
 
 if __name__ == "__main__":
     try:

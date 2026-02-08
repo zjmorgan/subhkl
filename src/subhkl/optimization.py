@@ -572,7 +572,7 @@ class VectorizedObjective:
             idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
             idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
             in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], True)
+            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], False)
             
             # Combine masks
             final_mask = valid_cand & is_allowed & valid_res
@@ -640,7 +640,7 @@ class VectorizedObjective:
             idx_k = jnp.clip(k + r, 0, 2*r).astype(jnp.int32)
             idx_l = jnp.clip(l + r, 0, 2*r).astype(jnp.int32)
             in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], True)
+            is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], False)
             
             # Combine all masks
             final_mask = valid_cand & valid_res & is_allowed

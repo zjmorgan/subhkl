@@ -800,6 +800,7 @@ def metrics(
             run_index = run_index[d_mask]
             print(f"METRICS: Filtered to {len(h)} peaks with d >= {d_min} A.")
 
+        # --- FIX: Calculate RUB stack AFTER all filtering to ensure dimension consistency ---
         UB = U @ B_mat
         if R_all.ndim == 3:
             RUB = np.matmul(R_all, UB) 
@@ -826,8 +827,8 @@ def metrics(
                 status = "BAD" if err > 1.0 else "OK"
                 print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
     except Exception as e:
-        # import traceback
-        # traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
 
 @app.command()
