@@ -1,6 +1,30 @@
 # subhkl
 Solving crystal orientation from Laue diffraction images
 
+## ⚖️ Physics and Conventions
+
+This project uses the **Laue Equation** relating Miller indices $(h, k, l)$ to the scattering vector $Q$ in the laboratory frame:
+
+$$Q_l = 2\pi R \cdot U \cdot B \cdot \mathbf{h}$$
+
+where:
+- **$\mathbf{h}$**: Miller indices vector $\begin{pmatrix} h \\ k \\ l \end{pmatrix}$.
+- **$B$**: Reciprocal lattice matrix (Cartesian system). Transforms Miller indices to reciprocal space units ($1/\text{\AA}$ if $2\pi$ is not absorbed).
+- **$U$**: Orientation matrix (Sample to Cartesian). Transforms reciprocal lattice to the goniometer/sample frame.
+- **$R$**: Goniometer rotation matrix (Lab to Sample). Calculated from goniometer axes and angles using Mantid's `SetGoniometer` convention ($R = R_{\text{omega}} R_{\text{chi}} R_{\text{phi}}$).
+
+The scattering vector $Q$ is defined by the change in wavevector:
+$$Q = k_f - k_i = \frac{2\pi}{\lambda} (\hat{k}_f - \hat{k}_i)$$
+
+where $\hat{k}_f$ and $\hat{k}_i$ are unit vectors along the scattered and incident beam directions, respectively.
+
+### Coordinate Systems
+- **Lab Frame**: $Z$ is along the incident beam, $Y$ is vertically upward.
+- **Sample Frame**: Attached to the innermost goniometer axis.
+- **Angles**: $2\theta$ is the scattering angle, $\phi$ is the azimuthal angle.
+
+---
+
 ## Installation
 
 ### Option 1: Using uv (recommended)

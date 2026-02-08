@@ -394,7 +394,9 @@ class VectorizedObjective:
 
         # --- HKL Mask Generation ---
         # Robustly determine search range from cell and observed resolution
-        astar, bstar, cstar = jnp.sqrt(jnp.diag(jnp.linalg.inv(self.B @ self.B.T)))
+        # inv(B @ B.T) = inv(G*) = G (Real space metric tensor)
+        # sqrt(diag(G)) = [a, b, c]
+        a_real, b_real, c_real = jnp.sqrt(jnp.diag(jnp.linalg.inv(self.B @ self.B.T)))
         
         # Calculate resolution of observed peaks
         q_obs_max = jnp.max(jnp.linalg.norm(self.kf_ki_dir_init, axis=0))
@@ -403,9 +405,10 @@ class VectorizedObjective:
         # Determine pool resolution limit
         d_limit = self.d_min if self.d_min > 0 else d_min_obs
         
-        h_max_res = int(jnp.ceil(1.0 / d_limit / astar))
-        k_max_res = int(jnp.ceil(1.0 / d_limit / bstar))
-        l_max_res = int(jnp.ceil(1.0 / d_limit / cstar))
+        # h_max = a / d_min
+        h_max_res = int(jnp.ceil(a_real / d_limit))
+        k_max_res = int(jnp.ceil(b_real / d_limit))
+        l_max_res = int(jnp.ceil(c_real / d_limit))
         h_max = max(hkl_search_range, h_max_res)
         k_max = max(hkl_search_range, k_max_res)
         l_max = max(hkl_search_range, l_max_res)
@@ -1396,7 +1399,7 @@ class FindUB:
             
             if start_sol is not None:
                 if strategy_type == 'population_based':
-                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * 0.05
+                    noise = jax.random.normal(rng_pop, (population_size, num_dims)) * target_sigma
                     p_orient = start_sol[:3] + noise[:, :3]
                     p_rest = jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)
                     population_init = jnp.concatenate([p_orient, p_rest], axis=1)
