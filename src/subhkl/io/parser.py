@@ -634,6 +634,27 @@ def metrics(
             if instrument is None:
                 instrument = f.attrs.get("instrument")
 
+        # --- FIX: Robust Rotation Mapping Helper ---
+        def get_safe_R_stack(R_file_in, run_indices_in, target_len):
+            if R_file_in is None:
+                return [np.eye(3)] * target_len
+            
+            if R_file_in.ndim == 3 and len(R_file_in) == target_len:
+                return R_file_in
+            
+            # Robust lookup with fallback
+            def safe_get_single_R(r_idx):
+                ridx = int(r_idx)
+                if ridx < len(R_file_in):
+                    return R_file_in[ridx]
+                else:
+                    return R_file_in[0]
+            
+            if R_file_in.ndim == 3:
+                return [safe_get_single_R(r) for r in run_indices_in]
+            else:
+                return [R_file_in] * target_len
+
         matched_h, matched_k, matched_l, matched_lam, matched_xyz, matched_R, matched_run = [], [], [], [], [], [], []
 
         # Typer API might pass OptionInfo objects if called directly
@@ -705,16 +726,16 @@ def metrics(
                         
                         valid = dists < 0.01 
                         if np.any(valid):
+                            num_valid = np.sum(valid)
                             matched_h.extend(h_p[idxs[valid]])
                             matched_k.extend(k_p[idxs[valid]])
                             matched_l.extend(l_p[idxs[valid]])
                             matched_lam.extend(lam_p[idxs[valid]])
                             matched_xyz.extend(xyz_obs_run[valid])
-                            matched_run.extend([img_idx] * np.sum(valid))
-                            if R_file is not None:
-                                matched_R.extend([R_file[img_idx]] * np.sum(valid))
-                            else:
-                                matched_R.extend([np.eye(3)] * np.sum(valid))
+                            matched_run.extend([img_idx] * num_valid)
+                            
+                            # Use helper for R assignment
+                            matched_R.extend(get_safe_R_stack(R_file, [img_idx] * num_valid, num_valid))
                 else:
                     # Non-predictor format (integrator/indexer) but matching requested
                     # Use peaks/xyz from file as predicted positions
@@ -739,16 +760,16 @@ def metrics(
                         dists, idxs = tree.query(xyz_o_run)
                         valid = dists < 0.01
                         if np.any(valid):
+                            num_valid = np.sum(valid)
                             matched_h.extend(h_p[mask_p][idxs[valid]])
                             matched_k.extend(k_p[mask_p][idxs[valid]])
                             matched_l.extend(l_p[mask_p][idxs[valid]])
                             matched_lam.extend(lam_p[mask_p][idxs[valid]])
                             matched_xyz.extend(xyz_o_run[valid])
-                            matched_run.extend([r] * np.sum(valid))
-                            if R_file is not None:
-                                matched_R.extend([R_file[int(r)] if R_file.ndim==3 else R_file] * np.sum(valid))
-                            else:
-                                matched_R.extend([np.eye(3)] * np.sum(valid))
+                            matched_run.extend([r] * num_valid)
+                            
+                            # Use helper for R assignment
+                            matched_R.extend(get_safe_R_stack(R_file, [r] * num_valid, num_valid))
         else:
             # Standard case: load from filename
             with h5py.File(filename, "r") as f:
@@ -764,22 +785,7 @@ def metrics(
                 if matched_run is None:
                     matched_run = f["bank"][()] if "bank" in f else np.zeros(len(matched_h))
                 
-                if R_file is not None:
-                    if R_file.ndim == 3 and len(R_file) == len(matched_h):
-                        matched_R = R_file
-                    else:
-                        # --- FIX: Robust Mapping ---
-                        # In multi-run datasets, matched_run indices must map to R_file.
-                        # If a run ID is missing from R_file, we use the first rotation as fallback.
-                        def safe_get_R(r_idx):
-                            ridx = int(r_idx)
-                            if ridx < len(R_file):
-                                return R_file[ridx]
-                            else:
-                                return R_file[0]
-                        matched_R = np.array([safe_get_R(r) if R_file.ndim==3 else R_file for r in matched_run])
-                else:
-                    matched_R = np.tile(np.eye(3)[None, ...], (len(matched_h), 1, 1))
+                matched_R = get_safe_R_stack(R_file, matched_run, len(matched_h))
 
         # Convert to numpy arrays
         h = np.array(matched_h)
