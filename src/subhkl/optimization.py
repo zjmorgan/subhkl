@@ -876,10 +876,16 @@ class VectorizedObjective:
         if R_curr is not None:
             if R_curr.ndim == 4:
                 # (S, N_runs, 3, 3) -> (S, N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+                if R_curr.shape[1] != self.kf_ki_dir_init.shape[1]:
+                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+                else:
+                    R_per_peak = R_curr
             elif R_curr.ndim == 3:
                 # (N_runs, 3, 3) -> (N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+                if R_curr.shape[0] != self.kf_ki_dir_init.shape[1]:
+                    R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+                else:
+                    R_per_peak = R_curr
             else:
                 # (3, 3)
                 R_per_peak = R_curr
