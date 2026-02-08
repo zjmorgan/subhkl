@@ -1181,6 +1181,7 @@ class FindUB:
                 static_R_input = self.R[first_indices]
         
         # Always use Lab frame vectors for Objective initialization.
+        kf_ki_input = kf_ki_dir_lab
 
         goniometer_refine_mask = None
         if refine_goniometer and refine_goniometer_axes is not None:
