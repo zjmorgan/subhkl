@@ -66,9 +66,9 @@ def index(
     print(f"Running {n_runs} run(s)...")
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
     if refine_lattice:
-        print(f"Refining lattice parameters with {lattice_bound_frac*100}% bounds.")
+        print(f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds.")
     if refine_sample:
-        print(f"Refining sample offset with {1000*sample_bound_meters} mm bounds.")
+        print(f"Refining sample offset with {1000 * sample_bound_meters} mm bounds.")
     if refine_beam:
         print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
