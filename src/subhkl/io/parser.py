@@ -610,6 +610,12 @@ def metrics(
     per_run: bool = typer.Option(False, "--per-run", help="Calculate and display metrics for each run/image.")
 ):
     try:
+        # Typer API might pass OptionInfo objects if called directly (e.g. in tests)
+        if hasattr(found_peaks_file, 'default'): found_peaks_file = found_peaks_file.default
+        if hasattr(instrument, 'default'): instrument = instrument.default
+        if hasattr(d_min, 'default'): d_min = d_min.default
+        if hasattr(per_run, 'default'): per_run = per_run.default
+
         # Load Global Physics from filename
         with h5py.File(filename, "r") as f:
             ub_helper = FindUB()
@@ -629,6 +635,10 @@ def metrics(
                 instrument = f.attrs.get("instrument")
 
         matched_h, matched_k, matched_l, matched_lam, matched_xyz, matched_R, matched_run = [], [], [], [], [], [], []
+
+        # Typer API might pass OptionInfo objects if called directly
+        if hasattr(found_peaks_file, 'default'):
+            found_peaks_file = found_peaks_file.default
 
         if found_peaks_file is not None:
             if instrument is None:
