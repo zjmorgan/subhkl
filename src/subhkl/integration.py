@@ -772,12 +772,24 @@ class Peaks:
             run_id = self.get_run_id(bank)
 
             if use_stack:
-                idx = run_id if run_id < RUB.shape[0] else -1
+                # Use image index if stack matches image count, otherwise use run index
+                idx = bank if RUB.shape[0] == len(self.ims) else run_id
+                if idx >= RUB.shape[0]: idx = -1
                 rub_val = RUB[idx]
             else:
                 rub_val = RUB if RUB.ndim == 2 else RUB[0]
 
-            current_R_val = R_all[run_id if (R_all is not None and R_all.ndim == 3 and run_id < R_all.shape[0]) else 0] if R_all is not None else None
+            # Resolve current R for this bank (used for sample offset rotation)
+            current_R_val = None
+            if R_all is not None:
+                if R_all.ndim == 3:
+                    idx_r = bank if R_all.shape[0] == len(self.ims) else run_id
+                    if idx_r < R_all.shape[0]:
+                        current_R_val = R_all[idx_r]
+                    else:
+                        current_R_val = R_all[0]
+                else:
+                    current_R_val = R_all
 
             tasks.append((
                 bank, det_config, 
@@ -878,8 +890,8 @@ class Peaks:
             
             # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
             if RUB.ndim == 3 and RUB.shape[0] > 1:
-                # Use run ID as index
-                idx = run_id if run_id < RUB.shape[0] else len(tasks)
+                # Use image index if stack matches image count, otherwise use run index
+                idx = bank if RUB.shape[0] == len(self.ims) else run_id
                 if idx >= RUB.shape[0]: idx = -1 
                 current_rub = RUB[idx]
             else:
@@ -888,15 +900,19 @@ class Peaks:
             # Resolve R and angles for this image
             current_R_val = None
             if R_stack is not None:
-                idx = run_id if run_id < R_stack.shape[0] else len(tasks)
-                if idx >= R_stack.shape[0]: idx = -1
-                current_R_val = R_stack[idx]
+                idx_r = bank if R_stack.shape[0] == len(self.ims) else run_id
+                if idx_r < R_stack.shape[0]:
+                    current_R_val = R_stack[idx_r]
+                else:
+                    current_R_val = R_stack[0]
             
             current_angles_val = None
             if angles_stack is not None:
-                idx = run_id if run_id < angles_stack.shape[0] else len(tasks)
-                if idx >= angles_stack.shape[0]: idx = -1
-                current_angles_val = angles_stack[idx]
+                idx_a = bank if angles_stack.shape[0] == len(self.ims) else run_id
+                if idx_a < angles_stack.shape[0]:
+                    current_angles_val = angles_stack[idx_a]
+                else:
+                    current_angles_val = angles_stack[0]
 
             metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, current_angles_val, current_R_val, sample_offset, ki_vec)
             # Pass viz_label instead of fname_clean

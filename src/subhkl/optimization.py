@@ -557,6 +557,8 @@ class VectorizedObjective:
             sign = axis_spec[3]
             theta = sign * angles_deg[:, i, :] * deg2rad
             Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
+            # Mantid SetGoniometer: R = R0 @ R1 @ R2
+            # Each Ri should be multiplied on the RIGHT of the current accumulated matrix.
             R = jnp.einsum('smij,smjk->smik', R, Ri)
         return R
 
@@ -983,12 +985,12 @@ class VectorizedObjective:
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
             kf = v / jnp.where(dist == 0, 1.0, dist)
             ki = ki_vec[:, :, None] # (S, 3, 1)
-            q_lab = kf - ki
+            q_lab = (kf - ki) / (2 * jnp.pi)
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
             kf = self.kf_lab_fixed[None, :, :].repeat(x.shape[0], axis=0)
             ki = ki_vec[:, :, None]
-            q_lab = kf - ki
+            q_lab = (kf - ki) / (2 * jnp.pi)
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
@@ -998,6 +1000,7 @@ class VectorizedObjective:
             if R_per_peak.ndim == 4: 
                 # (S, N, 3, 3) and (S, N, 3)
                 # q_sample_i = R_ji * q_lab_j (Contracts row 'j' of R with lab vector)
+                # This is equivalent to q_sample = R.T @ q_lab
                 kf_ki_vec_T = jnp.einsum("snji,snj->sni", R_per_peak, q_lab_T)
             elif R_per_peak.ndim == 3:
                 # (N, 3, 3) and (S, N, 3)
