@@ -393,24 +393,33 @@ class VectorizedObjective:
                     )
 
         # --- HKL Mask Generation ---
+        print(f"Generating HKL mask for Space Group: {self.space_group} (Range: +/-{hkl_search_range})")
+        mask_cpu = generate_hkl_mask(hkl_search_range, hkl_search_range, hkl_search_range, self.space_group)
+        self.valid_hkl_mask = jnp.array(mask_cpu)
+        self.mask_range = hkl_search_range
+
         r = jnp.arange(-hkl_search_range, hkl_search_range + 1)
         h, k, l = jnp.meshgrid(r, r, r, indexing="ij")
         hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
-        zero_mask = ~jnp.all(hkl_pool == 0, axis=0)
-        hkl_pool = hkl_pool[:, zero_mask]
+        
+        # Apply Symmetry Mask to Pool
+        idx_h = hkl_pool[0] + hkl_search_range
+        idx_k = hkl_pool[1] + hkl_search_range
+        idx_l = hkl_pool[2] + hkl_search_range
+        allowed_pool = mask_cpu[idx_h, idx_k, idx_l]
+        
+        hkl_pool = hkl_pool[:, allowed_pool]
         q_cart = self.B @ hkl_pool 
 
         # NOTE: For Sinkhorn, we keep the flat pool available directly
+        # It is now pre-filtered by symmetry.
         self.pool_hkl_flat = hkl_pool
 
         phis = jnp.arctan2(q_cart[1], q_cart[0])
         sort_idx = jnp.argsort(phis)
         self.pool_phi_sorted = phis[sort_idx]
         self.pool_hkl_sorted = hkl_pool[:, sort_idx] 
-        self.mask_range = hkl_search_range
-        print(f"Generating HKL mask for Space Group: {self.space_group} (Range: +/-{self.mask_range})")
-        mask_cpu = generate_hkl_mask(self.mask_range, self.mask_range, self.mask_range, self.space_group)
-        self.valid_hkl_mask = jnp.array(mask_cpu)
+
 
     def _get_physical_params_jax(self, x):
         """Reconstruct physical parameters (Base + Delta) for a batch of solutions x."""

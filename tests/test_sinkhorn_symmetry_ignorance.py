@@ -46,8 +46,8 @@ def test_sinkhorn_ignores_symmetry():
     
     print(f"Is matched HKL forbidden in I 2 2 2? {is_forbidden}")
     
-    assert is_forbidden, "Test failed: Sinkhorn should have matched to a forbidden reflection to prove the bug"
-    print("BUG CONFIRMED: Sinkhorn indexer ignores symmetry and matches forbidden reflections!")
+    assert not is_forbidden, "Fix failed: Sinkhorn matched to a forbidden reflection!"
+    print("FIX CONFIRMED: Sinkhorn indexer now respects symmetry and rejects forbidden reflections!")
 
 if __name__ == "__main__":
     try:
