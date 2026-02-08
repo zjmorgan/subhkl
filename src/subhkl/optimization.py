@@ -276,21 +276,25 @@ class VectorizedObjective:
         else: self.beam_nominal = jnp.array(beam_nominal)
 
         # Reconstruct kf from Q (kf = Q + ki)
+        self.kf_lab_fixed = None
         if self.peak_xyz is not None:
             # Always calculate kf from physical detector positions and sample offset
             # peak_xyz is (3, N), sample_nominal is (3,)
             v = self.peak_xyz - self.sample_nominal[:, None]
             dist = jnp.linalg.norm(v, axis=0)
             self.kf_lab_fixed = v / jnp.where(dist == 0, 1.0, dist[None, :])
-            self.input_is_rotated = False
-        elif kf_lab_fixed_vectors is not None:
+            # If we have xyz positions and a rotation stack, the positions are in Lab frame.
+            self.input_is_rotated = not (static_R is not None and static_R.ndim == 3)
+        
+        if kf_lab_fixed_vectors is not None and self.kf_lab_fixed is None:
             # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
             q_vecs = jnp.array(kf_lab_fixed_vectors)
             if q_vecs.shape[0] != 3 and q_vecs.shape[1] == 3: q_vecs = q_vecs.T
             self.kf_lab_fixed = q_vecs + self.beam_nominal[:, None]
             self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
             self.input_is_rotated = False
-        else:
+        
+        if self.kf_lab_fixed is None:
             # Fallback
             q_vecs = self.kf_ki_dir_init
             if q_vecs.shape[0] != 3 and q_vecs.shape[1] == 3: q_vecs = q_vecs.T
@@ -858,40 +862,56 @@ class VectorizedObjective:
 
 
     @partial(jax.jit, static_argnames='self')
-    def __call__(self, x):
+    def get_results(self, x):
+        """Full physical model and indexing pipeline for a batch of solutions x."""
         UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
         
         # Determine current rotations (Lab -> Sample)
-        R_curr = R
-        if R_curr is None and not self.input_is_rotated:
-            R_curr = self.static_R[None, ...].repeat(x.shape[0], axis=0)
+        R_curr = R # (S, N_runs, 3, 3) or None
+        if R_curr is None:
+            # Fallback to static rotations
+            R_curr = self.static_R # (N_runs, 3, 3) or (3, 3)
 
         # Expand rotations to per-peak if mapping is provided
-        if R_curr is not None and R_curr.ndim == 4:
-            # R_curr is (S, N_runs, 3, 3). Map to (S, N_peaks, 3, 3)
-            R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+        if R_curr is not None:
+            if R_curr.ndim == 4:
+                # (S, N_runs, 3, 3) -> (S, N_peaks, 3, 3)
+                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+            elif R_curr.ndim == 3:
+                # (N_runs, 3, 3) -> (N_peaks, 3, 3)
+                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+            else:
+                # (3, 3)
+                R_per_peak = R_curr
         else:
-            R_per_peak = R_curr
+            R_per_peak = None
 
-        # Reconstruct kf from Q (kf = Q + ki)
+        # Determine current scattered beam directions (kf) in Lab frame
         if self.peak_xyz is not None:
-            # CORRECTED: Always use physical detector positions and nominal sample offset
-            # to calculate the scattered beam directions.
+            # Recalculate kf for every run/peak because the sample position s_lab
+            # depends on the goniometer rotation R and the refined sample offset.
             if R_per_peak is not None:
                 if R_per_peak.ndim == 4:
+                    # (S, N, 3, 3) @ (S, 3) -> (S, N, 3)
+                    # s_lab = R * s_sample
                     s_lab = jnp.einsum('snij,sj->sni', R_per_peak, sample_total)
+                    s = s_lab.transpose(0, 2, 1) # (S, 3, N)
+                elif R_per_peak.ndim == 3:
+                    # (N, 3, 3) @ (S, 3) -> (S, N, 3)
+                    s_lab = jnp.einsum('nij,sj->sni', R_per_peak, sample_total)
                     s = s_lab.transpose(0, 2, 1)
                 else:
-                    s_lab = jnp.einsum('sij,sj->si', R_per_peak, sample_total)
+                    # (3, 3) @ (S, 3) -> (S, 3)
+                    s_lab = jnp.einsum('ij,sj->si', R_per_peak, sample_total)
                     s = s_lab[:, :, None]
             else:
                 s = sample_total[:, :, None]
             
-            p = self.peak_xyz[None, :, :]
-            v = p - s
+            p = self.peak_xyz[None, :, :] # (1, 3, N)
+            v = p - s # (S, 3, N)
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
-            kf = v / dist
-            ki = ki_vec[:, :, None]
+            kf = v / jnp.where(dist == 0, 1.0, dist)
+            ki = ki_vec[:, :, None] # (S, 3, 1)
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
@@ -900,24 +920,37 @@ class VectorizedObjective:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
-        # Rotate to SAMPLE FRAME
+        # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
         if R_per_peak is not None:
-            # We want q_sample = R^T * q_lab.
-            if R_per_peak.ndim == 4: kf_ki_vec = jnp.einsum("snij,sin->sjn", R_per_peak, q_lab)
-            else: kf_ki_vec = jnp.einsum("sij,sin->sjn", R_per_peak, q_lab)
+            # q_lab is (S, 3, N). We want (S, N, 3) for matrix multiplication
+            q_lab_T = q_lab.transpose(0, 2, 1)
+            if R_per_peak.ndim == 4: 
+                # (S, N, 3, 3) and (S, N, 3)
+                # q_sample_i = R_ji * q_lab_j (Contracts row 'j' of R with lab vector)
+                kf_ki_vec_T = jnp.einsum("snji,snj->sni", R_per_peak, q_lab_T)
+            elif R_per_peak.ndim == 3:
+                # (N, 3, 3) and (S, N, 3)
+                kf_ki_vec_T = jnp.einsum("nji,snj->sni", R_per_peak, q_lab_T)
+            else:
+                # (3, 3) and (S, N, 3)
+                kf_ki_vec_T = jnp.einsum("ji,snj->sni", R_per_peak, q_lab_T)
+            kf_ki_vec = kf_ki_vec_T.transpose(0, 2, 1)
         else:
             kf_ki_vec = q_lab
 
         if self.loss_method == 'forward':
-            score, _, _, _ = self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad, window_batch_size=self.window_batch_size)
+            return self.indexer_dynamic_binary_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad, window_batch_size=self.window_batch_size)
         elif self.loss_method == 'cosine':
-            score, _, _, _ = self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
+            return self.indexer_dynamic_cosine_aniso_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
         elif self.loss_method == 'sinkhorn':
-            score, _, _, _ = self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad,
+            return self.indexer_sinkhorn_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad,
                                                        chunk_size=self.chunk_size, num_iters=self.num_iters, top_k=self.top_k)
         else:
-            score, _, _, _ = self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
+            return self.indexer_dynamic_soft_jax(UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad)
 
+    @partial(jax.jit, static_argnames='self')
+    def __call__(self, x):
+        score, _, _, _ = self.get_results(x)
         return score
 
 # ==============================================================================
@@ -1404,47 +1437,10 @@ class FindUB:
             else:
                 print(self.goniometer_offsets)
 
-        # Final Score Recalculation
-        if refine_sample:
-            # CORRECTED: Sample offset should be in the Sample Frame and rotated to Lab Frame
-            if self.R is not None:
-                if self.R.ndim == 3:
-                    s_lab = np.einsum('nij,j->ni', self.R, self.sample_offset)
-                    s = s_lab.T
-                else:
-                    s_lab = self.R @ self.sample_offset
-                    s = s_lab[:, None]
-            else:
-                s = self.sample_offset[:, None]
-            p = self.peak_xyz.T
-            v = p - s
-            dist = np.linalg.norm(v, axis=0)
-            kf = v / dist
-            ki = self.ki_vec[:, None]
-            q_lab = kf - ki
-            k_sq_dyn = np.sum(q_lab**2, axis=0)[None, :]
-        else:
-            # FIX: Use kf_lab_fixed (Ideal Beam) + refined ki
-            kf_fixed = objective.kf_lab_fixed 
-            ki = self.ki_vec[:, None]
-            q_lab = kf_fixed - ki
-            k_sq_dyn = np.sum(q_lab**2, axis=0)[None, :]
-
-        if self.R.ndim == 3: kf_ki_vec = np.einsum("mji,jm->im", self.R, q_lab)
-        else: kf_ki_vec = np.einsum("ji,jm->im", self.R, q_lab)
-
-        UB_final = np.array(UB_final)
-
-        if loss_method == 'forward':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_binary_jax(UB_final[None], kf_ki_vec[None], k_sq_override=k_sq_dyn, tolerance_rad=objective.tolerance_rad, window_batch_size=window_batch_size)
-        elif loss_method == 'cosine':
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_cosine_aniso_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn)
-        elif loss_method == 'sinkhorn':
-            score, accum_probs, hkl, lamb = objective.indexer_sinkhorn_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn, chunk_size=chunk_size, num_iters=num_iters, top_k=top_k)
-        else:
-            score, accum_probs, hkl, lamb = objective.indexer_dynamic_soft_jax(UB_final[None], kf_ki_vec[None], tolerance_rad=objective.tolerance_rad, k_sq_override=k_sq_dyn)
+        # Final Score Recalculation using the unified pipeline
+        score, accum_probs, hkl, lamb = objective.get_results(x_batch)
 
         num_peaks_soft = float(np.sum(accum_probs[0]))
         print(f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count).")
 
-        return num_peaks_soft, hkl[0], lamb[0], U
+        return num_peaks_soft, np.array(hkl[0]), np.array(lamb[0]), np.array(U)

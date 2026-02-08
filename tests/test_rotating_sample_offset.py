@@ -23,8 +23,8 @@ def test_rotating_sample_offset():
     R_stack = np.stack([R0, R1])
     
     # 3. Generate Peaks
-    # Peak 0: Run 0, hkl=(1,0,0). Q_sample = (0.1, 0, 0)
-    # Peak 1: Run 1, hkl=(0,0,1). Q_sample = (0, 0, 0.1)
+    # Peak 0: Run 0, hkl=(5,0,0). Q_sample = (0.5, 0, 0)
+    # Peak 1: Run 1, hkl=(0,0,5). Q_sample = (0, 0, 0.5)
     
     # Lab positions of sample
     S0 = R0 @ sample_offset_sample_frame
@@ -34,13 +34,13 @@ def test_rotating_sample_offset():
     ki = np.array([0, 0, 1])
     
     # Peak 0
-    Q_lab0 = R0 @ np.array([0.1, 0, 0])
+    Q_lab0 = R0 @ np.array([0.5, 0, 0])
     kf0 = Q_lab0 + ki
     kf0 = kf0 / np.linalg.norm(kf0)
     P0 = S0 + kf0 # Detector at 1m
     
     # Peak 1
-    Q_lab1 = R1 @ np.array([0, 0, 0.1])
+    Q_lab1 = R1 @ np.array([0, 0, 0.5])
     kf1 = Q_lab1 + ki
     kf1 = kf1 / np.linalg.norm(kf1)
     P1 = S1 + kf1
@@ -82,14 +82,15 @@ def test_rotating_sample_offset():
         num_generations=50,
         tolerance_deg=0.1,
         refine_sample=False,
-        refine_goniometer=False
+        refine_goniometer=False,
+        hkl_search_range=15
     )
     
-    print(f"Best Score: {-score:.2f}/2.0")
-    if score > -1.5:
-        print("FAILURE: Indexer could not find the solution with static sample offset model.")
+    print(f"Best Score: {score:.2f}/2.0")
+    if score < 1.9:
+        print("FAILURE: Indexer could not find the solution.")
     else:
-        print("SUCCESS: Indexer found the solution.")
+        print("SUCCESS: Indexer found the solution with rotating sample offset model.")
 
 if __name__ == "__main__":
     test_rotating_sample_offset()
