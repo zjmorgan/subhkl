@@ -1602,6 +1602,30 @@ class FindUB:
             self.ki_vec = ki_vec / np.linalg.norm(ki_vec)
             print(f"--- Refined Beam Vector: {self.ki_vec} ---")
 
+        if refine_goniometer:
+            bound_rad = np.deg2rad(goniometer_bound_deg)
+            if goniometer_refine_mask is not None:
+                num_gonio_params = np.sum(goniometer_refine_mask)
+            else:
+                num_gonio_params = len(goniometer_axes)
+
+            offsets_norm = self.x[idx : idx + num_gonio_params]
+            idx += num_gonio_params
+
+            offsets = np.array([_forward_map_param(o, bound_rad) for o in offsets_norm])
+
+            # If we have a mask, expand to full size
+            if goniometer_refine_mask is not None:
+                full_offsets = np.zeros(len(goniometer_axes))
+                full_offsets[goniometer_refine_mask] = offsets
+                self.goniometer_offsets = np.rad2deg(full_offsets)
+            else:
+                self.goniometer_offsets = np.rad2deg(offsets)
+
+            print(
+                f"--- Refined Goniometer Offsets (deg): {self.goniometer_offsets} ---"
+            )
+
         # Return indexed peaks
         UB = U @ B
         UB_inv = np.linalg.inv(UB)
