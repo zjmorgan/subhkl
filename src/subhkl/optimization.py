@@ -15,7 +15,7 @@ from subhkl.utils import (
     jnp,
     jscipy_linalg,
     HAS_JAX,
-    OPTIMIZATION_BACKEND,
+    OPTIMIZATION_BACKEND,  # noqa: F401
     DifferentialEvolution,
     PSO,
     CMA_ES,
