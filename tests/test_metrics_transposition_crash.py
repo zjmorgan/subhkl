@@ -41,18 +41,12 @@ def test_metrics_transposition_crash():
         
     print(f"Running metrics with {num_peaks} predicted peaks...")
     try:
-        # This will trigger: xyz_pred_run = det.pixel_to_lab(i_p, j_p).T
-        # which becomes (3, 33).
-        # KDTree will think dimension is 33.
-        # tree.query(xyz_obs_run) will fail if xyz_obs_run is (1, 3).
         metrics(filename, found_peaks_file=found_peaks_file, instrument="MANDI")
         print("Metrics command completed successfully")
-    except ValueError as e:
-        print(f"Metrics command CRASHED as expected: {e}")
-        assert "vectors of length 33" in str(e)
-        print("BUG CONFIRMED: Transposition error in metrics command!")
     except Exception as e:
-        print(f"Metrics command CRASHED with unexpected error: {e}")
+        print(f"Metrics command CRASHED: {e}")
+        import traceback
+        traceback.print_exc()
         raise e
     finally:
         if os.path.exists(filename): os.remove(filename)

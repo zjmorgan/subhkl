@@ -717,7 +717,7 @@ def metrics(
                             continue
 
                         det = Detector(det_config)
-                        xyz_pred_run = det.pixel_to_lab(i_p, j_p).T
+                        xyz_pred_run = det.pixel_to_lab(i_p, j_p)
                         if xyz_pred_run.ndim == 1: xyz_pred_run = xyz_pred_run[np.newaxis, :]
                         
                         # KDTree match
