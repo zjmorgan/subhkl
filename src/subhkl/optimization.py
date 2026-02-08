@@ -425,6 +425,7 @@ class VectorizedObjective:
         mask_cpu = generate_hkl_mask(h_max, k_max, l_max, self.space_group)
         self.valid_hkl_mask = jnp.array(mask_cpu)
         self.mask_range_h = h_max; self.mask_range_k = k_max; self.mask_range_l = l_max
+        self.mask_range = h_max # Alias for backward compatibility with cubic-assumption tests
 
         idx_h = hkl_pool[0] + h_max
         idx_k = hkl_pool[1] + k_max
