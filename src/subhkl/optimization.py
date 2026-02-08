@@ -753,8 +753,9 @@ class VectorizedObjective:
         norm_obs = jnp.linalg.norm(kf_ki_sample, axis=1, keepdims=True)
         r_obs_unit = kf_ki_sample / (norm_obs + 1e-9)
         
-        # Re-project Unit Obs into Crystal Frame
-        r_obs_proj_unit = jnp.einsum("sin,sij->snj", r_obs_unit, UB)
+        # Re-project Unit Obs into Crystal Frame: (Batch, 3, N_obs) @ (Batch, 3, 3) -> (Batch, 3, N_obs)
+        # We need r_obs_unit_crystal = U^T @ r_obs_unit_lab
+        r_obs_proj_unit = jnp.einsum("sji,sjn->sin", UB, r_obs_unit)
         
         k_sq_obs = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         
@@ -773,12 +774,14 @@ class VectorizedObjective:
             idx_start = i * chunk_size
             hkl_chunk = jax.lax.dynamic_slice(hkl_pool_padded, (0, idx_start), (3, chunk_size))
             
-            # cosine = (r_obs @ UB) . h / |UB h|
-            q_chunk = jnp.einsum("sij,jk->sik", UB, hkl_chunk)
-            q_sq_chunk = jnp.sum(q_chunk**2, axis=1)
-            norm_q_chunk = jnp.sqrt(q_sq_chunk + 1e-9)
+            # dot_raw = (r_obs @ U) . h
+            # r_obs_proj_unit is (Batch, 3, N_obs), hkl_chunk is (3, Chunk)
+            # Result (Batch, N_obs, Chunk)
+            dot_raw = jnp.einsum("sin,ik->snk", r_obs_proj_unit, hkl_chunk)
             
-            dot_raw = jnp.matmul(r_obs_proj_unit, hkl_chunk)
+            # cosine = dot_raw / |UB h|
+            q_chunk = jnp.einsum("sij,jk->sik", UB, hkl_chunk)
+            norm_q_chunk = jnp.sqrt(jnp.sum(q_chunk**2, axis=1) + 1e-9)
             dots_chunk = dot_raw / (norm_q_chunk[:, None, :] + 1e-9)
             
             # --- FIX: Resolution & Wavelength Aware Top-K ---
@@ -831,14 +834,17 @@ class VectorizedObjective:
         lambda_sparse = k_sq_obs[:, :, None] / (k_dot_q + 1e-9)
         
         # Soft Lambda Penalty (Gaussian penalty for being outside bandwidth)
+        # Using a broader width (10% of bandwidth) to prevent numerical drowning of angular signal
         bw_width = self.wl_max_val - self.wl_min_val
         dist_wl = jnp.maximum(0.0, self.wl_min_val - lambda_sparse) + jnp.maximum(0.0, lambda_sparse - self.wl_max_val)
-        log_P_wl = -0.5 * (dist_wl / (0.01 * bw_width + 1e-9))**2
+        # Scale: lambda penalty should be comparable to angular penalty (order of 1-10)
+        # dist_wl of 0.1A should not give 1e5 cost.
+        log_P_wl = -0.5 * (dist_wl / (0.1 * bw_width + 1e-9))**2
         
         # Soft Resolution Penalty
         d_sparse = 1.0 / norm_q_selected
         dist_res = jnp.maximum(0.0, self.d_min - d_sparse) + jnp.maximum(0.0, d_sparse - self.d_max)
-        log_P_res = -0.5 * (dist_res / (0.01 * self.d_min + 1e-9))**2
+        log_P_res = -0.5 * (dist_res / (0.1 * self.d_min + 1e-9))**2
         
         # Angular kernel (Multi-scale: Peak + Wide Background)
         # Using a mixture of a narrow peak and a heavy-tailed background ensures
@@ -874,9 +880,10 @@ class VectorizedObjective:
         
         # 6. Score
         # We want to maximize the probability of matching ANY valid HKL (non-outlier).
+        # Optimization is MINIMIZATION, so we return the negative log-likelihood.
         log_P_match = log_P_softmax[:, :, :-1]
         log_prob_any = jax.nn.logsumexp(log_P_match, axis=2)
-        weighted_score = -jnp.sum(self.weights * log_prob_any, axis=1)
+        weighted_cost = -jnp.sum(self.weights * log_prob_any, axis=1)
 
         # Metrics for reporting
         best_k_idx = jnp.argmax(log_P_match, axis=2)
@@ -884,7 +891,7 @@ class VectorizedObjective:
         best_hkl = jnp.take(hkl_pool_padded.T, best_hkl_idx, axis=0)
         best_lamb = jnp.take_along_axis(lambda_sparse, best_k_idx[:, :, None], axis=2).squeeze(2)
 
-        return weighted_score, jnp.exp(log_prob_any), best_hkl, best_lamb
+        return weighted_cost, jnp.exp(log_prob_any), best_hkl, best_lamb
 
 
     def is_allowed_jax(self, h, k, l):
@@ -1463,7 +1470,10 @@ class FindUB:
                 if b_min < current_gen_best:
                     current_gen_best = b_min
             if trange is not None:
-                pbar.set_description(f"Gen {gen+1} | Best: {-current_gen_best:.1f}/{num_obs}")
+                if loss_method == "sinkhorn":
+                    pbar.set_description(f"Gen {gen+1} | Cost: {current_gen_best:.4f}")
+                else:
+                    pbar.set_description(f"Gen {gen+1} | Best: {-current_gen_best:.1f}/{num_obs}")
 
         all_fitness_list = []
         all_solutions_list = []
@@ -1479,7 +1489,10 @@ class FindUB:
         best_overall_member = all_solutions[best_idx]
         
         print(f"\n--- Optimization Complete ---")
-        print(f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})")
+        if loss_method == "sinkhorn":
+            print(f"Best overall cost: {best_overall_fitness:.4f} (from Run {best_idx+1})")
+        else:
+            print(f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx+1})")
         
         self.x = np.array(best_overall_member)
         
