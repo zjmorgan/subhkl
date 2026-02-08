@@ -1174,11 +1174,22 @@ class FindUB:
         # consistent mapping via run_indices in VectorizedObjective.
         static_R_input = self.R if self.R is not None else np.eye(3)
         if self.run_indices is not None:
+            max_run_id = int(np.max(self.run_indices))
+            num_runs_range = max_run_id + 1
             unique_runs, first_indices = np.unique(self.run_indices, return_index=True)
+            
             if goniometer_angles is not None and goniometer_angles.shape[1] == num_obs:
-                goniometer_angles = goniometer_angles[:, first_indices]
+                # Create expanded array covering all run IDs
+                # Fill missing runs with the first available rotation/angle
+                new_angles = np.tile(goniometer_angles[:, first_indices[0:1]], (1, num_runs_range))
+                new_angles[:, unique_runs] = goniometer_angles[:, first_indices]
+                goniometer_angles = new_angles
+                
             if self.R is not None and self.R.ndim == 3 and self.R.shape[0] == num_obs:
-                static_R_input = self.R[first_indices]
+                # Create expanded stack covering all run IDs
+                new_R = np.tile(self.R[first_indices[0:1]], (num_runs_range, 1, 1))
+                new_R[unique_runs] = self.R[first_indices]
+                static_R_input = new_R
         
         # Always use Lab frame vectors for Objective initialization.
         kf_ki_input = kf_ki_dir_lab

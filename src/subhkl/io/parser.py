@@ -758,7 +758,16 @@ def metrics(
                     if R_file.ndim == 3 and len(R_file) == len(matched_h):
                         matched_R = R_file
                     else:
-                        matched_R = np.array([R_file[int(r)] if R_file.ndim==3 else R_file for r in matched_run])
+                        # --- FIX: Robust Mapping ---
+                        # In multi-run datasets, matched_run indices must map to R_file.
+                        # If a run ID is missing from R_file, we use the first rotation as fallback.
+                        def safe_get_R(r_idx):
+                            ridx = int(r_idx)
+                            if ridx < len(R_file):
+                                return R_file[ridx]
+                            else:
+                                return R_file[0]
+                        matched_R = np.array([safe_get_R(r) if R_file.ndim==3 else R_file for r in matched_run])
                 else:
                     matched_R = np.tile(np.eye(3)[None, ...], (len(matched_h), 1, 1))
 
