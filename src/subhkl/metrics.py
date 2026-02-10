@@ -18,12 +18,12 @@ from subhkl.config import beamlines
 def _get_safe_R_stack(R_file_in, run_indices_in, target_len):
     """
     Helper function to robustly construct a rotation matrix stack.
-    
+
     Args:
         R_file_in: Input rotation data (None, 1 matrix, or stack of matrices)
         run_indices_in: Run indices for lookup
         target_len: Target length of output
-        
+
     Returns:
         List of rotation matrices
     """
@@ -56,14 +56,14 @@ def compute_metrics(
 ) -> dict:
     """
     Compute indexing quality metrics from indexed peaks.
-    
+
     Args:
         filename: HDF5 file with indexed peaks and sample/beam parameters
         found_peaks_file: Optional HDF5 file with observed peaks for comparison
         instrument: Instrument name (required if matching peaks)
         d_min: Optional minimum d-spacing filter
         per_run: If True, include per-run error statistics
-        
+
     Returns:
         Dictionary with keys:
             - 'median_d_err': Median distance error
@@ -246,9 +246,7 @@ def compute_metrics(
             # Standard case: load from filename
             with h5py.File(filename, "r") as f:
                 if "peaks/h" not in f:
-                    return {
-                        "error_message": "No peaks/h dataset found in file"
-                    }
+                    return {"error_message": "No peaks/h dataset found in file"}
                 matched_h = f["peaks/h"][()]
                 matched_k = f["peaks/k"][()]
                 matched_l = f["peaks/l"][()]
@@ -301,9 +299,7 @@ def compute_metrics(
                 d_vals = 1.0 / q_mag
             d_mask = d_vals >= d_min
             if np.sum(d_mask) == 0:
-                return {
-                    "error_message": f"No peaks found with d >= {d_min} A."
-                }
+                return {"error_message": f"No peaks found with d >= {d_min} A."}
             h, k, l = h[d_mask], k[d_mask], l[d_mask]
             lam = lam[d_mask]
             xyz_det = xyz_det[d_mask]
@@ -351,7 +347,6 @@ def compute_metrics(
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
-        return {
-            "error_message": f"Exception during metrics computation: {str(e)}"
-        }
+        return {"error_message": f"Exception during metrics computation: {str(e)}"}

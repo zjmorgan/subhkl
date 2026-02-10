@@ -656,7 +656,7 @@ def metrics(
 ):
     """
     CLI command to compute and display indexing quality metrics.
-    
+
     Calls compute_metrics from subhkl.metrics and formats output for display.
     """
     # Typer API might pass OptionInfo objects if called directly (e.g. in tests)

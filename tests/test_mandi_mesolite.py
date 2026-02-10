@@ -59,9 +59,10 @@ INDEXER_DEFAULTS = {
     "strategy_name": "DE",
     "n_runs": 1,
     "population_size": 1000,
-    "gens": 100,
+    "gens": 200,
     "seed": 12345,
     "sigma_init": None,
+    "tolerance_deg": 0.5,
     "refine_lattice": False,
     "lattice_bound_frac": 0.05,
     "refine_goniometer": False,
@@ -72,7 +73,7 @@ INDEXER_DEFAULTS = {
     "refine_beam": False,
     "beam_bound_deg": 1.0,
     "bootstrap_filename": None,
-    "loss_method": "cosine",
+    "loss_method": "gaussian",
     "d_min": None,
     "d_max": None,
     "hkl_search_range": 20,
@@ -265,7 +266,6 @@ class TestMandiMesoliteSingleRun:
 
         print(f"✓ Peak predictor completed: {predictor_output}")
 
-
     def test_04_peak_predictor(self, mesolite_input_file, temp_output_dir):
         """Test peak prediction from indexed solution."""
         # Run finder and indexer first
@@ -332,15 +332,14 @@ class TestMandiMesoliteSingleRun:
             # Verify we have predictions
             assert len(bank_group["h"]) > 0, "No predicted peaks in first bank"
 
-        
         metrics = compute_metrics(indexer_output)
-        assert metrics['median_d_err'] is not None and metrics['median_d_err'] > 0
-        assert metrics['mean_d_err'] is not None and metrics['mean_d_err'] > 0
-        assert metrics['max_d_err'] is not None and metrics['max_d_err'] > 0
-        assert metrics['median_ang_err'] is not None and metrics['median_ang_err'] > 0
-        assert metrics['mean_ang_err'] is not None and metrics['mean_ang_err'] > 0
-        assert metrics['max_ang_err'] is not None and metrics['max_ang_err'] > 0
-        assert metrics['num_peaks'] is not None and metrics['num_peaks'] > 0
+        assert metrics["median_d_err"] is not None and metrics["median_d_err"] > 0
+        assert metrics["mean_d_err"] is not None and metrics["mean_d_err"] > 0
+        assert metrics["max_d_err"] is not None and metrics["max_d_err"] > 0
+        assert metrics["median_ang_err"] is not None and metrics["median_ang_err"] > 0
+        assert metrics["mean_ang_err"] is not None and metrics["mean_ang_err"] > 0
+        assert metrics["max_ang_err"] is not None and metrics["max_ang_err"] > 0
+        assert metrics["num_peaks"] is not None and metrics["num_peaks"] > 0
 
         print(f"✓ Metrics calculation completed: {metrics}")
 
@@ -518,7 +517,7 @@ class TestMandiMesoliteSingleRun:
 
         # check the accuracy
         metrics = compute_metrics(indexer_output)
-        median_ang_err_deg = metrics['median_ang_err']
+        median_ang_err_deg = metrics["median_ang_err"]
 
         # 0.3 deg median angular devation is a reasonable constraint on indexing accuracy
         assert median_ang_err_deg < 0.3

@@ -303,9 +303,7 @@ def predict_reflections_on_panel(
     else:
         s_lab = sample_offset
 
-    mask_panel, row, col = detector.reflections_mask(
-        x, y, z, sample_offset=s_lab
-    )
+    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=s_lab)
 
     return (
         row[mask_panel],

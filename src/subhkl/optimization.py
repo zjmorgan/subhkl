@@ -1243,12 +1243,12 @@ class VectorizedObjective:
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
             kf = v / jnp.where(dist == 0, 1.0, dist)
             ki = ki_vec[:, :, None]  # (S, 3, 1)
-            q_lab = (kf - ki) / (2 * jnp.pi)
+            q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
             kf = self.kf_lab_fixed[None, :, :].repeat(x.shape[0], axis=0)
             ki = ki_vec[:, :, None]
-            q_lab = (kf - ki) / (2 * jnp.pi)
+            q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
