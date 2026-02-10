@@ -24,7 +24,9 @@ try:
     from tqdm import tqdm
 except ImportError:
     # Fallback if tqdm is not installed
-    tqdm = lambda x, **kwargs: x
+    def tqdm(x, **kwargs):
+        return x
+
 
 from subhkl.config import (
     beamlines,
@@ -36,8 +38,11 @@ from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
-from subhkl.spacegroup import is_systematically_absent
-from subhkl.utils import predict_reflections_on_panel, calculate_angular_error, generate_reflections
+from subhkl.utils import (
+    predict_reflections_on_panel,
+    calculate_angular_error,
+    generate_reflections,
+)
 
 DetectorPeaks = namedtuple(
     "DetectorPeaks",
@@ -55,8 +60,8 @@ DetectorPeaks = namedtuple(
         "image_index",
         "gonio_axes",
         "gonio_angles",
-        "gonio_names"
-    ]
+        "gonio_names",
+    ],
 )
 
 IntegrationResult = namedtuple(
@@ -73,15 +78,18 @@ IntegrationResult = namedtuple(
         "bank",
         "xyz",
         "R",
-        "angles"
-    ]
+        "angles",
+    ],
 )
 
 # ==============================================================================
 # WORKER FUNCTIONS (Multiprocessing)
 # ==============================================================================
 
-def _run_harvest_local_max(im, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False, **kwargs):
+
+def _run_harvest_local_max(
+    im, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False, **kwargs
+):
     """
     Worker for finding peak candidates using local maxima search.
     """
@@ -101,23 +109,38 @@ def _run_harvest_local_max(im, max_peaks=200, min_pix=50, min_rel_intensity=0.5,
     )
     return coords[:, 0], coords[:, 1]
 
+
 def _run_harvest_thresholding(im, **kwargs):
     """
     Worker for finding peak candidates using adaptive thresholding.
     """
     valid_keys = [
-        'noise_cutoff_quantile', 'min_peak_dist_pixels', 'blur_kernel_sigma', 
-        'open_kernel_size_pixels', 'mask_file', 'mask_rel_erosion_radius',
-        'show_steps', 'show_scale'
+        "noise_cutoff_quantile",
+        "min_peak_dist_pixels",
+        "blur_kernel_sigma",
+        "open_kernel_size_pixels",
+        "mask_file",
+        "mask_rel_erosion_radius",
+        "show_steps",
+        "show_scale",
     ]
     filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys}
     alg = ThresholdingPeakFinder(**filtered_kwargs)
     coords = alg.find_peaks(im)
     return coords[:, 0], coords[:, 1]
 
+
 def _process_single_image(
-    img_key, img_label, physical_bank, image, det_config,
-    finder_info, integration_params, mask_info, geometry_info, viz_info 
+    img_key,
+    img_label,
+    physical_bank,
+    image,
+    det_config,
+    finder_info,
+    integration_params,
+    mask_info,
+    geometry_info,
+    viz_info,
 ):
     """
     Worker function to process a single image in a separate process.
@@ -130,19 +153,19 @@ def _process_single_image(
     do_viz, viz_prefix = viz_info
 
     det = Detector(det_config)
-    
+
     # 1. Find Peaks
-    if algo == 'sparse_rbf':
+    if algo == "sparse_rbf":
         i, j = pre_coords
-    elif algo == 'peak_local_max':
+    elif algo == "peak_local_max":
         i, j = _run_harvest_local_max(image, **harvest_kwargs)
-    elif algo == 'thresholding':
+    elif algo == "thresholding":
         i, j = _run_harvest_thresholding(image, **harvest_kwargs)
     else:
         raise ValueError(f"Unknown algorithm: {algo}")
-        
+
     centers = np.stack([i, j], axis=-1)
-    
+
     # 2. Setup Mask
     if mask_file is not None:
         mask_im = np.array(Image.open(mask_file))
@@ -154,11 +177,11 @@ def _process_single_image(
             mask = mask_im.astype(bool)
     else:
         mask = np.full(image.shape, True)
-        
+
     # 3. Integration Setup (Sigma Override)
     # Rebuild integrator from params to avoid sharing state
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
-    
+
     if integration_params.get("region_growth_minimum_sigma") is not None:
         mean = np.mean(image[mask])
         std = np.std(image[mask])
@@ -166,42 +189,49 @@ def _process_single_image(
         integrator.region_grower.min_intensity = mean + n_sigma * std
 
     # 4. Integrate
-    int_result, hulls = integrator.integrate_peaks(physical_bank, image, centers, return_hulls=True)
-    
+    int_result, hulls = integrator.integrate_peaks(
+        physical_bank, image, centers, return_hulls=True
+    )
+
     bank_intensity = np.array([res[3] for res in int_result])
     bank_sigma = np.array([res[5] for res in int_result])
-    
+
     # Strict Keeping (Hull Required)
     keep = []
     for idx, res in enumerate(int_result):
         has_hull = hulls[idx][1] is not None
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
-    
+
     # 5. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
+
         # Force Agg backend to avoid thread issues
         current_backend = plt.get_backend()
-        if current_backend.lower() != 'agg': plt.switch_backend('Agg')
+        if current_backend.lower() != "agg":
+            plt.switch_backend("Agg")
         try:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].imshow(1 + image, norm="log", cmap="binary", origin='lower')
+            axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
             axes[0].scatter(j, i, marker="1", c="blue")
             axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            axes[1].imshow(1 + image, norm="log", cmap="binary", origin='lower')
+            axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
             forbidden = ~mask
             if np.any(forbidden):
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]
-                axes[1].imshow(overlay, origin='lower')
+                axes[1].imshow(overlay, origin="lower")
             for _, hull, _, _ in hulls:
                 if hull is not None:
                     for simplex in hull.simplices:
-                        axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
+                        axes[1].plot(
+                            hull.points[simplex, 1], hull.points[simplex, 0], c="red"
+                        )
             axes[1].set_title("Integrated Hulls")
             fname = f"{img_label}_bank{physical_bank}.png"
-            if viz_prefix is not None: fname = f"{viz_prefix}_{fname}"
+            if viz_prefix is not None:
+                fname = f"{viz_prefix}_{fname}"
             fig.savefig(fname)
             plt.close(fig)
         except Exception as e:
@@ -214,14 +244,22 @@ def _process_single_image(
         sigmas = bank_sigma[keep]
         tt, az = det.pixel_to_angles(i, j)
         lab_coords = det.pixel_to_lab(i, j)
-        if lab_coords.ndim == 1: lab_coords = lab_coords[np.newaxis, :]
+        if lab_coords.ndim == 1:
+            lab_coords = lab_coords[np.newaxis, :]
         num = len(tt)
-        
+
         # Radii Calculation
         radii = []
         kept_indices = np.where(keep)[0]
         tt_rad, az_rad = np.deg2rad(tt), np.deg2rad(az)
-        v_centers = np.stack([np.sin(tt_rad) * np.cos(az_rad), np.sin(tt_rad) * np.sin(az_rad), np.cos(tt_rad)], axis=1)
+        v_centers = np.stack(
+            [
+                np.sin(tt_rad) * np.cos(az_rad),
+                np.sin(tt_rad) * np.sin(az_rad),
+                np.cos(tt_rad),
+            ],
+            axis=1,
+        )
         for k_idx, orig_idx in enumerate(kept_indices):
             _, hull, _, _ = hulls[orig_idx]
             if hull is None:
@@ -231,18 +269,31 @@ def _process_single_image(
             v_i, v_j = verts[:, 0], verts[:, 1]
             v_tt, v_az = det.pixel_to_angles(v_i, v_j, sample_offset=None)
             v_tt_r, v_az_r = np.deg2rad(v_tt), np.deg2rad(v_az)
-            v_vecs = np.stack([np.sin(v_tt_r) * np.cos(v_az_r), np.sin(v_tt_r) * np.sin(v_az_r), np.cos(v_tt_r)], axis=1)
+            v_vecs = np.stack(
+                [
+                    np.sin(v_tt_r) * np.cos(v_az_r),
+                    np.sin(v_tt_r) * np.sin(v_az_r),
+                    np.cos(v_tt_r),
+                ],
+                axis=1,
+            )
             dots = np.clip(v_vecs @ v_centers[k_idx], -1.0, 1.0)
             radii.append(np.max(np.arccos(dots)))
-            
+
         res = {
-            'two_theta': tt.tolist(), 'az_phi': az.tolist(), 'R': [gonio_R] * num,
-            'lamda_min': [wl_min] * num, 'lamda_max': [wl_max] * num,
-            'intensity': intensities.tolist(), 'sigma': sigmas.tolist(),
-            'radii': radii, 'xyz': lab_coords.tolist(), 'banks': [physical_bank] * num,
-            'image_indices': [img_key] * num,
-            'gonio_angles': [gonio_angles] * num if gonio_angles is not None else [],
-            'count': num
+            "two_theta": tt.tolist(),
+            "az_phi": az.tolist(),
+            "R": [gonio_R] * num,
+            "lamda_min": [wl_min] * num,
+            "lamda_max": [wl_max] * num,
+            "intensity": intensities.tolist(),
+            "sigma": sigmas.tolist(),
+            "radii": radii,
+            "xyz": lab_coords.tolist(),
+            "banks": [physical_bank] * num,
+            "image_indices": [img_key] * num,
+            "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
+            "count": num,
         }
         log_msg = f"Integrated {len(i)}/{len(centers)} peaks for {img_label} (Bank {physical_bank})"
     else:
@@ -250,14 +301,17 @@ def _process_single_image(
         log_msg = f"{img_label} (Bank {physical_bank}) had 0 valid peaks"
     return res, log_msg
 
+
 def _predict_single_bank(
-    bank_id, 
-    det_config, 
-    unit_cell_params, 
-    RUB, 
-    wavelength_min, wavelength_max, 
-    sample_offset, ki_vec,
-    R_all=None
+    bank_id,
+    det_config,
+    unit_cell_params,
+    RUB,
+    wavelength_min,
+    wavelength_max,
+    sample_offset,
+    ki_vec,
+    R_all=None,
 ):
     """
     Worker function for predicting peaks on a single detector bank.
@@ -269,53 +323,72 @@ def _predict_single_bank(
 
     det = Detector(det_config)
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
-        detector=det, h=h, k=k, l=l, RUB=RUB,
-        wavelength_min=wavelength_min, wavelength_max=wavelength_max,
-        sample_offset=sample_offset, ki_vec=ki_vec, R_all=R_all
+        detector=det,
+        h=h,
+        k=k,
+        l=l,
+        RUB=RUB,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max,
+        sample_offset=sample_offset,
+        ki_vec=ki_vec,
+        R_all=R_all,
     )
     if len(row) > 0:
         return bank_id, [row, col, h_f, k_f, l_f, wl_f]
     return bank_id, None
 
+
 def _integrate_single_bank(
     bank_id,
     image,
-    peaks, 
+    peaks,
     det_config,
     integration_params,
     integration_method,
     viz_info,
-    metrics_info 
+    metrics_info,
 ):
     # Unpack predicted peaks (i, j, h, k, l, wl)
     bank_i, bank_j, bank_h, bank_k, bank_l, bank_wl = peaks
     centers = np.stack([bank_i, bank_j], axis=-1)
-    
+
     det = Detector(det_config)
-    
+
     # --- METRICS: Comparison with found peaks ---
     metrics_str = ""
-    found_peaks_xyz, found_peaks_bank, found_peaks_run, RUB, current_angles_val, current_R_val, sample_offset, ki_vec = metrics_info
+    (
+        found_peaks_xyz,
+        found_peaks_bank,
+        found_peaks_run,
+        RUB,
+        current_angles_val,
+        current_R_val,
+        sample_offset,
+        ki_vec,
+    ) = metrics_info
 
     # CORRECTED: Account for Sample-frame offset rotation
-    s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
+    s_lab = (
+        current_R_val @ sample_offset if current_R_val is not None else sample_offset
+    )
     bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
-    
+
     # Correctly handle lab coordinate shape (N, 3)
-    lab_coords = det.pixel_to_lab(bank_i, bank_j) 
-    if lab_coords.ndim == 1: 
-        lab_coords = lab_coords[np.newaxis, :] # (1, 3) -> (N=1, 3)
-    
+    lab_coords = det.pixel_to_lab(bank_i, bank_j)
+    if lab_coords.ndim == 1:
+        lab_coords = lab_coords[np.newaxis, :]  # (1, 3) -> (N=1, 3)
+
     if found_peaks_xyz is not None and len(centers) > 0:
         f_xyz_valid = np.array([])
-        
+
         # Priority 1: Filter by run index (for merged multi-run files)
         if found_peaks_run is not None:
-            mask_run = (found_peaks_run == bank_id)
+            mask_run = found_peaks_run == bank_id
             f_xyz_valid = found_peaks_xyz[mask_run]
         # Priority 2: Filter by physical bank ID
         elif found_peaks_bank is not None:
-            mask_bank = (found_peaks_bank == bank_id)
+            mask_bank = found_peaks_bank == bank_id
             f_xyz_valid = found_peaks_xyz[mask_bank]
         # Priority 3: Spatial proximity (for single files)
         else:
@@ -324,40 +397,60 @@ def _integrate_single_bank(
             f_vecs = found_peaks_xyz - s_off
             dots = np.dot(f_vecs, det_vec)
             f_xyz_front = found_peaks_xyz[dots > 0]
-            
+
             if len(f_xyz_front) > 0:
-                f_row, f_col = det.lab_to_pixel(f_xyz_front[:,0], f_xyz_front[:,1], f_xyz_front[:,2], clip=False)
-                on_sensor = (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                f_row, f_col = det.lab_to_pixel(
+                    f_xyz_front[:, 0], f_xyz_front[:, 1], f_xyz_front[:, 2], clip=False
+                )
+                on_sensor = (
+                    (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                )
                 f_xyz_valid = f_xyz_front[on_sensor]
-        
+
         if len(f_xyz_valid) > 0:
-            f_row_valid, f_col_valid = det.lab_to_pixel(f_xyz_valid[:,0], f_xyz_valid[:,1], f_xyz_valid[:,2], clip=False)
-            on_panel_found = (f_row_valid >= 0) & (f_row_valid < det.n) & (f_col_valid >= 0) & (f_col_valid < det.m)
-            
+            f_row_valid, f_col_valid = det.lab_to_pixel(
+                f_xyz_valid[:, 0], f_xyz_valid[:, 1], f_xyz_valid[:, 2], clip=False
+            )
+            on_panel_found = (
+                (f_row_valid >= 0)
+                & (f_row_valid < det.n)
+                & (f_col_valid >= 0)
+                & (f_col_valid < det.m)
+            )
+
             if np.sum(on_panel_found) > 0:
                 f_row_valid = f_row_valid[on_panel_found]
                 f_col_valid = f_col_valid[on_panel_found]
                 f_xyz_valid = f_xyz_valid[on_panel_found]
-                
+
                 f_pixels = np.stack([f_row_valid, f_col_valid], axis=1)
                 p_pixels = np.stack([bank_i, bank_j], axis=1)
-                
+
                 tree = scipy.spatial.KDTree(p_pixels)
                 dists_pix, idxs = tree.query(f_pixels)
                 valid_matches = dists_pix < 20.0
-                
+
                 if np.sum(valid_matches) > 0:
                     matched_idxs = idxs[valid_matches]
                     f_xyz_matched = f_xyz_valid[valid_matches]
                     d_err, ang_err = calculate_angular_error(
-                        f_xyz_matched, 
-                        bank_h[matched_idxs], bank_k[matched_idxs], bank_l[matched_idxs], bank_wl[matched_idxs], 
-                        RUB, sample_offset, ki_vec, current_R_val
+                        f_xyz_matched,
+                        bank_h[matched_idxs],
+                        bank_k[matched_idxs],
+                        bank_l[matched_idxs],
+                        bank_wl[matched_idxs],
+                        RUB,
+                        sample_offset,
+                        ki_vec,
+                        current_R_val,
                     )
                     metrics_str = f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, $\\Delta d$={np.median(d_err):.3f}$\\AA$"
 
     # --- INTEGRATION ---
-    mask_file, mask_erosion = integration_params.get("integration_mask_file"), integration_params.get("integration_mask_rel_erosion_radius", 0.05)
+    mask_file, mask_erosion = (
+        integration_params.get("integration_mask_file"),
+        integration_params.get("integration_mask_rel_erosion_radius", 0.05),
+    )
     if mask_file is not None:
         mask_im = np.array(Image.open(mask_file))
         radius = max(1, int(min(mask_im.shape) * mask_erosion))
@@ -376,9 +469,13 @@ def _integrate_single_bank(
     valid_indices = []
     for idx, (r, c) in enumerate(centers):
         r_int, c_int = int(r), int(c)
-        if (0 <= r_int < mask.shape[0] and 0 <= c_int < mask.shape[1] and mask[r_int, c_int]):
+        if (
+            0 <= r_int < mask.shape[0]
+            and 0 <= c_int < mask.shape[1]
+            and mask[r_int, c_int]
+        ):
             valid_indices.append(idx)
-    
+
     centers = centers[valid_indices]
     bank_tt = bank_tt[valid_indices]
     bank_az = bank_az[valid_indices]
@@ -389,12 +486,16 @@ def _integrate_single_bank(
     lab_coords = lab_coords[valid_indices]
 
     int_result, hulls = integrator.integrate_peaks(
-        bank_id, image, centers, integration_method=integration_method, return_hulls=True
+        bank_id,
+        image,
+        centers,
+        integration_method=integration_method,
+        return_hulls=True,
     )
 
     bank_intensity = np.array([res[3] for res in int_result])
     bank_sigma = np.array([res[5] for res in int_result])
-    
+
     keep = []
     for idx, res in enumerate(int_result):
         has_hull = hulls[idx][1] is not None
@@ -406,53 +507,89 @@ def _integrate_single_bank(
     do_viz, viz_prefix, viz_label = viz_info
     if do_viz:
         import matplotlib.pyplot as plt
-        if plt.get_backend().lower() != 'agg': plt.switch_backend('Agg')
+
+        if plt.get_backend().lower() != "agg":
+            plt.switch_backend("Agg")
         plt.rc("font", size=8)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        axes[0].imshow(1 + image, norm="log", cmap="binary", origin='lower')
+        axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
         axes[0].set_title(f"{viz_label}")
-        
+
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
-            axes[0].scatter(centers[:, 1], centers[:, 0], marker="1", c="blue", label=label_pred, s=40)
-        
-        axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=False, ncol=1)
-        
-        for p_i, p_j, p_h, p_k, p_l in zip(centers[:,0], centers[:,1], bank_h, bank_k, bank_l):
+            axes[0].scatter(
+                centers[:, 1],
+                centers[:, 0],
+                marker="1",
+                c="blue",
+                label=label_pred,
+                s=40,
+            )
+
+        axes[0].legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.15),
+            fancybox=True,
+            shadow=False,
+            ncol=1,
+        )
+
+        for p_i, p_j, p_h, p_k, p_l in zip(
+            centers[:, 0], centers[:, 1], bank_h, bank_k, bank_l
+        ):
             is_zone = (p_h == 0) or (p_k == 0) or (p_l == 0)
             is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
             if is_zone or is_nodal:
-                c = 'red' if is_nodal else 'black'
-                w = 'bold' if is_nodal else 'normal'
-                axes[0].text(p_j, p_i, f"({p_h},{p_k},{p_l})", color=c, fontsize=6, fontweight=w, clip_on=True)
+                c = "red" if is_nodal else "black"
+                w = "bold" if is_nodal else "normal"
+                axes[0].text(
+                    p_j,
+                    p_i,
+                    f"({p_h},{p_k},{p_l})",
+                    color=c,
+                    fontsize=6,
+                    fontweight=w,
+                    clip_on=True,
+                )
 
-        plt_im = axes[1].imshow(1 + image, norm="log", cmap="binary", origin='lower')
+        axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
         forbidden = ~mask
         overlay = np.zeros((*forbidden.shape, 4))
         overlay[forbidden] = [0, 1, 1, 0.3]
-        axes[1].imshow(overlay, origin='lower')
+        axes[1].imshow(overlay, origin="lower")
         axes[1].set_title("Integrated peaks")
-        
+
         for _, hull, _, _ in hulls:
             if hull is not None:
                 for simplex in hull.simplices:
-                    axes[1].plot(hull.points[simplex, 1], hull.points[simplex, 0], c="red")
-        
+                    axes[1].plot(
+                        hull.points[simplex, 1], hull.points[simplex, 0], c="red"
+                    )
+
         # New Naming: {prefix}_{label}_int.png
         out_name = f"{viz_label}_int.png"
-        if viz_prefix: out_name = f"{viz_prefix}_{out_name}"
-        fig.savefig(out_name, bbox_inches='tight')
+        if viz_prefix:
+            out_name = f"{viz_prefix}_{out_name}"
+        fig.savefig(out_name, bbox_inches="tight")
         plt.close(fig)
 
     return {
-        'h': bank_h[keep], 'k': bank_k[keep], 'l': bank_l[keep],
-        'intensity': bank_intensity[keep], 'sigma': bank_sigma[keep],
-        'tt': bank_tt[keep], 'az': bank_az[keep],
-        'wavelength': bank_wl[keep], 'xyz': lab_coords[keep].tolist(),
-        'bank': [bank_id] * sum(keep),
-        'R': [current_R_val] * sum(keep) if current_R_val is not None else [],
-        'angles': [current_angles_val] * sum(keep) if current_angles_val is not None else []
+        "h": bank_h[keep],
+        "k": bank_k[keep],
+        "l": bank_l[keep],
+        "intensity": bank_intensity[keep],
+        "sigma": bank_sigma[keep],
+        "tt": bank_tt[keep],
+        "az": bank_az[keep],
+        "wavelength": bank_wl[keep],
+        "xyz": lab_coords[keep].tolist(),
+        "bank": [bank_id] * sum(keep),
+        "R": [current_R_val] * sum(keep) if current_R_val is not None else [],
+        "angles": [current_angles_val] * sum(keep)
+        if current_angles_val is not None
+        else [],
     }
+
 
 class Peaks:
     def __init__(
@@ -465,13 +602,13 @@ class Peaks:
         wavelength_max: typing.Optional[float] = None,
     ):
         name, ext = os.path.splitext(filename)
-        self.filename = filename  
+        self.filename = filename
         self.instrument = instrument
-        
+
         self.goniometer_axes_raw = None
         self.goniometer_angles_raw = None
         self.goniometer_names_raw = None
-        self.bank_mapping = {}  
+        self.bank_mapping = {}
 
         if goniometer_axes is not None and goniometer_angles is not None:
             self.goniometer_rotation = calc_goniometer_rotation_matrix(
@@ -488,57 +625,79 @@ class Peaks:
         if ext == ".h5":
             is_merged = False
             try:
-                with h5py.File(filename, 'r') as f:
+                with h5py.File(filename, "r") as f:
                     if "images" in f:
                         is_merged = True
             except OSError:
-                pass 
+                pass
 
             if is_merged:
                 print(f"Detected Merged HDF5 format: {filename}")
                 self.ims = self.load_merged_h5(filename)
-                with h5py.File(filename, 'r') as f:
+                with h5py.File(filename, "r") as f:
                     if "instrument/wavelength" in f:
                         wl = f["instrument/wavelength"][()]
-                        self.wavelength_min, self.wavelength_max = float(wl[0]), float(wl[1])
+                        self.wavelength_min, self.wavelength_max = (
+                            float(wl[0]),
+                            float(wl[1]),
+                        )
                     else:
-                        self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
+                        self.wavelength_min, self.wavelength_max = (
+                            self.get_wavelength_from_settings()
+                        )
 
                     if goniometer_axes is None or goniometer_angles is None:
                         if "goniometer/axes" in f and "goniometer/angles" in f:
                             self.goniometer_axes_raw = f["goniometer/axes"][()]
-                            self.goniometer_angles_raw = f["goniometer/angles"][()] 
+                            self.goniometer_angles_raw = f["goniometer/angles"][()]
                             if "goniometer/names" in f:
                                 self.goniometer_names_raw = [
                                     n.decode() if isinstance(n, bytes) else str(n)
                                     for n in f["goniometer/names"][()]
                                 ]
                             if self.goniometer_angles_raw.ndim == 2:
-                                self.goniometer_rotation = np.stack([
-                                    calc_goniometer_rotation_matrix(self.goniometer_axes_raw, ang)
-                                    for ang in self.goniometer_angles_raw
-                                ])
+                                self.goniometer_rotation = np.stack(
+                                    [
+                                        calc_goniometer_rotation_matrix(
+                                            self.goniometer_axes_raw, ang
+                                        )
+                                        for ang in self.goniometer_angles_raw
+                                    ]
+                                )
                             else:
-                                self.goniometer_rotation = calc_goniometer_rotation_matrix(
-                                    self.goniometer_axes_raw, self.goniometer_angles_raw
+                                self.goniometer_rotation = (
+                                    calc_goniometer_rotation_matrix(
+                                        self.goniometer_axes_raw,
+                                        self.goniometer_angles_raw,
+                                    )
                                 )
                         else:
                             self.goniometer_rotation = np.eye(3)
             else:
                 self.ims = self.load_nexus(filename)
-                self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
+                self.wavelength_min, self.wavelength_max = (
+                    self.get_wavelength_from_settings()
+                )
                 if goniometer_axes is None or goniometer_angles is None:
-                    axes, angles, names = get_rotation_data_from_nexus(filename, self.instrument)
-                    self.goniometer_rotation = calc_goniometer_rotation_matrix(axes, angles)
+                    axes, angles, names = get_rotation_data_from_nexus(
+                        filename, self.instrument
+                    )
+                    self.goniometer_rotation = calc_goniometer_rotation_matrix(
+                        axes, angles
+                    )
                     self.goniometer_axes_raw = axes
                     self.goniometer_angles_raw = np.array(angles)
                     self.goniometer_names_raw = names
         else:
             self.ims = {0: np.array(Image.open(filename))}
-            self.wavelength_min, self.wavelength_max = self.get_wavelength_from_settings()
+            self.wavelength_min, self.wavelength_max = (
+                self.get_wavelength_from_settings()
+            )
 
-        if wavelength_min: self.wavelength_min = wavelength_min
-        if wavelength_max: self.wavelength_max = wavelength_max
+        if wavelength_min:
+            self.wavelength_min = wavelength_min
+        if wavelength_max:
+            self.wavelength_max = wavelength_max
 
     def get_wavelength_from_settings(self) -> tuple[float, float]:
         settings = reduction_settings[self.instrument]
@@ -548,7 +707,7 @@ class Peaks:
     def load_merged_h5(self, filename: str) -> dict[int, npt.NDArray]:
         ims = {}
         with h5py.File(filename, "r") as f:
-            images = f["images"] 
+            images = f["images"]
             N = images.shape[0]
             if "bank_ids" in f:
                 bank_ids = f["bank_ids"][()]
@@ -556,7 +715,7 @@ class Peaks:
                 bank_ids = np.zeros(N, dtype=int)
             if "files" in f and "file_offsets" in f:
                 self.image_files_raw = [
-                    n.decode('utf-8') if isinstance(n, bytes) else str(n) 
+                    n.decode("utf-8") if isinstance(n, bytes) else str(n)
                     for n in f["files"][()]
                 ]
                 self.file_offsets = f["file_offsets"][()]
@@ -589,7 +748,7 @@ class Peaks:
                     m, n, offset = det["m"], det["n"], det["offset"]
                     bc = np.bincount(array - offset, minlength=m * n)
                     if np.sum(bc) > 0:
-                        if settings.get('YAxisIsFastVaryingIndex'):
+                        if settings.get("YAxisIsFastVaryingIndex"):
                             ims[bank] = bc.reshape(m, n).T
                         else:
                             ims[bank] = bc.reshape(n, m)
@@ -607,13 +766,17 @@ class Peaks:
 
     def get_run_id(self, img_key: int) -> int:
         """Helper to resolve the run ID for an image key."""
-        if hasattr(self, 'file_offsets') and self.file_offsets is not None:
-            return int(np.searchsorted(self.file_offsets, img_key, side='right') - 1)
+        if hasattr(self, "file_offsets") and self.file_offsets is not None:
+            return int(np.searchsorted(self.file_offsets, img_key, side="right") - 1)
         return img_key
 
     def get_image_label(self, img_key):
         """Helper to resolve a readable label for an image key."""
-        if hasattr(self, 'image_files_raw') and self.image_files_raw and hasattr(self, 'file_offsets'):
+        if (
+            hasattr(self, "image_files_raw")
+            and self.image_files_raw
+            and hasattr(self, "file_offsets")
+        ):
             file_idx = bisect.bisect_right(self.file_offsets, img_key) - 1
             if 0 <= file_idx < len(self.image_files_raw):
                 orig_name = os.path.basename(self.image_files_raw[file_idx])
@@ -621,7 +784,6 @@ class Peaks:
                 clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
                 return clean_name
         return f"img{img_key}"
-
 
     def get_detector_peaks(
         self,
@@ -643,11 +805,11 @@ class Peaks:
         lamda_max: list[float] = []
         intensity: list[float] = []
         sigma: list[float] = []
-        radii: list[float] = [] 
-        xyz_out: list[list[float]] = [] 
+        radii: list[float] = []
+        xyz_out: list[list[float]] = []
         banks: list[int] = []
         image_indices: list[int] = []
-        gonio_angles_out: list[list[float]] = [] 
+        gonio_angles_out: list[list[float]] = []
 
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
 
@@ -659,13 +821,13 @@ class Peaks:
             img_stack = np.stack(images_list)
 
             alg = SparseRBFPeakFinder(
-                alpha=harvest_peaks_kwargs.get('alpha', 0.1),
-                gamma=harvest_peaks_kwargs.get('gamma', 2.0),
-                min_sigma=harvest_peaks_kwargs.get('min_sigma', 1.0),
-                max_sigma=harvest_peaks_kwargs.get('max_sigma', 10.0),
-                max_peaks=harvest_peaks_kwargs.get('max_peaks', 500),
-                chunk_size=harvest_peaks_kwargs.get('chunk_size', 1024),
-                show_steps=harvest_peaks_kwargs.get('show_steps', False)
+                alpha=harvest_peaks_kwargs.get("alpha", 0.1),
+                gamma=harvest_peaks_kwargs.get("gamma", 2.0),
+                min_sigma=harvest_peaks_kwargs.get("min_sigma", 1.0),
+                max_sigma=harvest_peaks_kwargs.get("max_sigma", 10.0),
+                max_peaks=harvest_peaks_kwargs.get("max_peaks", 500),
+                chunk_size=harvest_peaks_kwargs.get("chunk_size", 1024),
+                show_steps=harvest_peaks_kwargs.get("show_steps", False),
             )
             batch_coords = alg.find_peaks_batch(img_stack)
             precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords)}
@@ -673,24 +835,32 @@ class Peaks:
         # --- PREPARE PARALLEL TASKS ---
         tasks = []
         for img_key in sorted(self.ims.keys()):
-            if hasattr(self, 'bank_mapping') and img_key in self.bank_mapping:
+            if hasattr(self, "bank_mapping") and img_key in self.bank_mapping:
                 physical_bank = self.bank_mapping[img_key]
             else:
-                physical_bank = img_key 
-            
+                physical_bank = img_key
+
             img_label = self.get_image_label(img_key)
 
             det_config = beamlines[self.instrument][str(physical_bank)]
-            
+
             if self.goniometer_rotation.ndim == 3:
-                current_R = self.goniometer_rotation[img_key] if img_key < len(self.goniometer_rotation) else self.goniometer_rotation[-1]
+                current_R = (
+                    self.goniometer_rotation[img_key]
+                    if img_key < len(self.goniometer_rotation)
+                    else self.goniometer_rotation[-1]
+                )
             else:
                 current_R = self.goniometer_rotation
 
             current_angles = None
             if self.goniometer_angles_raw is not None:
                 if self.goniometer_angles_raw.ndim == 2:
-                    current_angles = self.goniometer_angles_raw[img_key] if img_key < len(self.goniometer_angles_raw) else self.goniometer_angles_raw[-1]
+                    current_angles = (
+                        self.goniometer_angles_raw[img_key]
+                        if img_key < len(self.goniometer_angles_raw)
+                        else self.goniometer_angles_raw[-1]
+                    )
                 else:
                     current_angles = self.goniometer_angles_raw
 
@@ -698,83 +868,132 @@ class Peaks:
             if finder_algorithm == "sparse_rbf":
                 coords = precomputed_peaks[img_key]
                 pre_coords = (coords[:, 0], coords[:, 1])
-            
+
             finder_info = (finder_algorithm, harvest_peaks_kwargs, pre_coords)
-            mask_info = (harvest_peaks_kwargs.get("mask_file"), harvest_peaks_kwargs.get('mask_rel_erosion_radius'))
-            geo_info = (current_R, current_angles, self.wavelength_min, self.wavelength_max)
+            mask_info = (
+                harvest_peaks_kwargs.get("mask_file"),
+                harvest_peaks_kwargs.get("mask_rel_erosion_radius"),
+            )
+            geo_info = (
+                current_R,
+                current_angles,
+                self.wavelength_min,
+                self.wavelength_max,
+            )
             viz_info = (visualize, file_prefix)
 
-            run_id = self.get_run_id(img_key)
+            self.get_run_id(img_key)
 
-            tasks.append((
-                img_key, img_label, physical_bank, self.ims[img_key], 
-                det_config, finder_info, integration_params, 
-                mask_info, geo_info, viz_info
-            ))
+            tasks.append(
+                (
+                    img_key,
+                    img_label,
+                    physical_bank,
+                    self.ims[img_key],
+                    det_config,
+                    finder_info,
+                    integration_params,
+                    mask_info,
+                    geo_info,
+                    viz_info,
+                )
+            )
 
         print(f"Starting parallel integration of {len(tasks)} images...")
 
         # Use 'spawn' to be safe with JAX threading
-        ctx = multiprocessing.get_context('spawn')
+        ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_process_single_image, *t) for t in tasks]
-            
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
+
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Integrating",
+                disable=not show_progress,
+            ):
                 try:
                     res, msg = future.result()
-                    if show_progress: 
+                    if show_progress:
                         tqdm.write(msg)
                     if res:
-                        two_theta.extend(res['two_theta'])
-                        az_phi.extend(res['az_phi'])
-                        R.extend(res['R'])
-                        lamda_min.extend(res['lamda_min'])
-                        lamda_max.extend(res['lamda_max'])
-                        intensity.extend(res['intensity'])
-                        sigma.extend(res['sigma'])
-                        radii.extend(res['radii'])
-                        xyz_out.extend(res['xyz'])
-                        banks.extend(res['banks'])
-                        image_indices.extend(res['image_indices'])
-                        if res['gonio_angles']:
-                            gonio_angles_out.extend(res['gonio_angles'])
+                        two_theta.extend(res["two_theta"])
+                        az_phi.extend(res["az_phi"])
+                        R.extend(res["R"])
+                        lamda_min.extend(res["lamda_min"])
+                        lamda_max.extend(res["lamda_max"])
+                        intensity.extend(res["intensity"])
+                        sigma.extend(res["sigma"])
+                        radii.extend(res["radii"])
+                        xyz_out.extend(res["xyz"])
+                        banks.extend(res["banks"])
+                        image_indices.extend(res["image_indices"])
+                        if res["gonio_angles"]:
+                            gonio_angles_out.extend(res["gonio_angles"])
                 except Exception as e:
                     print(f"Worker failed: {e}")
 
         return DetectorPeaks(
-            R, two_theta, az_phi, lamda_min, lamda_max, intensity, sigma, 
-            radii, xyz_out, banks, image_indices,
-            self.goniometer_axes_raw, gonio_angles_out, self.goniometer_names_raw
+            R,
+            two_theta,
+            az_phi,
+            lamda_min,
+            lamda_max,
+            intensity,
+            sigma,
+            radii,
+            xyz_out,
+            banks,
+            image_indices,
+            self.goniometer_axes_raw,
+            gonio_angles_out,
+            self.goniometer_names_raw,
         )
 
-
-    def predict_peaks(self, a, b, c, alpha, beta, gamma, d_min, RUB, space_group="P 1", sample_offset=None, ki_vec=None, R_all=None,
-                      max_workers: int = None):
+    def predict_peaks(
+        self,
+        a,
+        b,
+        c,
+        alpha,
+        beta,
+        gamma,
+        d_min,
+        RUB,
+        space_group="P 1",
+        sample_offset=None,
+        ki_vec=None,
+        R_all=None,
+        max_workers: int = None,
+    ):
         """
         Predicts peak positions using parallel processing.
         Handles RUB as either a single (3,3) matrix OR a stack (N,3,3) for rotation scans.
         Generates HKLs locally (lazy generation) to reduce IPC overhead.
         """
-        
+
         peak_dict = {}
         tasks = []
-        
+
         # Package scalar params to send to workers
         unit_cell_params = (a, b, c, alpha, beta, gamma, space_group, d_min)
-        
+
         sorted_keys = sorted(self.ims.keys())
-        use_stack = (RUB.ndim == 3 and RUB.shape[0] > 1)
+        use_stack = RUB.ndim == 3 and RUB.shape[0] > 1
 
         print(f"Predicting peaks for {len(self.ims)} banks...")
-        
+
         for i, bank in enumerate(sorted_keys):
-            det_config = beamlines[self.instrument][str(self.bank_mapping.get(bank, bank))]
+            det_config = beamlines[self.instrument][
+                str(self.bank_mapping.get(bank, bank))
+            ]
             run_id = self.get_run_id(bank)
 
             if use_stack:
                 # Use image index if stack matches image count, otherwise use run index
                 idx = bank if RUB.shape[0] == len(self.ims) else run_id
-                if idx >= RUB.shape[0]: idx = -1
+                if idx >= RUB.shape[0]:
+                    idx = -1
                 rub_val = RUB[idx]
             else:
                 rub_val = RUB if RUB.ndim == 2 else RUB[0]
@@ -791,28 +1010,35 @@ class Peaks:
                 else:
                     current_R_val = R_all
 
-            tasks.append((
-                bank, det_config, 
-                unit_cell_params, # Pass tuple instead of arrays
-                rub_val, 
-                self.wavelength_min, self.wavelength_max, 
-                sample_offset, ki_vec,
-                current_R_val
-            ))
-            
+            tasks.append(
+                (
+                    bank,
+                    det_config,
+                    unit_cell_params,  # Pass tuple instead of arrays
+                    rub_val,
+                    self.wavelength_min,
+                    self.wavelength_max,
+                    sample_offset,
+                    ki_vec,
+                    current_R_val,
+                )
+            )
+
         # Use 'spawn' to be safe with JAX threading
-        ctx = multiprocessing.get_context('spawn')
+        ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
             # Use tqdm for progress bar
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Predicting"):
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Predicting"
+            ):
                 try:
                     bank_id, res = future.result()
                     if res:
                         peak_dict[bank_id] = res
                 except Exception as e:
                     print(f"Prediction failed for a bank: {e}")
-                    
+
         return peak_dict
 
     # --- UPDATED INTEGRATE ---
@@ -820,7 +1046,7 @@ class Peaks:
         self,
         peak_dict,
         integration_params,
-        RUB, 
+        RUB,
         R_stack=None,
         angles_stack=None,
         sample_offset=None,
@@ -847,6 +1073,7 @@ class Peaks:
         if found_peaks_file is not None:
             try:
                 import h5py
+
                 print(f"Loading found peaks from: {found_peaks_file}")
                 with h5py.File(found_peaks_file, "r") as f:
                     if "files" in f and "file_offsets" in f and "peaks/xyz" in f:
@@ -855,30 +1082,43 @@ class Peaks:
                         target_name = os.path.basename(self.filename)
                         match_idx = -1
                         for i, fname_bytes in enumerate(files_db):
-                            fname_str = fname_bytes.decode('utf-8') if isinstance(fname_bytes, bytes) else str(fname_bytes)
+                            fname_str = (
+                                fname_bytes.decode("utf-8")
+                                if isinstance(fname_bytes, bytes)
+                                else str(fname_bytes)
+                            )
                             if target_name in fname_str:
                                 match_idx = i
                                 break
                         if match_idx >= 0:
                             start = int(offsets[match_idx])
-                            end = int(offsets[match_idx+1]) if match_idx < len(files_db) - 1 else f["peaks/xyz"].shape[0]
+                            end = (
+                                int(offsets[match_idx + 1])
+                                if match_idx < len(files_db) - 1
+                                else f["peaks/xyz"].shape[0]
+                            )
                             found_peaks_xyz = f["peaks/xyz"][start:end]
-                            if "bank" in f: found_peaks_bank = f["bank"][start:end]
-                            elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][start:end]
-                            
+                            if "bank" in f:
+                                found_peaks_bank = f["bank"][start:end]
+                            elif "peaks/bank" in f:
+                                found_peaks_bank = f["peaks/bank"][start:end]
+
                             if "peaks/run_index" in f:
                                 found_peaks_run = f["peaks/run_index"][start:end]
                     elif "peaks/xyz" in f:
                         found_peaks_xyz = f["peaks/xyz"][()]
-                        if "bank" in f: found_peaks_bank = f["bank"][()]
-                        elif "peaks/bank" in f: found_peaks_bank = f["peaks/bank"][()]
-                        if "peaks/run_index" in f: found_peaks_run = f["peaks/run_index"][()]
+                        if "bank" in f:
+                            found_peaks_bank = f["bank"][()]
+                        elif "peaks/bank" in f:
+                            found_peaks_bank = f["peaks/bank"][()]
+                        if "peaks/run_index" in f:
+                            found_peaks_run = f["peaks/run_index"][()]
             except Exception as e:
                 print(f"Failed to load found peaks: {e}")
 
         tasks = []
-        fname_clean = os.path.basename(self.filename)
-        
+        os.path.basename(self.filename)
+
         for bank, peaks in peak_dict.items():
             physical_bank = self.bank_mapping.get(bank, bank)
             det_config = beamlines[self.instrument][str(physical_bank)]
@@ -887,12 +1127,13 @@ class Peaks:
             # UPDATED: Generate nice labels for visualization
             img_label = self.get_image_label(bank)
             viz_label = f"{img_label}_bank{physical_bank}"
-            
+
             # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
             if RUB.ndim == 3 and RUB.shape[0] > 1:
                 # Use image index if stack matches image count, otherwise use run index
                 idx = bank if RUB.shape[0] == len(self.ims) else run_id
-                if idx >= RUB.shape[0]: idx = -1 
+                if idx >= RUB.shape[0]:
+                    idx = -1
                 current_rub = RUB[idx]
             else:
                 current_rub = RUB if RUB.ndim == 2 else RUB[0]
@@ -905,7 +1146,7 @@ class Peaks:
                     current_R_val = R_stack[idx_r]
                 else:
                     current_R_val = R_stack[0]
-            
+
             current_angles_val = None
             if angles_stack is not None:
                 idx_a = bank if angles_stack.shape[0] == len(self.ims) else run_id
@@ -914,37 +1155,66 @@ class Peaks:
                 else:
                     current_angles_val = angles_stack[0]
 
-            metrics_info = (found_peaks_xyz, found_peaks_bank, found_peaks_run, current_rub, current_angles_val, current_R_val, sample_offset, ki_vec)
+            metrics_info = (
+                found_peaks_xyz,
+                found_peaks_bank,
+                found_peaks_run,
+                current_rub,
+                current_angles_val,
+                current_R_val,
+                sample_offset,
+                ki_vec,
+            )
             # Pass viz_label instead of fname_clean
             viz_info = (create_visualizations, file_prefix, viz_label)
-            
-            tasks.append((
-                bank, self.ims[bank], peaks, det_config, 
-                integration_params, integration_method, viz_info, metrics_info
-            ))
+
+            tasks.append(
+                (
+                    bank,
+                    self.ims[bank],
+                    peaks,
+                    det_config,
+                    integration_params,
+                    integration_method,
+                    viz_info,
+                    metrics_info,
+                )
+            )
 
         print(f"Integrating {len(tasks)} banks in parallel...")
-       
+
         # Use 'spawn' to be safe with JAX threading
-        ctx = multiprocessing.get_context('spawn')
+        ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
-            
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Integrating", disable=not show_progress):
+
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Integrating",
+                disable=not show_progress,
+            ):
                 try:
                     res = future.result()
                     if res:
-                        h.extend(res['h']); k.extend(res['k']); l.extend(res['l'])
-                        intensity.extend(res['intensity']); sigma.extend(res['sigma'])
-                        tt.extend(res['tt']); az.extend(res['az'])
-                        wavelength.extend(res['wavelength']); xyz.extend(res['xyz'])
-                        banks.extend(res['bank'])
-                        R_out.extend(res['R'])
-                        angles_out.extend(res['angles'])
+                        h.extend(res["h"])
+                        k.extend(res["k"])
+                        l.extend(res["l"])
+                        intensity.extend(res["intensity"])
+                        sigma.extend(res["sigma"])
+                        tt.extend(res["tt"])
+                        az.extend(res["az"])
+                        wavelength.extend(res["wavelength"])
+                        xyz.extend(res["xyz"])
+                        banks.extend(res["bank"])
+                        R_out.extend(res["R"])
+                        angles_out.extend(res["angles"])
                 except Exception as e:
                     print(f"Integration worker failed: {e}")
 
-        return IntegrationResult(h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz, R_out, angles_out)
+        return IntegrationResult(
+            h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz, R_out, angles_out
+        )
 
     def write_hdf5(
         self,
@@ -956,14 +1226,14 @@ class Peaks:
         wavelength_maxes: list[float],
         intensity: list[float],
         sigma: list[float],
-        radii: list[float], 
-        xyz: list[list[float]], 
+        radii: list[float],
+        xyz: list[list[float]],
         bank: list[int],
         image_index: list[int] = None,
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
         gonio_names: list[str] = None,
-        instrument_wavelength: tuple[float, float] = None
+        instrument_wavelength: tuple[float, float] = None,
     ):
         with File(output_filename, "w") as f:
             f.attrs["instrument"] = self.instrument
@@ -975,24 +1245,24 @@ class Peaks:
             f["peaks/intensity"] = intensity
             f["peaks/sigma"] = sigma
             f["peaks/radius"] = radii
-            f["peaks/xyz"] = xyz  
+            f["peaks/xyz"] = xyz
             f["bank"] = bank
-            
+
             if image_index is not None:
                 f["peaks/run_index"] = image_index
 
-            if hasattr(self, 'image_files_raw') and self.image_files_raw:
-                f["files"] = np.array([s.encode('utf-8') for s in self.image_files_raw])
+            if hasattr(self, "image_files_raw") and self.image_files_raw:
+                f["files"] = np.array([s.encode("utf-8") for s in self.image_files_raw])
                 f["file_offsets"] = self.file_offsets
-            
+
             if gonio_axes is not None:
                 f["goniometer/axes"] = gonio_axes
-            
+
             if gonio_angles is not None:
                 f["goniometer/angles"] = gonio_angles
-                
+
             if gonio_names is not None:
-                dt = h5py.string_dtype(encoding='utf-8')
+                dt = h5py.string_dtype(encoding="utf-8")
                 f.create_dataset("goniometer/names", data=gonio_names, dtype=dt)
 
             if instrument_wavelength is not None:

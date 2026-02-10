@@ -169,13 +169,18 @@ class Detector:
 
         return row_f, col_f
 
-    def pixel_to_angles(self, row: npt.ArrayLike, col: npt.ArrayLike, sample_offset: npt.ArrayLike = None) -> tuple[npt.NDArray, npt.NDArray]:
+    def pixel_to_angles(
+        self,
+        row: npt.ArrayLike,
+        col: npt.ArrayLike,
+        sample_offset: npt.ArrayLike = None,
+    ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
         """
-        xyz = self.pixel_to_lab(row, col) # Returns (N, 3) or (3,)
+        xyz = self.pixel_to_lab(row, col)  # Returns (N, 3) or (3,)
         v = xyz - (sample_offset if sample_offset is not None else 0)
-        
+
         X, Y, Z = v.T
         R_mag = np.sqrt(X**2 + Y**2 + Z**2)
         two_theta = np.rad2deg(np.arccos(np.clip(Z / R_mag, -1.0, 1.0)))

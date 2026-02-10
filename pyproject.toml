@@ -91,3 +91,6 @@ markers = [
 
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+ignore = ["E741"]
