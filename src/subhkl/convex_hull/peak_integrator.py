@@ -1,9 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.signal import convolve2d
-from scipy.spatial import ConvexHull
-from scipy.spatial import Delaunay
 from scipy.optimize import minimize
+from scipy.signal import convolve2d
+from scipy.spatial import ConvexHull, Delaunay
 
 # Try to import QhullError for specific catching, fallback to ValueError/Exception
 try:
@@ -176,8 +175,7 @@ class PeakIntegrator:
 
         if return_hulls:
             return output_data, peak_hulls
-        else:
-            return output_data
+        return output_data
 
     @staticmethod
     def visualize(bank_id, intensity, peak_hulls):
@@ -335,8 +333,7 @@ class PeakIntegrator:
                 bg_masks.append(None)
                 peak_hulls.append([None] * 4)
                 continue
-            else:
-                is_peak[peak_idx] = True
+            is_peak[peak_idx] = True
 
             # Get core points of peak by removing outliers
             core_points = self._remove_outliers(

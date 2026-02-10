@@ -21,11 +21,10 @@ import pytest
 from subhkl.io.parser import (
     finder,
     indexer,
-    peak_predictor,
     integrator,
     mtz_exporter,
+    peak_predictor,
 )
-
 from subhkl.metrics import compute_metrics
 
 # Test data configuration

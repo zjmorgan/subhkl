@@ -4,15 +4,14 @@ Metrics computation module for indexing quality assessment.
 Provides functions to compute and return angular/distance errors from indexed peaks.
 """
 
-import typing
 import h5py
 import numpy as np
 import scipy.spatial
 
+from subhkl.config import beamlines
+from subhkl.detector import Detector
 from subhkl.optimization import FindUB
 from subhkl.utils import calculate_angular_error
-from subhkl.detector import Detector
-from subhkl.config import beamlines
 
 
 def _get_safe_R_stack(R_file_in, run_indices_in, target_len):
@@ -38,20 +37,18 @@ def _get_safe_R_stack(R_file_in, run_indices_in, target_len):
         ridx = int(r_idx)
         if ridx < len(R_file_in):
             return R_file_in[ridx]
-        else:
-            return R_file_in[0]
+        return R_file_in[0]
 
     if R_file_in.ndim == 3:
         return [safe_get_single_R(r) for r in run_indices_in]
-    else:
-        return [R_file_in] * target_len
+    return [R_file_in] * target_len
 
 
 def compute_metrics(
     filename: str,
-    found_peaks_file: typing.Optional[str] = None,
-    instrument: typing.Optional[str] = None,
-    d_min: typing.Optional[float] = None,
+    found_peaks_file: str | None = None,
+    instrument: str | None = None,
+    d_min: float | None = None,
     per_run: bool = False,
 ) -> dict:
     """
@@ -325,7 +322,7 @@ def compute_metrics(
             "median_ang_err": float(np.median(ang_err)),
             "mean_ang_err": float(np.mean(ang_err)),
             "max_ang_err": float(np.max(ang_err)),
-            "num_peaks": int(len(h)),
+            "num_peaks": len(h),
         }
 
         if d_filter_message:
@@ -349,4 +346,4 @@ def compute_metrics(
         import traceback
 
         traceback.print_exc()
-        return {"error_message": f"Exception during metrics computation: {str(e)}"}
+        return {"error_message": f"Exception during metrics computation: {e!s}"}

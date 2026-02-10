@@ -1,8 +1,9 @@
+import itertools
+
 import cv2
-from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
-import itertools
+from PIL import Image
 
 _open_kernel3 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
 
@@ -69,9 +70,8 @@ class ThresholdingPeakFinder:
         area = cv2.contourArea(contour)
         if area == 0:
             return float("inf")
-        else:
-            diameter = np.max(np.linalg.norm(contour[None, :, 0, :] - contour, axis=-1))
-            return diameter * cv2.arcLength(contour, True) / area
+        diameter = np.max(np.linalg.norm(contour[None, :, 0, :] - contour, axis=-1))
+        return diameter * cv2.arcLength(contour, True) / area
 
     def split_contour(self, points):
         # points (N, 1, 2)
@@ -110,12 +110,9 @@ class ThresholdingPeakFinder:
             if np.linalg.norm(center1 - center2) < self.min_peak_dist_pixels:
                 if self.circularity(points1) < self.circularity(points2):
                     return (points1,)
-                else:
-                    return (points2,)
-            else:
-                return points1, points2
-        else:
-            return (points,)
+                return (points2,)
+            return points1, points2
+        return (points,)
 
     def find_peaks(self, im):
         im = im.astype(float)
@@ -321,5 +318,4 @@ class ThresholdingPeakFinder:
 
         if len(refined_centers) > 0:
             return np.array(refined_centers)
-        else:
-            return np.empty((0, 2))
+        return np.empty((0, 2))

@@ -1,6 +1,7 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
+
 from subhkl.optimization import VectorizedObjective
 
 

@@ -1,9 +1,9 @@
 import os
-import pytest
-import matplotlib
 import urllib.request
 from pathlib import Path
 
+import matplotlib
+import pytest
 
 # Use non-interactive backend for tests to prevent plot windows from popping up
 matplotlib.use("Agg")

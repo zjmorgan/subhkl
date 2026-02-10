@@ -1,5 +1,6 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.convex_hull.region_grower import RegionGrower
 

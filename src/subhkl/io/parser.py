@@ -1,22 +1,17 @@
-import typing
+import glob
+
 import h5py
 import numpy as np
 import typer
-import glob
 
-from subhkl.export import FinderConcatenateMerger, MTZExporter
-from subhkl.export import ImageStackMerger
-from subhkl.integration import Peaks
-from subhkl.optimization import FindUB
 from subhkl.config.goniometer import (
-    get_rotation_data_from_nexus,
     calc_goniometer_rotation_matrix,
+    get_rotation_data_from_nexus,
 )
-from subhkl.utils import calculate_angular_error
-from subhkl.detector import Detector
-from subhkl.config import beamlines
+from subhkl.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
+from subhkl.integration import Peaks
 from subhkl.metrics import compute_metrics
-import scipy.spatial
+from subhkl.optimization import FindUB
 
 app = typer.Typer()
 
@@ -104,7 +99,6 @@ def index(
                 f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
             )
             # opt.goniometer_angles is already loaded in FindUB.__init__
-            pass
         else:
             print(
                 "WARNING: refine_goniometer requested but goniometer data not found. Skipping goniometer refinement."
@@ -256,14 +250,14 @@ def finder(
     peak_local_max_normalization: bool = False,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
-    thresholding_mask_file: typing.Optional[str] = None,
+    thresholding_mask_file: str | None = None,
     thresholding_mask_rel_erosion_radius: float = 0.05,
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
-    wavelength_min: typing.Optional[float] = None,
-    wavelength_max: typing.Optional[float] = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
     region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_sigma: typing.Optional[float] = None,
+    region_growth_minimum_sigma: float | None = None,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
@@ -413,9 +407,9 @@ def indexer(
     space_group: str,
     wavelength_min: float = None,
     wavelength_max: float = None,
-    goniometer_csv_filename: typing.Optional[str] = None,
-    original_nexus_filename: typing.Optional[str] = None,
-    instrument_name: typing.Optional[str] = None,
+    goniometer_csv_filename: str | None = None,
+    original_nexus_filename: str | None = None,
+    instrument_name: str | None = None,
     strategy_name: str = typer.Option(
         "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
     ),
@@ -473,7 +467,7 @@ def indexer(
     beam_bound_deg: float = typer.Option(
         1.0, "--beam-bound-deg", help="Bound for beam direction in degrees."
     ),
-    bootstrap_filename: typing.Optional[str] = typer.Option(
+    bootstrap_filename: str | None = typer.Option(
         None, "--bootstrap", help="Previous HDF5 solution to refine"
     ),
     loss_method: str = typer.Option(
@@ -551,9 +545,11 @@ def indexer(
 
     # --- NEW: Check d_max for sanity ---
     cell_max = max(a, b, c)
-    if d_max is not None and d_max < cell_max:
+    # Handle OptionInfo objects if called directly as a function
+    d_max_val = d_max.default if hasattr(d_max, "default") else d_max
+    if d_max_val is not None and d_max_val < cell_max:
         print(
-            f"WARNING: --d-max ({d_max}) is smaller than largest unit cell dimension ({cell_max:.2f})."
+            f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f})."
         )
         print(
             "         This will exclude low-order reflections which are critical for orientation."
@@ -603,8 +599,8 @@ def indexer(
 def indexer_using_file(
     hdf5_peaks_filename: str,
     output_peaks_filename: str,
-    original_nexus_filename: typing.Optional[str] = None,
-    instrument_name: typing.Optional[str] = None,
+    original_nexus_filename: str | None = None,
+    instrument_name: str | None = None,
     strategy_name: str = typer.Option("DE", "--strategy"),
     n_runs: int = typer.Option(1, "--n-runs"),
     population_size: int = typer.Option(1000, "--population-size"),
@@ -637,12 +633,12 @@ def indexer_using_file(
 @app.command()
 def metrics(
     filename: str,
-    found_peaks_file: typing.Optional[str] = typer.Option(
+    found_peaks_file: str | None = typer.Option(
         None,
         "--found-peaks",
         help="Optional file with found peaks to compare against (e.g. finder.h5).",
     ),
-    instrument: typing.Optional[str] = typer.Option(
+    instrument: str | None = typer.Option(
         None, "--instrument", help="Instrument name (required if matching peaks)."
     ),
     d_min: float = typer.Option(
@@ -883,11 +879,11 @@ def integrator(
     integration_peaks_filename: str,
     output_filename: str,
     integration_method: str = "free_fit",
-    integration_mask_file: typing.Optional[str] = None,
-    integration_mask_rel_erosion_radius: typing.Optional[float] = 0.05,
+    integration_mask_file: str | None = None,
+    integration_mask_rel_erosion_radius: float | None = 0.05,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 50.0,  # Adjusted default
-    region_growth_minimum_sigma: typing.Optional[float] = None,
+    region_growth_minimum_sigma: float | None = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,

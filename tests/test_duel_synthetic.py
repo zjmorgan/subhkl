@@ -1,8 +1,10 @@
-import numpy as np
-import h5py
 import os
-from subhkl.io.parser import index, metrics
+
+import h5py
+import numpy as np
 from scipy.spatial.transform import Rotation
+
+from subhkl.io.parser import index, metrics
 
 
 def create_synthetic_finder(filename):

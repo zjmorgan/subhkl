@@ -4,28 +4,27 @@ from functools import partial
 
 import h5py
 import numpy as np
+import scipy.interpolate
 import scipy.linalg
 import scipy.spatial
-import scipy.interpolate
-
-
-# Import JAX with fallback from utils (centralized)
-from subhkl.utils import (
-    jax,
-    jnp,
-    jscipy_linalg,
-    HAS_JAX,
-    OPTIMIZATION_BACKEND,
-    DifferentialEvolution,
-    PSO,
-    CMA_ES,
-    Mesh,
-    NamedSharding,
-    P,
-)
 
 from subhkl.detector import scattering_vector_from_angles
 from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
+
+# Import JAX with fallback from utils (centralized)
+from subhkl.utils import (
+    CMA_ES,
+    HAS_JAX,
+    OPTIMIZATION_BACKEND,
+    PSO,
+    DifferentialEvolution,
+    Mesh,
+    NamedSharding,
+    P,
+    jax,
+    jnp,
+    jscipy_linalg,
+)
 
 try:
     from tqdm import trange
@@ -85,18 +84,15 @@ def _forward_map_lattice(norm, nominal, frac_bound):
 def _get_active_lattice_indices(lattice_system):
     if lattice_system == "Cubic":
         return [0]
-    elif lattice_system == "Hexagonal":
+    if lattice_system == "Hexagonal" or lattice_system == "Tetragonal":
         return [0, 2]
-    elif lattice_system == "Tetragonal":
-        return [0, 2]
-    elif lattice_system == "Rhombohedral":
+    if lattice_system == "Rhombohedral":
         return [0, 3]
-    elif lattice_system == "Orthorhombic":
+    if lattice_system == "Orthorhombic":
         return [0, 1, 2]
-    elif lattice_system == "Monoclinic":
+    if lattice_system == "Monoclinic":
         return [0, 1, 2, 4]
-    else:
-        return [0, 1, 2, 3, 4, 5]
+    return [0, 1, 2, 3, 4, 5]
 
 
 def get_lattice_system(
@@ -239,11 +235,11 @@ def get_lattice_system(
         num = 4
     elif final_system == "Orthorhombic":
         num = 3
-    elif final_system == "Tetragonal":
-        num = 2
-    elif final_system == "Hexagonal":
-        num = 2
-    elif final_system == "Rhombohedral":
+    elif (
+        final_system == "Tetragonal"
+        or final_system == "Hexagonal"
+        or final_system == "Rhombohedral"
+    ):
         num = 2
     elif final_system == "Cubic":
         num = 1
@@ -345,13 +341,12 @@ class VectorizedObjective:
         # Handle Peak-to-Run mapping metadata
         if peak_run_indices is not None:
             self.peak_run_indices = jnp.array(peak_run_indices, dtype=jnp.int32)
+        # Default: If R is a stack of N rotations, and we have N peaks, assume 1-to-1.
+        # Otherwise, map everything to run 0.
+        elif self.static_R.ndim == 3 and self.static_R.shape[0] == num_peaks:
+            self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
         else:
-            # Default: If R is a stack of N rotations, and we have N peaks, assume 1-to-1.
-            # Otherwise, map everything to run 0.
-            if self.static_R.ndim == 3 and self.static_R.shape[0] == num_peaks:
-                self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
-            else:
-                self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
+            self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
 
         if peak_xyz_lab is not None:
             # peak_xyz_lab is (N, 3) or (3, N). We want (3, N).
@@ -428,11 +423,10 @@ class VectorizedObjective:
             self.cell_init = jnp.array(cell_params)
             if self.lattice_system == "Cubic":
                 self.free_params_init = self.cell_init[0:1]
-            elif self.lattice_system == "Hexagonal":
-                self.free_params_init = jnp.array(
-                    [self.cell_init[0], self.cell_init[2]]
-                )
-            elif self.lattice_system == "Tetragonal":
+            elif (
+                self.lattice_system == "Hexagonal"
+                or self.lattice_system == "Tetragonal"
+            ):
                 self.free_params_init = jnp.array(
                     [self.cell_init[0], self.cell_init[2]]
                 )
@@ -640,17 +634,16 @@ class VectorizedObjective:
             R = self.compute_goniometer_R_jax(
                 gonio_norm
             )  # Helper assumes input is norm
+        elif self.gonio_axes is not None:
+            offsets_total = self.gonio_nominal_offsets[None, :].repeat(
+                x.shape[0], axis=0
+            )
+            # To calculate R from Nominal (fixed), we pass 0.5 to helper
+            gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+            R = self.compute_goniometer_R_jax(gonio_norm)
         else:
-            if self.gonio_axes is not None:
-                offsets_total = self.gonio_nominal_offsets[None, :].repeat(
-                    x.shape[0], axis=0
-                )
-                # To calculate R from Nominal (fixed), we pass 0.5 to helper
-                gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
-                R = self.compute_goniometer_R_jax(gonio_norm)
-            else:
-                offsets_total = None
-                R = None
+            offsets_total = None
+            R = None
 
         return UB, B, sample_total, ki_vec, offsets_total, R
 
@@ -664,23 +657,22 @@ class VectorizedObjective:
         if self.lattice_system == "Cubic":
             a = p_free[:, 0]
             return jnp.stack([a, a, a, deg90, deg90, deg90], axis=1)
-        elif self.lattice_system == "Hexagonal":
+        if self.lattice_system == "Hexagonal":
             a, c = p_free[:, 0], p_free[:, 1]
             return jnp.stack([a, a, c, deg90, deg90, deg120], axis=1)
-        elif self.lattice_system == "Tetragonal":
+        if self.lattice_system == "Tetragonal":
             a, c = p_free[:, 0], p_free[:, 1]
             return jnp.stack([a, a, c, deg90, deg90, deg90], axis=1)
-        elif self.lattice_system == "Rhombohedral":
+        if self.lattice_system == "Rhombohedral":
             a, alpha = p_free[:, 0], p_free[:, 1]
             return jnp.stack([a, a, a, alpha, alpha, alpha], axis=1)
-        elif self.lattice_system == "Orthorhombic":
+        if self.lattice_system == "Orthorhombic":
             a, b, c = p_free[:, 0], p_free[:, 1], p_free[:, 2]
             return jnp.stack([a, b, c, deg90, deg90, deg90], axis=1)
-        elif self.lattice_system == "Monoclinic":
+        if self.lattice_system == "Monoclinic":
             a, b, c, beta = p_free[:, 0], p_free[:, 1], p_free[:, 2], p_free[:, 3]
             return jnp.stack([a, b, c, deg90, beta, deg90], axis=1)
-        else:
-            return p_free
+        return p_free
 
     def compute_B_jax(self, cell_params_norm):
         p = self.reconstruct_cell_params(cell_params_norm)
@@ -799,7 +791,7 @@ class VectorizedObjective:
         return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
 
     def indexer_dynamic_cosine_aniso_jax(
-        self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002
+        self, UB, kf_ki_sample, *, k_sq_override=None, tolerance_rad=0.002
     ):
         UB_inv = jnp.linalg.inv(UB)
         v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
@@ -810,12 +802,11 @@ class VectorizedObjective:
 
         # kappa for von Mises-Fisher-like concentration in HKL space
         # Uniform angular tolerance: sigma_h approx tolerance_rad * h.
-        # kappa = 1 / (4 * pi^2 * tolerance_rad^2)
         kappa = 1.0 / ((tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2)
 
         initial_carry = (
-            jnp.zeros(max_v_val.shape),
-            jnp.full(max_v_val.shape, -1e9),
+            jnp.full(max_v_val.shape, -1e12),
+            jnp.full(max_v_val.shape, -1e12),
             jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32),
             jnp.zeros(max_v_val.shape),
         )
@@ -826,19 +817,26 @@ class VectorizedObjective:
             ratio = n / max_v_val
             hkl_float = v * ratio[:, None, :]
             lamda_cand = 1.0 / ratio
-            cos_terms = kappa * (jnp.cos(2 * jnp.pi * hkl_float) - 1.0)
-            log_prob = jnp.sum(cos_terms, axis=1)
-            prob = jnp.exp(log_prob)
+
+            # Robust Multi-Scale Kernel: Mixture of Narrow + Wide peaks
+            # 1. Narrow (High precision)
+            cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
+            log_p_narrow = jnp.sum(kappa * cos_diff, axis=1)
+
+            # 2. Wide (Capture range)
+            # 5 degrees is a safe capture range for initial orientation
+            kappa_wide = 1.0 / (jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2)
+            log_p_wide = jnp.sum(kappa_wide * cos_diff, axis=1)
+
+            # Combine via LogSumExp (implicit 50/50 mixture)
+            log_prob = jax.nn.logsumexp(jnp.stack([log_p_narrow, log_p_wide]), axis=0)
 
             # --- VALIDATION LOGIC ---
             valid_cand = (lamda_cand >= self.wl_min_val) & (
                 lamda_cand <= self.wl_max_val
             )
 
-            # 1. ADDED: Resolution Filter (Crystallographic convention d = 1/|Q|)
-            # hkl_float is the fractional HKL estimate. We need |B * hkl|
-            # Approx: Use integer HKL for speed, or float for accuracy.
-            # Using float is safer for the filter.
+            # 1. Resolution Filter (Crystallographic convention d = 1/|Q|)
             q_vecs = jnp.einsum("sij,sjm->sim", UB, hkl_float)
             q_sq = jnp.sum(q_vecs**2, axis=1)  # |Q|^2 = 1/d^2
             d_est = 1.0 / jnp.sqrt(q_sq + 1e-9)
@@ -846,18 +844,25 @@ class VectorizedObjective:
 
             # 2. Symmetry Mask
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            is_allowed = self.is_allowed_jax(h, k, l)
+            miller_h, miller_k, miller_l = (
+                hkl_int[:, 0, :],
+                hkl_int[:, 1, :],
+                hkl_int[:, 2, :],
+            )
+            is_allowed = self.is_allowed_jax(miller_h, miller_k, miller_l)
 
             # Combine all masks
             final_mask = valid_cand & valid_res & is_allowed
 
-            prob = jnp.where(final_mask, prob, 0.0)
-            new_sum = curr_sum + prob
-            score_tracked = jnp.where(final_mask, log_prob, -1e9)
+            # Use LogSumExp style accumulation for robustness
+            log_prob_masked = jnp.where(final_mask, log_prob, -1e12)
 
-            update_mask = score_tracked > curr_max
-            new_max = jnp.where(update_mask, score_tracked, curr_max)
+            # Update carry
+            # curr_sum will now store the logsumexp of valid candidates
+            new_sum = jax.nn.logsumexp(jnp.stack([curr_sum, log_prob_masked]), axis=0)
+
+            update_mask = log_prob_masked > curr_max
+            new_max = jnp.where(update_mask, log_prob_masked, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
@@ -865,9 +870,9 @@ class VectorizedObjective:
         final_carry, _ = jax.lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
-        accum_probs, _, best_hkl, best_lamb = final_carry
-        score = -jnp.sum(self.weights * accum_probs, axis=1)
-        return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
+        log_prob_accum, _, best_hkl, best_lamb = final_carry
+        score = -jnp.sum(self.weights * log_prob_accum, axis=1)
+        return score, jnp.exp(log_prob_accum), best_hkl.transpose((0, 2, 1)), best_lamb
 
     def indexer_dynamic_binary_jax(
         self,
@@ -1278,11 +1283,11 @@ class VectorizedObjective:
                 tolerance_rad=self.tolerance_rad,
                 window_batch_size=self.window_batch_size,
             )
-        elif self.loss_method == "cosine":
+        if self.loss_method == "cosine":
             return self.indexer_dynamic_cosine_aniso_jax(
-                UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad
+                UB, kf_ki_vec, tolerance_rad=self.tolerance_rad
             )
-        elif self.loss_method == "sinkhorn":
+        if self.loss_method == "sinkhorn":
             return self.indexer_sinkhorn_jax(
                 UB,
                 kf_ki_vec,
@@ -1292,10 +1297,9 @@ class VectorizedObjective:
                 num_iters=self.num_iters,
                 top_k=self.top_k,
             )
-        else:
-            return self.indexer_dynamic_soft_jax(
-                UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad
-            )
+        return self.indexer_dynamic_soft_jax(
+            UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad
+        )
 
     @partial(jax.jit, static_argnames="self")
     def __call__(self, x):
@@ -1722,11 +1726,7 @@ class FindUB:
                 start_sol_processed = start_sol
 
         sample_solution = jnp.zeros(num_dims)
-        target_sigma = (
-            sigma_init
-            if sigma_init
-            else (0.01 if start_sol_processed is not None else 3.14)
-        )
+        target_sigma = sigma_init or (0.01 if start_sol_processed is not None else 3.14)
         print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
 
         if strategy_name.lower() == "de":
@@ -1764,26 +1764,25 @@ class FindUB:
                 else:
                     state = strategy.init(rng_init, start_sol, es_params)
                     state = state.replace(std=target_sigma)
+            elif strategy_type == "population_based":
+                pop_orient = (
+                    jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+                )
+                rng_rest, _ = jax.random.split(rng_pop)
+                pop_rest = jax.random.uniform(
+                    rng_rest, (population_size, max(0, num_dims - 3))
+                )
+                population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
+                fitness_init = objective(population_init)
+                state = strategy.init(
+                    rng_init, population_init, fitness_init, es_params
+                )
             else:
-                if strategy_type == "population_based":
-                    pop_orient = (
-                        jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
-                    )
-                    rng_rest, _ = jax.random.split(rng_pop)
-                    pop_rest = jax.random.uniform(
-                        rng_rest, (population_size, max(0, num_dims - 3))
-                    )
-                    population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
-                    fitness_init = objective(population_init)
-                    state = strategy.init(
-                        rng_init, population_init, fitness_init, es_params
-                    )
-                else:
-                    mean_orient = jnp.zeros(3)
-                    mean_rest = jnp.full((max(0, num_dims - 3),), 0.5)
-                    solution_init = jnp.concatenate([mean_orient, mean_rest])
-                    state = strategy.init(rng_init, solution_init, es_params)
-                    state = state.replace(std=target_sigma)
+                mean_orient = jnp.zeros(3)
+                mean_rest = jnp.full((max(0, num_dims - 3),), 0.5)
+                solution_init = jnp.concatenate([mean_orient, mean_rest])
+                state = strategy.init(rng_init, solution_init, es_params)
+                state = state.replace(std=target_sigma)
             return state
 
         mesh = Mesh(np.array(jax.devices()), ("i"))
@@ -1839,8 +1838,7 @@ class FindUB:
                 batch_keys_list[b_i] = next_keys
                 batch_states_list[b_i] = next_state
                 b_min = jnp.min(next_state.best_fitness)
-                if b_min < current_gen_best:
-                    current_gen_best = b_min
+                current_gen_best = min(current_gen_best, b_min)
             if trange is not None:
                 if loss_method == "sinkhorn":
                     pbar.set_description(

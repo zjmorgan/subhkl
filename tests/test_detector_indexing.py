@@ -1,4 +1,5 @@
 import pytest
+
 from subhkl.detector import Detector
 
 

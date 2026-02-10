@@ -1,9 +1,8 @@
 import numpy as np
 import pytest
-
 import scipy.linalg
 
-import subhkl.optimization as optimization
+from subhkl import optimization
 
 
 def test_backend_flags_and_require_jax():

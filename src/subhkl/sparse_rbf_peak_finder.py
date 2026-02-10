@@ -1,10 +1,11 @@
-import numpy as np
 from functools import partial
+
+import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
 # Import JAX with fallback from utils (centralized)
-from subhkl.utils import jax, jnp, jit, vmap, lax, HAS_JAX
+from subhkl.utils import HAS_JAX, jax, jit, jnp, lax, vmap
 
 if HAS_JAX:
     import jax.scipy.optimize

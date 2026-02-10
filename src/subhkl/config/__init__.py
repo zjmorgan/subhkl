@@ -3,7 +3,7 @@ from .goniometer import calc_goniometer_rotation_matrix, get_rotation_data_from_
 
 __all__ = [
     "beamlines",
-    "reduction_settings",
     "calc_goniometer_rotation_matrix",
     "get_rotation_data_from_nexus",
+    "reduction_settings",
 ]

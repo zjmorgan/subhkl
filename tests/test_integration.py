@@ -18,7 +18,6 @@ directory = os.path.dirname(os.path.abspath(__file__))
 def test_mesolite():
     # FIXME
     # Ignoring this test until we get a version of the mesolite input file constructed from the image files to test with
-    pass
 
     directory = "tests/data"
 

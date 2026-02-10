@@ -1,23 +1,20 @@
-import os
-import re
-import typing
-from collections import namedtuple
 import bisect
 import multiprocessing
+import os
+import re
+from collections import namedtuple
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import cv2
+import h5py
 import numpy as np
 import numpy.typing as npt
-
-import h5py
+import scipy.ndimage
+import scipy.optimize
+import scipy.spatial
+import skimage.feature
 from h5py import File
 from PIL import Image
-
-import skimage.feature
-import scipy.optimize
-import scipy.ndimage
-import scipy.spatial
-import cv2
 
 # Ensure we have tqdm for progress bars
 try:
@@ -30,18 +27,18 @@ except ImportError:
 
 from subhkl.config import (
     beamlines,
-    reduction_settings,
     calc_goniometer_rotation_matrix,
     get_rotation_data_from_nexus,
+    reduction_settings,
 )
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
-from subhkl.threshold_peak_finder import ThresholdingPeakFinder
-from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 from subhkl.detector import Detector
+from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
+from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.utils import (
-    predict_reflections_on_panel,
     calculate_angular_error,
     generate_reflections,
+    predict_reflections_on_panel,
 )
 
 DetectorPeaks = namedtuple(
@@ -596,10 +593,10 @@ class Peaks:
         self,
         filename: str,
         instrument: str,
-        goniometer_axes: typing.Optional[list[list[float]]] = None,
-        goniometer_angles: typing.Optional[list[float]] = None,
-        wavelength_min: typing.Optional[float] = None,
-        wavelength_max: typing.Optional[float] = None,
+        goniometer_axes: list[list[float]] | None = None,
+        goniometer_angles: list[float] | None = None,
+        wavelength_min: float | None = None,
+        wavelength_max: float | None = None,
     ):
         name, ext = os.path.splitext(filename)
         self.filename = filename

@@ -1,7 +1,9 @@
+import typing
+
 import numpy as np
 import numpy.typing as npt
-import typing
 import scipy.linalg
+
 from subhkl.spacegroup import is_systematically_absent
 
 if typing.TYPE_CHECKING:
@@ -15,11 +17,12 @@ try:
     import jax
     import jax.numpy as jnp
     import jax.scipy.linalg as jscipy_linalg
-    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
-    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-    from jax import jit, vmap, lax
     import jax.scipy.optimize
     import jax.scipy.signal
+    from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
+    from jax import jit, lax, vmap
+    from jax.sharding import Mesh, NamedSharding
+    from jax.sharding import PartitionSpec as P
 
     HAS_JAX = True
     OPTIMIZATION_BACKEND = "jax"
@@ -173,7 +176,7 @@ def calculate_angular_error(
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
     R_all: npt.NDArray = None,
-):  # noqa: E741
+):
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
     Uses the RUB matrix (R @ U @ B) for all coordinate transformations.
@@ -245,7 +248,7 @@ def predict_reflections_on_panel(
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
     R_all: npt.NDArray = None,
-):  # noqa: E741
+):
     """
     Predicts which HKLs fall on a specific detector panel using the RUB matrix.
     Returns: (row, col, h, k, l, wavelength)

@@ -1,5 +1,5 @@
-import numpy as np
 import gemmi
+import numpy as np
 
 
 def get_space_group_object(sg_name_or_centering):
@@ -51,7 +51,7 @@ def is_systematically_absent(h, k, l, space_group_name):  # noqa: E741
     ops = sg.operations()  # <--- FIXED: Get operations object
 
     result = []
-    for hi, ki, li in zip(h, k, l):  # noqa: E741
+    for hi, ki, li in zip(h, k, l):
         if hi == 0 and ki == 0 and li == 0:
             result.append(True)  # 000 is physically absent
             continue
@@ -75,9 +75,9 @@ def generate_hkl_mask(h_max, k_max, l_max, space_group_name):
 
     h_range = np.arange(-h_max, h_max + 1)
     k_range = np.arange(-k_max, k_max + 1)
-    l_range = np.arange(-l_max, l_max + 1)  # noqa: E741
+    l_range = np.arange(-l_max, l_max + 1)
 
-    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")  # noqa: E741
+    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")
 
     mask = np.ones(H.shape, dtype=bool)
 

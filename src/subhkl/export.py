@@ -1,8 +1,8 @@
 import sys
-import numpy as np
-import h5py
 
 import gemmi
+import h5py
+import numpy as np
 
 
 class BaseConcatenateMerger:
