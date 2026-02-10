@@ -871,7 +871,7 @@ class VectorizedObjective:
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
         log_prob_accum, _, best_hkl, best_lamb = final_carry
-        score = -jnp.sum(self.weights * log_prob_accum, axis=1)
+        score = -jnp.sum(self.weights * jnp.exp(log_prob_accum), axis=1)
         return score, jnp.exp(log_prob_accum), best_hkl.transpose((0, 2, 1)), best_lamb
 
     def indexer_dynamic_binary_jax(
