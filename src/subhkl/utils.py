@@ -172,6 +172,7 @@ def calculate_angular_error(
     RUB: npt.NDArray,
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
+    R_all: npt.NDArray = None,
 ):  # noqa: E741
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
