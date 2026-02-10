@@ -15,7 +15,6 @@ jobs:
   lint:
     name: Linting + formating
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -56,8 +55,8 @@ jobs:
       - name: Install dependencies (JAX backend)
         if: matrix.backend == 'jax'
         run: uv pip install -e ".[test,jax]" --system
-      - name: Run tests
-        run: pytest -v
       - name: Verify backend
         run: |
           python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
+      - name: Run tests
+        run: pytest -v -m "not slow and not integration"

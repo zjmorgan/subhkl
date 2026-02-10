@@ -46,9 +46,11 @@ class ThresholdingPeakFinder:
         self.noise_cutoff_quantile = noise_cutoff_quantile
         self.min_peak_dist_pixels = min_peak_dist_pixels
         self.blur_kernel_sigma = blur_kernel_sigma
-        assert open_kernel_size_pixels in (3, 5, 7), (
-            "Invalid open kernel size. Only 3, 5 and 7 are available"
-        )
+        assert open_kernel_size_pixels in (
+            3,
+            5,
+            7,
+        ), "Invalid open kernel size. Only 3, 5 and 7 are available"
         self.open_kernel_size = open_kernel_size_pixels
 
         if mask_file is None:
@@ -278,10 +280,10 @@ class ThresholdingPeakFinder:
 
             # Shift contour to ROI coordinates
             c_roi = c - np.array([x, y])
-            cv2.drawContours(roi_mask, [c_roi], -1, 1, -1) # Fill contour
+            cv2.drawContours(roi_mask, [c_roi], -1, 1, -1)  # Fill contour
 
             # 2. Extract Intensity ROI
-            roi_im = im[y:y+h, x:x+w].astype(float)
+            roi_im = im[y : y + h, x : x + w].astype(float)
 
             # 3. Calculate Moments on Intensity-Weighted ROI
             # We multiply the binary shape mask by the actual pixel values
@@ -297,7 +299,7 @@ class ThresholdingPeakFinder:
             if M["m00"] > 0:
                 cX = x + (M["m10"] / M["m00"])
                 cY = y + (M["m01"] / M["m00"])
-                refined_centers.append([cY, cX]) # Store as (Row, Col) / (y, x)
+                refined_centers.append([cY, cX])  # Store as (Row, Col) / (y, x)
             else:
                 # Fallback to geometric center if moment fails (flat zero intensity)
                 mean_pos = np.mean(c[:, 0, :], axis=0)
@@ -307,7 +309,12 @@ class ThresholdingPeakFinder:
 
         if self.show_steps:
             plt.imshow(im, norm=self.show_scale, cmap="binary")
-            plt.scatter(refined_centers[:, 0], contour_centers[:, 1], edgecolors='red', facecolors='none')
+            plt.scatter(
+                refined_centers[:, 0],
+                contour_centers[:, 1],
+                edgecolors="red",
+                facecolors="none",
+            )
             plt.title("Peaks")
             plt.show()
             plt.savefig("peaks.png")
