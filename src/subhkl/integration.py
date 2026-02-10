@@ -478,7 +478,7 @@ class Peaks:
                 goniometer_axes, goniometer_angles
             )
             self.goniometer_axes_raw = goniometer_axes
-            self.goniometer_angles_raw = goniometer_angles
+            self.goniometer_angles_raw = np.array(goniometer_angles)
         else:
             self.goniometer_rotation = np.eye(3)
 
@@ -531,7 +531,7 @@ class Peaks:
                     axes, angles, names = get_rotation_data_from_nexus(filename, self.instrument)
                     self.goniometer_rotation = calc_goniometer_rotation_matrix(axes, angles)
                     self.goniometer_axes_raw = axes
-                    self.goniometer_angles_raw = angles
+                    self.goniometer_angles_raw = np.array(angles)
                     self.goniometer_names_raw = names
         else:
             self.ims = {0: np.array(Image.open(filename))}
