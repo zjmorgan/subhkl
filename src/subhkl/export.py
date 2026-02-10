@@ -23,7 +23,6 @@ class BaseConcatenateMerger:
         self.copy_keys = copy_keys
         self.merge_keys = merge_keys
 
-
     def merge(self, output_filename):
         """
         Merges the indexed datasets into a single dataset
@@ -81,6 +80,7 @@ class BaseConcatenateMerger:
 
                     offset += num_items
 
+
 class FinderConcatenateMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
         merge_keys = [
@@ -97,26 +97,9 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "bank",
             "peaks/run_index",
         ]
-        copy_keys = [
-            "goniometer/axes",
-            "goniometer/names"
-        ]
+        copy_keys = ["goniometer/axes", "goniometer/names"]
         super().__init__(h5_files, copy_keys, merge_keys)
 
-    def merge(self, output_filename):
-        # First call base merge to concatenate everything
-        super().merge(output_filename)
-        
-        # Now fix run_index to be the file index
-        with h5py.File(output_filename, "r+") as f_out:
-            if "peaks/run_index" in f_out:
-                offset = 0
-                for i_file, h5_file in enumerate(self.h5_files):
-                    with h5py.File(h5_file, "r") as f_in:
-                        num_items = len(f_in[self.merge_keys[0]])
-                        if num_items > 0:
-                            f_out["peaks/run_index"][offset:offset+num_items] = i_file
-                        offset += num_items
 
 class MTZExporter:
     def __init__(self, peaks_file, space_group="P 1"):
@@ -173,6 +156,11 @@ class MTZExporter:
         mtz.add_column("PHI", "W")
         mtz.add_column("BATCH", "B")
 
+        # Column order: h, k, l, I, sigI, [FP, sigFP,] wavel, theta, phi, batch
+        n_base_cols = 9  # h, k, l, I, sigI, wavel, theta, phi, batch
+        n_structure_factor_cols = 2  # FP, sigFP
+        n_cols = n_base_cols + (n_structure_factor_cols if self.f is not None else 0)
+
         data = []
 
         for i in range(len(self.intensity)):
@@ -200,10 +188,15 @@ class MTZExporter:
 
             data.append(row)
 
-        data = np.array(data)
+        if len(data) == 0:
+            # Empty case: create a 2D array with correct number of columns
+            data = np.empty((0, n_cols), dtype=np.float32)
+        else:
+            data = np.ascontiguousarray(np.array(data, dtype=np.float32))
 
         mtz.set_data(data)
         mtz.write_to_file(filename)
+
 
 class ImageStackMerger(BaseConcatenateMerger):
     def __init__(self, h5_files):
@@ -211,9 +204,9 @@ class ImageStackMerger(BaseConcatenateMerger):
         Merges reduced image HDF5 files into a single stack for batch processing.
         """
         merge_keys = [
-            "images",              # The stack of 2D images
-            "goniometer/angles",   # Per-image angles
-            "bank_ids",            # Per-image detector ID
+            "images",  # The stack of 2D images
+            "goniometer/angles",  # Per-image angles
+            "bank_ids",  # Per-image detector ID
         ]
 
         # Keys that should be identical across all files (metadata)

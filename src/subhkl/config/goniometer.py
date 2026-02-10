@@ -80,7 +80,7 @@ def get_rotation_data_from_nexus(filename, instrument):
                 angles.append(angle_deg)
                 axes.append(axis)
                 names.append(axis_name)
-        except:
+        except Exception:
             pass
 
     return axes, angles, names

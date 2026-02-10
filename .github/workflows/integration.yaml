@@ -1,0 +1,53 @@
+name: Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-integration:
+    name: Integration tests (${{ matrix.backend }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        os:
+          - ubuntu-latest
+        backend:
+          - numpy
+          - jax
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies (NumPy backend)
+        if: matrix.backend == 'numpy'
+        run: uv pip install -e ".[test]" --system
+      - name: Install dependencies (JAX backend)
+        if: matrix.backend == 'jax'
+        run: uv pip install -e ".[test,jax]" --system
+      - name: Verify backend
+        run: |
+          python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
+      - name: Run integration tests
+        run: pytest -v -m "integration" tests/test_mandi_mesolite.py::TestMandiMesoliteSingleRun
+        env:
+          MESOLITE_MAX_FILES: 1
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "Integration tests completed for ${{ matrix.backend }} backend"

@@ -83,5 +83,11 @@ disable = ["too-many-locals",
 ]
 extension-pkg-whitelist = ["PyQt5"]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
