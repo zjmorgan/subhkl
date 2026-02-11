@@ -293,7 +293,10 @@ def _process_single_image(
             "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
             "count": num,
         }
-        log_msg = f"Integrated {len(i)}/{len(centers)} peaks for {img_label} (Bank {physical_bank})"
+        log_msg = (
+            f"Integrated {len(i)}/{len(centers)} peaks for {img_label} "
+            f"(Bank {physical_bank})"
+        )
     else:
         res = None
         log_msg = f"{img_label} (Bank {physical_bank}) had 0 valid peaks"
@@ -317,14 +320,16 @@ def _predict_single_bank(
     """
     # 1. Generate Reflections locally
     a, b, c, alpha, beta, gamma, space_group, d_min = unit_cell_params
-    h, k, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    h, k, miller_l = generate_reflections(
+        a, b, c, alpha, beta, gamma, space_group, d_min
+    )
 
     det = Detector(det_config)
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
         detector=det,
         h=h,
         k=k,
-        l=l,
+        l=miller_l,
         RUB=RUB,
         wavelength_min=wavelength_min,
         wavelength_max=wavelength_max,
@@ -442,7 +447,10 @@ def _integrate_single_bank(
                         ki_vec,
                         current_R_val,
                     )
-                    metrics_str = f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, $\\Delta d$={np.median(d_err):.3f}$\\AA$"
+                    metrics_str = (
+                        f" | Med Error: $\\Delta\\theta$={np.median(ang_err):.2f}$^\\circ$, "
+                        f"$\\Delta d$={np.median(d_err):.3f}$\\AA$"
+                    )
 
     # --- INTEGRATION ---
     mask_file, mask_erosion = (
@@ -533,7 +541,7 @@ def _integrate_single_bank(
         )
 
         for p_i, p_j, p_h, p_k, p_l in zip(
-            centers[:, 0], centers[:, 1], bank_h, bank_k, bank_l
+            centers[:, 0], centers[:, 1], bank_h, bank_k, bank_l, strict=False
         ):
             is_zone = (p_h == 0) or (p_k == 0) or (p_l == 0)
             is_nodal = (abs(p_h) + abs(p_k) + abs(p_l)) < 8
@@ -738,7 +746,7 @@ class Peaks:
                 if match is not None:
                     keys.append(key)
                     banks.append(int(match.groups()[0]))
-            for rel_key, bank in zip(keys, banks):
+            for rel_key, bank in zip(keys, banks, strict=False):
                 key = "/entry/" + rel_key + "/event_id"
                 array = f[key][()]
                 det = detectors.get(str(bank))
@@ -829,7 +837,9 @@ class Peaks:
                 show_steps=harvest_peaks_kwargs.get("show_steps", False),
             )
             batch_coords = alg.find_peaks_batch(img_stack)
-            precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords)}
+            precomputed_peaks = {
+                k: c for k, c in zip(img_keys, batch_coords, strict=False)
+            }
 
         # --- PREPARE PARALLEL TASKS ---
         tasks = []
@@ -926,8 +936,9 @@ class Peaks:
                         radii.extend(res["radii"])
                         xyz_out.extend(res["xyz"])
                         banks.extend(res["banks"])
+                        actual_img_key = res["image_indices"][0]
                         image_indices.extend(res["image_indices"])
-                        run_ids.extend([self.get_run_id(img_key)] * res["count"])
+                        run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
                         if res["gonio_angles"]:
                             gonio_angles_out.extend(res["gonio_angles"])
                 except Exception as e:
@@ -969,7 +980,8 @@ class Peaks:
     ):
         """
         Predicts peak positions using parallel processing.
-        Handles RUB as either a single (3,3) matrix OR a stack (N,3,3) for rotation scans.
+        Handles RUB as either a single (3,3) matrix OR a stack (N,3,3)
+        for rotation scans.
         Generates HKLs locally (lazy generation) to reduce IPC overhead.
         """
 
@@ -984,7 +996,7 @@ class Peaks:
 
         print(f"Predicting peaks for {len(self.ims)} banks...")
 
-        for i, bank in enumerate(sorted_keys):
+        for _i, bank in enumerate(sorted_keys):
             det_config = beamlines[self.instrument][
                 str(self.bank_mapping.get(bank, bank))
             ]
@@ -1059,7 +1071,7 @@ class Peaks:
         found_peaks_file=None,
         max_workers=None,
     ):
-        h, k, l = [], [], []
+        h, k, miller_l = [], [], []
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
@@ -1200,7 +1212,7 @@ class Peaks:
                     if res:
                         h.extend(res["h"])
                         k.extend(res["k"])
-                        l.extend(res["l"])
+                        miller_l.extend(res["l"])
                         intensity.extend(res["intensity"])
                         sigma.extend(res["sigma"])
                         tt.extend(res["tt"])
@@ -1214,7 +1226,18 @@ class Peaks:
                     print(f"Integration worker failed: {e}")
 
         return IntegrationResult(
-            h, k, l, intensity, sigma, tt, az, wavelength, banks, xyz, R_out, angles_out
+            h,
+            k,
+            miller_l,
+            intensity,
+            sigma,
+            tt,
+            az,
+            wavelength,
+            banks,
+            xyz,
+            R_out,
+            angles_out,
         )
 
     def write_hdf5(
