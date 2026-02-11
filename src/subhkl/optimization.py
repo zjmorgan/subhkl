@@ -1386,7 +1386,15 @@ class FindUB:
         self.intensity = data["peaks/intensity"]
         self.sigma_intensity = data["peaks/sigma"]
         self.radii = data["peaks/radius"]
-        self.run_indices = data.get("peaks/run_index", None)
+
+        # Robust run_index resolution
+        self.run_indices = data.get("peaks/run_index")
+        if self.run_indices is None:
+            self.run_indices = data.get("peaks/image_index")
+        if self.run_indices is None:
+            self.run_indices = data.get("bank")
+        if self.run_indices is None:
+            self.run_indices = data.get("bank_ids")
 
         # Handle bytes vs string for Space Group
         sg = data["sample/space_group"]
@@ -1433,6 +1441,12 @@ class FindUB:
             data["peaks/radius"] = f["peaks/radius"][()]
             if "peaks/run_index" in f:
                 data["peaks/run_index"] = f["peaks/run_index"][()]
+            if "peaks/image_index" in f:
+                data["peaks/image_index"] = f["peaks/image_index"][()]
+            if "bank" in f:
+                data["bank"] = f["bank"][()]
+            if "bank_ids" in f:
+                data["bank_ids"] = f["bank_ids"][()]
             data["sample/space_group"] = f["sample/space_group"][()]
 
             if "peaks/xyz" in f:
@@ -1567,29 +1581,29 @@ class FindUB:
         seed: int = 0,
         tolerance_deg: float = 0.1,
         loss_method: str = "gaussian",
-        init_params: np.ndarray = None,
+        init_params: np.ndarray | None = None,
         refine_lattice: bool = False,
         lattice_bound_frac: float = 0.05,
-        goniometer_axes: list = None,
-        goniometer_angles: np.ndarray = None,
+        goniometer_axes: list | None = None,
+        goniometer_angles: np.ndarray | None = None,
         refine_goniometer: bool = False,
         goniometer_bound_deg: float = 5.0,
-        goniometer_names: list = None,
-        refine_goniometer_axes: list = None,
+        goniometer_names: list | None = None,
+        refine_goniometer_axes: list | None = None,
         refine_sample: bool = False,
         sample_bound_meters: float = 2.0,
         refine_beam: bool = False,
         beam_bound_deg: float = 1.0,
-        d_min: float = None,
-        d_max: float = None,
+        d_min: float | None = None,
+        d_max: float | None = None,
         hkl_search_range: int = 20,
         search_window_size: int = 256,
         window_batch_size: int = 32,
         chunk_size: int = 2048,
         num_iters: int = 20,
         top_k: int = 32,
-        batch_size: int = None,
-        sigma_init: float = None,
+        batch_size: int | None = None,
+        sigma_init: float | None = None,
         B_sharpen: float = 50,
     ):
         if goniometer_axes is None and self.goniometer_axes is not None:
