@@ -356,6 +356,7 @@ def finder(
         xyz=detector_peaks.xyz,  # Store XYZ
         bank=detector_peaks.bank,
         image_index=detector_peaks.image_index,
+        run_id=detector_peaks.run_id,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
         gonio_names=detector_peaks.gonio_names,

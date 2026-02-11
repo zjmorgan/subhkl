@@ -55,6 +55,7 @@ DetectorPeaks = namedtuple(
         "xyz",
         "bank",
         "image_index",
+        "run_id",
         "gonio_axes",
         "gonio_angles",
         "gonio_names",
@@ -765,7 +766,7 @@ class Peaks:
         """Helper to resolve the run ID for an image key."""
         if hasattr(self, "file_offsets") and self.file_offsets is not None:
             return int(np.searchsorted(self.file_offsets, img_key, side="right") - 1)
-        return img_key
+        return 0
 
     def get_image_label(self, img_key):
         """Helper to resolve a readable label for an image key."""
@@ -806,6 +807,7 @@ class Peaks:
         xyz_out: list[list[float]] = []
         banks: list[int] = []
         image_indices: list[int] = []
+        run_ids: list[int] = []
         gonio_angles_out: list[list[float]] = []
 
         finder_algorithm = harvest_peaks_kwargs.pop("algorithm")
@@ -925,6 +927,7 @@ class Peaks:
                         xyz_out.extend(res["xyz"])
                         banks.extend(res["banks"])
                         image_indices.extend(res["image_indices"])
+                        run_ids.extend([self.get_run_id(img_key)] * res["count"])
                         if res["gonio_angles"]:
                             gonio_angles_out.extend(res["gonio_angles"])
                 except Exception as e:
@@ -942,6 +945,7 @@ class Peaks:
             xyz_out,
             banks,
             image_indices,
+            run_ids,
             self.goniometer_axes_raw,
             gonio_angles_out,
             self.goniometer_names_raw,
@@ -1227,6 +1231,7 @@ class Peaks:
         xyz: list[list[float]],
         bank: list[int],
         image_index: list[int] = None,
+        run_id: list[int] = None,
         gonio_axes: list[list[float]] = None,
         gonio_angles: list[list[float]] = None,
         gonio_names: list[str] = None,
@@ -1246,7 +1251,10 @@ class Peaks:
             f["bank"] = bank
 
             if image_index is not None:
-                f["peaks/run_index"] = image_index
+                f["peaks/image_index"] = image_index
+
+            if run_id is not None:
+                f["peaks/run_index"] = run_id
 
             if hasattr(self, "image_files_raw") and self.image_files_raw:
                 f["files"] = np.array([s.encode("utf-8") for s in self.image_files_raw])

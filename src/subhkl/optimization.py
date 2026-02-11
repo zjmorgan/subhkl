@@ -347,10 +347,16 @@ class VectorizedObjective:
         # Handle Peak-to-Run mapping metadata
         if peak_run_indices is not None:
             self.peak_run_indices = jnp.array(peak_run_indices, dtype=jnp.int32)
-        # Default: If R is a stack of N rotations, and we have N peaks, assume 1-to-1.
-        # Otherwise, map everything to run 0.
-        elif self.static_R.ndim == 3 and self.static_R.shape[0] == num_peaks:
-            self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
+        # Default heuristic:
+        # 1. If R is a stack of N rotations and we have N peaks, assume 1-to-1 mapping.
+        # 2. If R is a stack of M rotations and we have N peaks, check if M matches unique runs.
+        elif self.static_R.ndim == 3:
+            num_rotations = self.static_R.shape[0]
+            if num_rotations == num_peaks:
+                self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
+            else:
+                # Fallback: everything to run 0 if we can't decide
+                self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
         else:
             self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
 
@@ -1920,6 +1926,7 @@ class FindUB:
         if offsets_total_batch is not None:
             self.goniometer_offsets = np.array(offsets_total_batch[0])
         if R_batch is not None:
+            # If R_batch is (S, N_runs, 3, 3), we want (N_runs, 3, 3) for the best member
             self.R = np.array(R_batch[0])
 
         idx = 0
