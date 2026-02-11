@@ -169,3 +169,8 @@ cython_debug/
 
 # Large test data stored on Zenodo
 tests/data/MANDI/mesolite/
+
+# gemini extension
+ADVERSARY.md
+ruff.toml
+sum_complexity.py
