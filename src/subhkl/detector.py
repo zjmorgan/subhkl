@@ -31,6 +31,7 @@ def angles_from_kf(kf_vectors):
     """
     Converts outgoing wavevectors (kf) to Lab Frame detector angles.
     """
+    kf_vectors = np.atleast_2d(kf_vectors)
     norms = np.linalg.norm(kf_vectors, axis=1, keepdims=True)
     kf_dir = kf_vectors / norms
     two_theta = np.arccos(kf_dir[:, 2])
