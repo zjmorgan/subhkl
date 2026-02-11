@@ -26,6 +26,8 @@ from subhkl.utils import (
     jscipy_linalg,
 )
 
+__all__ = ["OPTIMIZATION_BACKEND"]
+
 try:
     from tqdm import trange
 except ImportError:
@@ -324,6 +326,10 @@ class VectorizedObjective:
     ):
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
+        if self.kf_ki_dir_init.ndim == 2:
+            if self.kf_ki_dir_init.shape[0] != 3 and self.kf_ki_dir_init.shape[1] == 3:
+                self.kf_ki_dir_init = self.kf_ki_dir_init.T
+
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
 
@@ -483,13 +489,22 @@ class VectorizedObjective:
         self.num_candidates = 64
 
         if weights is None:
-            self.weights = jnp.ones(self.kf_ki_dir_init.shape[1])
+            self.weights = jnp.ones(num_peaks)
         else:
-            self.weights = jnp.array(weights)
+            self.weights = jnp.array(weights).flatten()
+            if self.weights.shape[0] != num_peaks:
+                raise ValueError(
+                    f"Weights shape {self.weights.shape} does not match num_peaks {num_peaks}"
+                )
+
         if peak_radii is None:
-            self.peak_radii = jnp.zeros(self.kf_ki_dir_init.shape[1])
+            self.peak_radii = jnp.zeros(num_peaks)
         else:
-            self.peak_radii = jnp.array(peak_radii)
+            self.peak_radii = jnp.array(peak_radii).flatten()
+            if self.peak_radii.shape[0] != num_peaks:
+                raise ValueError(
+                    f"Peak radii shape {self.peak_radii.shape} does not match num_peaks {num_peaks}"
+                )
 
         self.max_score = jnp.sum(self.weights)
         self.d_min = d_min if d_min is not None else 0.0
@@ -720,10 +735,10 @@ class VectorizedObjective:
         return U
 
     def indexer_dynamic_soft_jax(
-        self, UB, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002
+        self, ub_mat, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002
     ):
-        UB_inv = jnp.linalg.inv(UB)
-        v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
+        ub_inv = jnp.linalg.inv(ub_mat)
+        v = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
@@ -745,7 +760,7 @@ class VectorizedObjective:
             lamda_cand = max_v_val / n_safe
             hkl_float = v / lamda_cand[:, None, :]
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            q_int = jnp.einsum("sij,sjm->sim", UB, hkl_int)
+            q_int = jnp.einsum("sij,sjm->sim", ub_mat, hkl_int)
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
@@ -755,13 +770,20 @@ class VectorizedObjective:
             effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
                 k_norm / safe_lamb
             )
-            prob = jnp.exp(-dist_sq / (2 * effective_sigma**2))
+            # Robust Multi-Scale Kernel
+            # 1. Narrow (High precision)
+            log_p_narrow = -dist_sq / (2 * effective_sigma**2 + 1e-9)
 
-            valid_cand = (lamda_cand >= self.wl_min_val) & (
-                lamda_cand <= self.wl_max_val
+            # 2. Wide (Capture range: 5 degrees)
+            sigma_wide = jnp.deg2rad(5.0) * (k_norm / safe_lamb)
+            log_p_wide = -dist_sq / (2 * sigma_wide**2 + 1e-9)
+
+            # Combine via LogSumExp with 1% weight on wide kernel
+            log_prob = jax.nn.logsumexp(
+                jnp.stack([log_p_narrow, log_p_wide - 4.605]), axis=0
             )
+            prob = jnp.exp(log_prob)
 
-            # --- FIX: ADDED RESOLUTION FILTER (d_min / d_max) ---
             # 1. Calc |Q|^2 for predicted HKL
             q_sq_pred = jnp.sum(q_int**2, axis=1)
             # 2. Convert to d = 1/|Q| (Crystallographic units)
@@ -772,7 +794,7 @@ class VectorizedObjective:
             is_allowed = self.is_allowed_jax(h, k, l)
 
             # Combine masks
-            final_mask = valid_cand & is_allowed & valid_res
+            final_mask = is_allowed & valid_res
 
             prob = jnp.where(final_mask, prob, 0.0)
 
@@ -786,15 +808,16 @@ class VectorizedObjective:
         final_carry, _ = jax.lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
-        accum_probs, _, best_hkl, best_lamb = final_carry
-        score = -jnp.sum(self.weights * accum_probs, axis=1)
-        return score, accum_probs, best_hkl.transpose((0, 2, 1)), best_lamb
+        accum_probs, prob_max, best_hkl, best_lamb = final_carry
+        # score = -jnp.sum(self.weights * accum_probs, axis=1) # Original sum
+        score = -jnp.sum(self.weights * prob_max, axis=1)
+        return score, prob_max, best_hkl.transpose((0, 2, 1)), best_lamb
 
     def indexer_dynamic_cosine_aniso_jax(
-        self, UB, kf_ki_sample, *, k_sq_override=None, tolerance_rad=0.002
+        self, ub_mat, kf_ki_sample, *, k_sq_override=None, tolerance_rad=0.002
     ):
-        UB_inv = jnp.linalg.inv(UB)
-        v = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
+        ub_inv = jnp.linalg.inv(ub_mat)
+        v = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
@@ -814,36 +837,43 @@ class VectorizedObjective:
         def scan_body(carry, i):
             curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
             n = start_int + i
-            ratio = n / max_v_val
-            hkl_float = v * ratio[:, None, :]
-            lamda_cand = 1.0 / ratio
+            n_safe = jnp.where(n == 0, 1e-9, n)
+            lamda_cand = max_v_val / n_safe
+
+            # --- DYNAMIC WAVELENGTH OPTIMIZATION ---
+            # Instead of just using lamda_cand, we find the lambda that best
+            # satisfies the Laue condition for the nearest integer HKL.
+            hkl_int = jnp.round(v / lamda_cand[:, None, :]).astype(jnp.int32)
+            q_int = jnp.einsum("sij,sjm->sim", ub_mat, hkl_int)
+            k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
+            safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
+            k_sq = self.k_sq_init[None, :]
+            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+
+            # Recalculate HKL float at the optimal wavelength for the cosine kernel
+            hkl_float = v / lambda_opt[:, None, :]
 
             # Robust Multi-Scale Kernel: Mixture of Narrow + Wide peaks
-            # 1. Narrow (High precision)
+            # We scale kappa by 1/h^2 to represent a uniform angular tolerance
+            # (sigma_h approx tolerance_rad * h)
+            hkl_sq = jnp.where(jnp.abs(hkl_float) < 1e-3, 1e-6, hkl_float**2)
+
+            kappa_scaled = 1.0 / (hkl_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2)
             cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
-            log_p_narrow = jnp.sum(kappa * cos_diff, axis=1)
+            log_p_narrow = jnp.sum(kappa_scaled * cos_diff, axis=1)
 
-            # 2. Wide (Capture range)
-            # 5 degrees is a safe capture range for initial orientation
-            kappa_wide = 1.0 / (jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2)
-            log_p_wide = jnp.sum(kappa_wide * cos_diff, axis=1)
-
-            # Combine via LogSumExp (implicit 50/50 mixture)
+            kappa_wide_scaled = 1.0 / (hkl_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2)
+            log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff, axis=1)
+            # Combine via LogSumExp
             log_prob = jax.nn.logsumexp(jnp.stack([log_p_narrow, log_p_wide]), axis=0)
 
             # --- VALIDATION LOGIC ---
-            valid_cand = (lamda_cand >= self.wl_min_val) & (
-                lamda_cand <= self.wl_max_val
-            )
-
-            # 1. Resolution Filter (Crystallographic convention d = 1/|Q|)
-            q_vecs = jnp.einsum("sij,sjm->sim", UB, hkl_float)
-            q_sq = jnp.sum(q_vecs**2, axis=1)  # |Q|^2 = 1/d^2
+            # Resolution Filter
+            q_sq = jnp.sum(q_int**2, axis=1)
             d_est = 1.0 / jnp.sqrt(q_sq + 1e-9)
             valid_res = (d_est >= self.d_min) & (d_est <= self.d_max)
 
-            # 2. Symmetry Mask
-            hkl_int = jnp.round(hkl_float).astype(jnp.int32)
+            # Symmetry Mask
             miller_h, miller_k, miller_l = (
                 hkl_int[:, 0, :],
                 hkl_int[:, 1, :],
@@ -852,7 +882,7 @@ class VectorizedObjective:
             is_allowed = self.is_allowed_jax(miller_h, miller_k, miller_l)
 
             # Combine all masks
-            final_mask = valid_cand & valid_res & is_allowed
+            final_mask = is_allowed & valid_res
 
             # Use LogSumExp style accumulation for robustness
             log_prob_masked = jnp.where(final_mask, log_prob, -1e12)
@@ -864,19 +894,19 @@ class VectorizedObjective:
             update_mask = log_prob_masked > curr_max
             new_max = jnp.where(update_mask, log_prob_masked, curr_max)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-            new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
+            new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = jax.lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
-        log_prob_accum, _, best_hkl, best_lamb = final_carry
-        score = -jnp.sum(self.weights * jnp.exp(log_prob_accum), axis=1)
-        return score, jnp.exp(log_prob_accum), best_hkl.transpose((0, 2, 1)), best_lamb
+        _, log_prob_max, best_hkl, best_lamb = final_carry
+        score = -jnp.sum(self.weights * jnp.exp(log_prob_max), axis=1)
+        return score, jnp.exp(log_prob_max), best_hkl.transpose((0, 2, 1)), best_lamb
 
     def indexer_dynamic_binary_jax(
         self,
-        UB,
+        ub_mat,
         kf_ki_sample,
         k_sq_override=None,
         tolerance_rad=0.002,
@@ -884,8 +914,8 @@ class VectorizedObjective:
     ):
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
-        UB_inv = jnp.linalg.inv(UB)
-        hkl_float = jnp.einsum("sij,sjm->sim", UB_inv, kf_ki_sample)
+        ub_inv = jnp.linalg.inv(ub_mat)
+        hkl_float = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
         hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float)
         phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :])
         idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs)
@@ -899,7 +929,7 @@ class VectorizedObjective:
         )
         offset_batches = offsets_padded.reshape(-1, window_batch_size)
         init_min_dist = jnp.full(idx_centers.shape, 1e9)
-        init_best_hkl = jnp.zeros(idx_centers.shape + (3,))
+        init_best_hkl = jnp.zeros((*idx_centers.shape, 3))
         init_best_lamb = jnp.zeros(idx_centers.shape)
         init_carry = (init_min_dist, init_best_hkl, init_best_lamb)
 
@@ -908,7 +938,7 @@ class VectorizedObjective:
             gather_idx = idx_centers[..., None] + batch_offsets[None, None, :]
             pool_T = self.pool_hkl_sorted.T
             hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode="wrap")
-            q_pred = jnp.einsum("sij,smwj->smwi", UB, hkl_cands)
+            q_pred = jnp.einsum("sij,smwj->smwi", ub_mat, hkl_cands)
             k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
             k_dot_q = jnp.sum(k_obs * q_pred, axis=3)
             lambda_opt = k_sq[..., None] / jnp.where(
@@ -957,7 +987,7 @@ class VectorizedObjective:
     # ==========================================================================
     def indexer_sinkhorn_jax(
         self,
-        UB,
+        ub_mat,
         kf_ki_sample,
         k_sq_override=None,
         tolerance_rad=0.002,
@@ -978,7 +1008,7 @@ class VectorizedObjective:
 
         # Re-project Unit Obs into Crystal Frame: (Batch, 3, N_obs) @ (Batch, 3, 3) -> (Batch, 3, N_obs)
         # We need r_obs_unit_crystal = U^T @ r_obs_unit_lab
-        r_obs_proj_unit = jnp.einsum("sji,sjn->sin", UB, r_obs_unit)
+        r_obs_proj_unit = jnp.einsum("sji,sjn->sin", ub_mat, r_obs_unit)
 
         k_sq_obs = (
             k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
@@ -1011,7 +1041,7 @@ class VectorizedObjective:
             dot_raw = jnp.einsum("sin,ik->snk", r_obs_proj_unit, hkl_chunk)
 
             # cosine = dot_raw / |UB h|
-            q_chunk = jnp.einsum("sij,jk->sik", UB, hkl_chunk)
+            q_chunk = jnp.einsum("sij,jk->sik", ub_mat, hkl_chunk)
             norm_q_chunk = jnp.sqrt(jnp.sum(q_chunk**2, axis=1) + 1e-9)
             dots_chunk = dot_raw / (norm_q_chunk[:, None, :] + 1e-9)
 
@@ -1068,7 +1098,7 @@ class VectorizedObjective:
         # 3. Log-Kernel with Soft Penalties
         # Gather HKL vectors and re-calculate full geometry for top-k
         hkl_selected = jnp.take(hkl_pool_padded.T, top_idxs, axis=0)
-        q_selected = jnp.einsum("sij,snkj->snki", UB, hkl_selected)
+        q_selected = jnp.einsum("sij,snkj->snki", ub_mat, hkl_selected)
         q_sq_selected = jnp.sum(q_selected**2, axis=3)
         norm_q_selected = jnp.sqrt(q_sq_selected + 1e-9)
 
@@ -1138,10 +1168,10 @@ class VectorizedObjective:
 
         # 6. Score
         # We want to maximize the probability of matching ANY valid HKL (non-outlier).
-        # Optimization is MINIMIZATION, so we return the negative log-likelihood.
+        # Optimization is MINIMIZATION, so we return the negative probability sum.
         log_P_match = log_P_softmax[:, :, :-1]
         log_prob_any = jax.nn.logsumexp(log_P_match, axis=2)
-        weighted_cost = -jnp.sum(self.weights * log_prob_any, axis=1)
+        score = -jnp.sum(self.weights * jnp.exp(log_prob_any), axis=1)
 
         # Metrics for reporting
         best_k_idx = jnp.argmax(log_P_match, axis=2)
@@ -1153,7 +1183,7 @@ class VectorizedObjective:
             lambda_sparse, best_k_idx[:, :, None], axis=2
         ).squeeze(2)
 
-        return weighted_cost, jnp.exp(log_prob_any), best_hkl, best_lamb
+        return score, jnp.exp(log_prob_any), best_hkl, best_lamb
 
     def is_allowed_jax(self, h, k, l):
         """

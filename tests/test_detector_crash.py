@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+
 from subhkl.detector import angles_from_scattering_vector
 
 
