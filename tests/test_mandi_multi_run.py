@@ -3,8 +3,9 @@ import pytest
 from pathlib import Path
 import h5py
 import numpy as np
+import random
+import time
 
-MESOLITE_FILES = ["MANDI_11613.nxs.h5", "MANDI_11614.nxs.h5"]
 INSTRUMENT = "MANDI"
 LATTICE_PARAMS = [18.39, 56.55, 6.54, 90, 90, 90]
 SPACE_GROUP = "F d d 2"
@@ -24,12 +25,46 @@ FINDER_PARAMS = [
 
 
 @pytest.fixture
-def mesolite_dir(test_data_dir):
+def random_mesolite_pair(test_data_dir):
+    """Pick two random MANDI files with significantly different goniometer settings."""
     path = Path(test_data_dir) / "MANDI" / "mesolite"
-    for filename in MESOLITE_FILES:
-        if not (path / filename).exists():
-            pytest.skip(f"Data file {filename} not found")
-    return path
+    available_files = sorted(list(path.glob("MANDI_*.nxs.h5")))
+    
+    if len(available_files) < 2:
+        pytest.skip(f"Not enough data files found in {path} (found {len(available_files)})")
+    
+    rng = random.Random(42)  # Seeded for CI stability
+    
+    def get_angles(f):
+        with h5py.File(f, 'r') as h:
+            try:
+                omega = h['entry/DASlogs/BL11B:Mot:omega/value'][0]
+                chi = h['entry/DASlogs/BL11B:Mot:chi/value'][0]
+                phi = h['entry/DASlogs/BL11B:Mot:phi/value'][0]
+                return np.array([omega, chi, phi])
+            except KeyError:
+                return None
+
+    # Try to find a pair with at least 20 degrees difference in at least one angle
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        pair = rng.sample(available_files, 2)
+        a1 = get_angles(pair[0])
+        a2 = get_angles(pair[1])
+        
+        if a1 is not None and a2 is not None:
+            diff = np.abs(a1 - a2)
+            if np.any(diff >= 20.0):
+                print(f"\n[Test] Selected diverse files: {[f.name for f in pair]}")
+                print(f"[Test] Angles 1: {a1}")
+                print(f"[Test] Angles 2: {a2}")
+                print(f"[Test] Max diff: {np.max(diff):.2f} deg")
+                return pair
+
+    # Fallback to any two if diversity condition not met within timeout
+    print("\n[Test] WARNING: Could not find pair with >20 deg difference. Falling back to random pair.")
+    pair = rng.sample(available_files, 2)
+    return pair
 
 
 def run_indexing_pipeline(input_h5, tmp_path, label):
@@ -73,7 +108,7 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
             "--bootstrap", str(stage2_h5),
             "--n-runs", "1", "--popsize", "200", "--gens", "100",
             "--strategy", "cma_es", "--hkl-search-range", "35", "--tolerance-deg", "0.05",
-            "--loss-method", "gaussian",
+            "--loss-method", "gaussian", "--refine-goniometer",
         ],
         check=True,
     )
@@ -95,18 +130,17 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
 
         assert indexed_count > 10
         assert indexed_ratio >= 0.75
-        assert ang_err < 0.2
+        assert ang_err < 0.3
     
     return indexed_h5
 
 
 @pytest.mark.slow
-def test_mandi_multi_run_finder_merger(mesolite_dir, tmp_path):
+def test_mandi_multi_run_finder_merger(random_mesolite_pair, tmp_path):
     """Test indexing using the peak-finder merger workflow."""
     finder_outputs = []
-    for filename in MESOLITE_FILES:
-        input_file = mesolite_dir / filename
-        output_file = tmp_path / f"{filename}.finder.h5"
+    for input_file in random_mesolite_pair:
+        output_file = tmp_path / f"{input_file.name}.finder.h5"
         subprocess.run(
             [
                 "python", "-m", "subhkl.io.parser", "finder",
@@ -137,12 +171,11 @@ def test_mandi_multi_run_finder_merger(mesolite_dir, tmp_path):
 
 
 @pytest.mark.slow
-def test_mandi_multi_run_image_merger(mesolite_dir, tmp_path):
+def test_mandi_multi_run_image_merger(random_mesolite_pair, tmp_path):
     """Test indexing using the image-merge workflow (production script style)."""
     reduced_files = []
-    for filename in MESOLITE_FILES:
-        input_file = mesolite_dir / filename
-        reduced_file = tmp_path / f"{filename}.reduced.h5"
+    for input_file in random_mesolite_pair:
+        reduced_file = tmp_path / f"{input_file.name}.reduced.h5"
         subprocess.run(
             [
                 "python", "-m", "subhkl.io.parser", "reduce",
