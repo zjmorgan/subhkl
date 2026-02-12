@@ -83,6 +83,81 @@ def test_mandi_multi_run_indexing(test_data_dir, tmp_path):
         check=True,
     )
 
+    # --- HARDEN: Alternative image-merge workflow ---
+    reduced_files = []
+    for filename in MESOLITE_FILES:
+        input_file = mesolite_dir / filename
+        reduced_file = tmp_path / f"{filename}.reduced.h5"
+        subprocess.run(
+            [
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "reduce",
+                str(input_file),
+                str(reduced_file),
+                INSTRUMENT,
+            ],
+            check=True,
+        )
+        reduced_files.append(str(reduced_file))
+
+    scan_master_h5 = tmp_path / "scan_master.h5"
+    subprocess.run(
+        [
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "merge-images",
+            " ".join(reduced_files),
+            str(scan_master_h5),
+        ],
+        check=True,
+    )
+
+    finder_merged_h5 = tmp_path / "finder_merged.h5"
+    subprocess.run(
+        [
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "finder",
+            str(scan_master_h5),
+            INSTRUMENT,
+            "--output-filename",
+            str(finder_merged_h5),
+            "--finder-algorithm",
+            "thresholding",
+            "--thresholding-noise-cutoff-quantile",
+            "0.99",
+            "--region-growth-minimum-intensity",
+            "3.0",
+            "--region-growth-maximum-pixel-radius",
+            "12.0",
+            "--peak-center-box-size",
+            "3",
+            "--peak-smoothing-window-size",
+            "5",
+            "--peak-minimum-pixels",
+            "40",
+            "--peak-minimum-signal-to-noise",
+            "0.0",
+            "--peak-pixel-outlier-threshold",
+            "4.0",
+        ],
+        check=True,
+    )
+
+    # Compare Workflow 1 vs Workflow 2
+    with h5py.File(merged_h5, "r") as f1, h5py.File(finder_merged_h5, "r") as f2:
+        n_peaks1 = len(f1["peaks/two_theta"])
+        n_peaks2 = len(f2["peaks/two_theta"])
+        print(f"Workflow 1 (finder-merger) peaks: {n_peaks1}")
+        print(f"Workflow 2 (merge-images) peaks: {n_peaks2}")
+
+        # They should be equivalent
+        assert abs(n_peaks1 - n_peaks2) < 5
+
     # 3. Stage 1: Coarse multi-run indexing (0.5 deg)
     stage1_h5 = tmp_path / "stage1.h5"
     subprocess.run(
@@ -195,5 +270,9 @@ def test_mandi_multi_run_indexing(test_data_dir, tmp_path):
         ang_err = m["median_ang_err"]
         print(f"Median angular error: {ang_err}")
 
+        indexed_ratio = indexed_count / len(h)
+        print(f"Indexed ratio: {indexed_ratio:.2%}")
+
         assert indexed_count > 10
-        assert ang_err < 0.3
+        assert indexed_ratio >= 0.75
+        assert ang_err < 0.2
