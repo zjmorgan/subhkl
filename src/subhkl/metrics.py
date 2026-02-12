@@ -35,11 +35,16 @@ def _get_safe_R_stack(R_file_in, run_indices_in, target_len):
     # Robust lookup with fallback
     def safe_get_single_R(r_idx):
         ridx = int(r_idx)
-        if ridx < len(R_file_in):
+        if R_file_in.ndim == 3 and len(R_file_in) > ridx:
             return R_file_in[ridx]
         return R_file_in[0]
 
     if R_file_in.ndim == 3:
+        # Check if R_file_in is per-peak or per-run
+        # target_len is number of matched peaks.
+        # If stack matches target_len, it is likely already per-peak.
+        if len(R_file_in) == target_len:
+            return R_file_in
         return [safe_get_single_R(r) for r in run_indices_in]
     return [R_file_in] * target_len
 
