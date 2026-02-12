@@ -68,17 +68,11 @@ def index(
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
-    print(
-        f"Settings per run: Population Size={population_size}, Generations={gens}"
-    )
+    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
     if refine_lattice:
-        print(
-            f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds."
-        )
+        print(f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds.")
     if refine_sample:
-        print(
-            f"Refining sample offset with {1000 * sample_bound_meters} mm bounds."
-        )
+        print(f"Refining sample offset with {1000 * sample_bound_meters} mm bounds.")
     if refine_beam:
         print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
@@ -219,9 +213,7 @@ def index(
         safe_write(f, "goniometer/R", opt.R)
 
         if opt.goniometer_offsets is not None:
-            safe_write(
-                f, "optimization/goniometer_offsets", opt.goniometer_offsets
-            )
+            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
 
         if opt.sample_offset is not None:
             safe_write(f, "sample/offset", opt.sample_offset)
@@ -239,6 +231,10 @@ def index(
         B_mat = opt.reciprocal_lattice_B()
         safe_write(f, "sample/B", B_mat)
         f["sample/U"] = U
+
+        # Use updated run_indices if available
+        if opt.run_indices is not None:
+            safe_write(f, "peaks/run_index", opt.run_indices)
 
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
         # opt.minimize returns hkl (3, N).
@@ -304,9 +300,7 @@ def finder(
         if peak_local_max_min_pixel_distance > 0:
             peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
         if peak_local_max_min_relative_intensity > 0:
-            peak_kwargs["min_rel_intensity"] = (
-                peak_local_max_min_relative_intensity
-            )
+            peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
         peak_kwargs["normalize"] = peak_local_max_normalization
     elif finder_algorithm == "thresholding":
         peak_kwargs.update(
@@ -447,9 +441,7 @@ def indexer(
         "--popsize",
         help="Population size for each generation.",
     ),
-    gens: int = typer.Option(
-        100, "--gens", help="Number of generations to run."
-    ),
+    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
     seed: int = typer.Option(
         0, "--seed", help="Base seed for the first optimization run."
     ),
@@ -548,9 +540,7 @@ def indexer(
                     f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A"
                 )
             else:
-                raise ValueError(
-                    "Wavelength not provided and not found in input file."
-                )
+                raise ValueError("Wavelength not provided and not found in input file.")
 
         # Read standard datasets
         keys_to_load = [
@@ -627,9 +617,7 @@ def indexer(
             # Use rounding to handle floating point jitter in uniqueness check
             # Rounding to 6 decimal places handles 1e-7 tolerance (sub-pixel/sub-arcsec)
             combined_rounded = np.round(combined, 6)
-            _, unique_mapping = np.unique(
-                combined_rounded, axis=0, return_inverse=True
-            )
+            _, unique_mapping = np.unique(combined_rounded, axis=0, return_inverse=True)
             input_data["peaks/run_index"] = unique_mapping
 
             # Update R and angles to match the new unique mapping
@@ -650,13 +638,9 @@ def indexer(
             if angles_stack is not None and angles_stack.ndim == 2:
                 # Use same robust logic for final expansion
                 if angles_stack.shape[1] == num_peaks:
-                    input_data["goniometer/angles"] = angles_stack[
-                        :, unique_indices
-                    ]
+                    input_data["goniometer/angles"] = angles_stack[:, unique_indices]
                 elif angles_stack.shape[0] == num_peaks:
-                    input_data["goniometer/angles"] = angles_stack[
-                        unique_indices
-                    ].T
+                    input_data["goniometer/angles"] = angles_stack[unique_indices].T
                 else:
                     # Per-run
                     num_axes = len(input_data.get("goniometer/axes", []))
@@ -666,15 +650,11 @@ def indexer(
                     if angles_stack.shape[0] == num_axes:
                         # (num_axes, num_runs)
                         expanded = angles_stack[:, old_run_indices]
-                        input_data["goniometer/angles"] = expanded[
-                            :, unique_indices
-                        ]
+                        input_data["goniometer/angles"] = expanded[:, unique_indices]
                     else:
                         # (num_runs, num_axes)
                         expanded = angles_stack[old_run_indices]
-                        input_data["goniometer/angles"] = expanded[
-                            unique_indices
-                        ].T
+                        input_data["goniometer/angles"] = expanded[unique_indices].T
 
             print(
                 f"  > Expanded runs from {np.max(old_run_indices) + 1} to "
@@ -712,9 +692,7 @@ def indexer(
     gonio_axes_list = None
     refine_goniometer_axes_val = _val(refine_goniometer_axes)
     if refine_goniometer_axes_val:
-        gonio_axes_list = [
-            x.strip() for x in refine_goniometer_axes_val.split(",")
-        ]
+        gonio_axes_list = [x.strip() for x in refine_goniometer_axes_val.split(",")]
 
     index(
         input_data=input_data,
@@ -945,9 +923,7 @@ def peak_predictor(
             angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
             all_R = np.stack(
                 [
-                    calc_goniometer_rotation_matrix(
-                        peaks.goniometer_axes_raw, ang
-                    )
+                    calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
                     for ang in angles_refined
                 ]
             )
@@ -1128,9 +1104,7 @@ def integrator(
     # 4. Run Integration
     # Calculate RUB Stack from loaded parameters
     if all_R is None:
-        print(
-            "Warning: Refined R stack not found in prediction file. Using nominal."
-        )
+        print("Warning: Refined R stack not found in prediction file. Using nominal.")
         all_R = peaks.goniometer_rotation
 
     if angles_stack is None:
@@ -1260,9 +1234,7 @@ def reduce(
     # Repeat angles for each bank so they stay aligned after merging
     if peaks_handler.goniometer_angles_raw is not None:
         # shape (1, 3) -> (N_banks, 3)
-        angles_repeated = np.tile(
-            peaks_handler.goniometer_angles_raw, (n_images, 1)
-        )
+        angles_repeated = np.tile(peaks_handler.goniometer_angles_raw, (n_images, 1))
     else:
         angles_repeated = np.zeros((n_images, 3))  # Fallback
 

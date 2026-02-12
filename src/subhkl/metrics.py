@@ -111,7 +111,35 @@ def compute_metrics(
             matched_xyz,
             matched_R,
             matched_run,
-        ) = [], [], [], [], [], [], []
+        ) = ([], [], [], [], [], [], [])
+
+        # Robust Run Index Resolution for Metrics
+        def resolve_indices(f_handle):
+            idx_run = (
+                f_handle["peaks/run_index"][()]
+                if "peaks/run_index" in f_handle
+                else None
+            )
+            idx_img = (
+                f_handle["peaks/image_index"][()]
+                if "peaks/image_index" in f_handle
+                else None
+            )
+            idx_bank = f_handle["bank"][()] if "bank" in f_handle else None
+
+            if R_file is not None and R_file.ndim == 3:
+                num_rot = R_file.shape[0]
+                if idx_run is not None and int(np.max(idx_run)) + 1 == num_rot:
+                    return idx_run
+                if idx_img is not None and int(np.max(idx_img)) + 1 == num_rot:
+                    return idx_img
+                if idx_bank is not None and int(np.max(idx_bank)) + 1 == num_rot:
+                    return idx_bank
+            return (
+                idx_run
+                if idx_run is not None
+                else (idx_img if idx_img is not None else idx_bank)
+            )
 
         if found_peaks_file is not None:
             if instrument is None:
@@ -122,17 +150,9 @@ def compute_metrics(
             # Load Found Peaks
             with h5py.File(found_peaks_file, "r") as f_obs:
                 xyz_obs = f_obs["peaks/xyz"][()]
-                run_obs = (
-                    f_obs["peaks/run_index"][()]
-                    if "peaks/run_index" in f_obs
-                    else None
-                )
+                run_obs = resolve_indices(f_obs)
                 if run_obs is None:
-                    run_obs = (
-                        f_obs["bank"][()]
-                        if "bank" in f_obs
-                        else np.zeros(len(xyz_obs))
-                    )
+                    run_obs = np.zeros(len(xyz_obs))
 
                 # Try to get physical bank mapping
                 bank_obs = f_obs["bank"][()] if "bank" in f_obs else None
@@ -145,9 +165,7 @@ def compute_metrics(
             with h5py.File(filename, "r") as f_pred:
                 if "banks" in f_pred:
                     # Predictor format
-                    bank_ids = (
-                        f_pred["bank_ids"][()] if "bank_ids" in f_pred else None
-                    )
+                    bank_ids = f_pred["bank_ids"][()] if "bank_ids" in f_pred else None
 
                     for img_key_str in f_pred["banks"].keys():
                         img_idx = int(img_key_str)
@@ -212,17 +230,9 @@ def compute_metrics(
                     k_p = f_pred["peaks/k"][()]
                     l_p = f_pred["peaks/l"][()]
                     lam_p = f_pred["peaks/lambda"][()]
-                    run_pred = (
-                        f_pred["peaks/run_index"][()]
-                        if "peaks/run_index" in f_pred
-                        else None
-                    )
+                    run_pred = resolve_indices(f_pred)
                     if run_pred is None:
-                        run_pred = (
-                            f_pred["bank"][()]
-                            if "bank" in f_pred
-                            else np.zeros(len(h_p))
-                        )
+                        run_pred = np.zeros(len(h_p))
 
                     unique_runs = np.unique(run_pred)
                     for r in unique_runs:
@@ -248,9 +258,7 @@ def compute_metrics(
 
                             # Use helper for R assignment
                             matched_R.extend(
-                                _get_safe_R_stack(
-                                    R_file, [r] * num_valid, num_valid
-                                )
+                                _get_safe_R_stack(R_file, [r] * num_valid, num_valid)
                             )
         else:
             # Standard case: load from filename
@@ -273,19 +281,11 @@ def compute_metrics(
                     kz = np.cos(tt)
                     matched_xyz = np.stack([kx, ky, kz], axis=1)
 
-                matched_run = (
-                    f["peaks/run_index"][()] if "peaks/run_index" in f else None
-                )
+                matched_run = resolve_indices(f)
                 if matched_run is None:
-                    matched_run = (
-                        f["bank"][()]
-                        if "bank" in f
-                        else np.zeros(len(matched_h))
-                    )
+                    matched_run = np.zeros(len(matched_h))
 
-                matched_R = _get_safe_R_stack(
-                    R_file, matched_run, len(matched_h)
-                )
+                matched_R = _get_safe_R_stack(R_file, matched_run, len(matched_h))
 
         # Convert to numpy arrays
         h = np.array(matched_h)
@@ -330,9 +330,7 @@ def compute_metrics(
             xyz_det = xyz_det[d_mask]
             R_all = R_all[d_mask]
             run_index = run_index[d_mask]
-            d_filter_message = (
-                f"Filtered to {len(h)} peaks with d >= {d_min} A."
-            )
+            d_filter_message = f"Filtered to {len(h)} peaks with d >= {d_min} A."
 
         # --- Calculate RUB stack AFTER all filtering ---
         UB = U @ B_mat
