@@ -125,6 +125,9 @@ class PeakIntegrator:
         is_peak, peak_masks, bg_masks, peak_hulls, adjusted_centers = self._find_peak_regions(
             intensity, peak_centers
         )
+        
+        # Convert to list to allow sub-pixel refinement assignment
+        adjusted_centers = adjusted_centers.tolist()
 
         if return_headers:
             output_data = [
@@ -149,7 +152,8 @@ class PeakIntegrator:
                 if stats[0] is not None:
                     bg_density, peak_intensity, peak_bg_intensity, sigma, y0, x0 = stats
                     if y0 is not None and x0 is not None:
-                        adjusted_centers[i_peak] = [y0, x0]
+                        # Update the center with sub-pixel refined coordinates
+                        adjusted_centers[i_peak] = [float(y0), float(x0)]
                     
                     bg_density, peak_intensity, peak_bg_intensity, sigma = (
                         float(bg_density),
