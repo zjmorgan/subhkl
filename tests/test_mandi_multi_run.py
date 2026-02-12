@@ -158,121 +158,125 @@ def test_mandi_multi_run_indexing(test_data_dir, tmp_path):
         # They should be equivalent
         assert abs(n_peaks1 - n_peaks2) < 5
 
-    # 3. Stage 1: Coarse multi-run indexing (0.5 deg)
-    stage1_h5 = tmp_path / "stage1.h5"
-    subprocess.run(
-        [
-            "python",
-            "-m",
-            "subhkl.io.parser",
-            "indexer",
-            str(merged_h5),
-            str(stage1_h5),
-            *map(str, LATTICE_PARAMS),
-            SPACE_GROUP,
-            "--n-runs",
-            "20",
-            "--popsize",
-            "500",
-            "--gens",
-            "200",
-            "--strategy",
-            "de",
-            "--hkl-search-range",
-            "35",
-            "--tolerance-deg",
-            "0.5",
-        ],
-        check=True,
-    )
+    # 3. Index both versions to ensure equivalence
+    for label, input_h5 in [("finder-merger", merged_h5), ("merge-images", finder_merged_h5)]:
+        print(f"\n--- Testing indexing for workflow: {label} ---")
+        
+        # Stage 1: Coarse multi-run indexing (0.5 deg)
+        stage1_h5 = tmp_path / f"stage1_{label}.h5"
+        subprocess.run(
+            [
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "indexer",
+                str(input_h5),
+                str(stage1_h5),
+                *map(str, LATTICE_PARAMS),
+                SPACE_GROUP,
+                "--n-runs",
+                "20",
+                "--popsize",
+                "500",
+                "--gens",
+                "200",
+                "--strategy",
+                "de",
+                "--hkl-search-range",
+                "35",
+                "--tolerance-deg",
+                "0.5",
+            ],
+            check=True,
+        )
 
-    # 4. Stage 2: Fine multi-run indexing (0.1 deg)
-    stage2_h5 = tmp_path / "stage2.h5"
-    subprocess.run(
-        [
-            "python",
-            "-m",
-            "subhkl.io.parser",
-            "indexer",
-            str(merged_h5),
-            str(stage2_h5),
-            *map(str, LATTICE_PARAMS),
-            SPACE_GROUP,
-            "--bootstrap",
-            str(stage1_h5),
-            "--n-runs",
-            "5",
-            "--popsize",
-            "500",
-            "--gens",
-            "200",
-            "--strategy",
-            "de",
-            "--hkl-search-range",
-            "35",
-            "--tolerance-deg",
-            "0.1",
-            "--loss-method",
-            "gaussian",
-        ],
-        check=True,
-    )
+        # Stage 2: Fine multi-run indexing (0.1 deg)
+        stage2_h5 = tmp_path / f"stage2_{label}.h5"
+        subprocess.run(
+            [
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "indexer",
+                str(input_h5),
+                str(stage2_h5),
+                *map(str, LATTICE_PARAMS),
+                SPACE_GROUP,
+                "--bootstrap",
+                str(stage1_h5),
+                "--n-runs",
+                "5",
+                "--popsize",
+                "500",
+                "--gens",
+                "200",
+                "--strategy",
+                "de",
+                "--hkl-search-range",
+                "35",
+                "--tolerance-deg",
+                "0.1",
+                "--loss-method",
+                "gaussian",
+            ],
+            check=True,
+        )
 
-    # 5. Stage 3: Super-fine refinement (0.05 deg) with CMA-ES
-    indexed_h5 = tmp_path / "indexed.h5"
-    subprocess.run(
-        [
-            "python",
-            "-m",
-            "subhkl.io.parser",
-            "indexer",
-            str(merged_h5),
-            str(indexed_h5),
-            *map(str, LATTICE_PARAMS),
-            SPACE_GROUP,
-            "--bootstrap",
-            str(stage2_h5),
-            "--n-runs",
-            "1",
-            "--popsize",
-            "200",
-            "--gens",
-            "100",
-            "--strategy",
-            "cma_es",
-            "--hkl-search-range",
-            "35",
-            "--tolerance-deg",
-            "0.05",
-            "--loss-method",
-            "gaussian",
-        ],
-        check=True,
-    )
+        # Stage 3: Super-fine refinement (0.05 deg) with CMA-ES
+        indexed_h5 = tmp_path / f"indexed_{label}.h5"
+        subprocess.run(
+            [
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "indexer",
+                str(input_h5),
+                str(indexed_h5),
+                *map(str, LATTICE_PARAMS),
+                SPACE_GROUP,
+                "--bootstrap",
+                str(stage2_h5),
+                "--n-runs",
+                "1",
+                "--popsize",
+                "200",
+                "--gens",
+                "100",
+                "--strategy",
+                "cma_es",
+                "--hkl-search-range",
+                "35",
+                "--tolerance-deg",
+                "0.05",
+                "--loss-method",
+                "gaussian",
+            ],
+            check=True,
+        )
 
-    # 6. Verify indexing (check if peaks have HKLs assigned)
-    with h5py.File(indexed_h5, "r") as f:
-        assert "peaks/h" in f
-        h = f["peaks/h"][()]
-        indexed_count = np.sum((h != 0))
-        print(f"Indexed peaks: {indexed_count} / {len(h)}")
+        # 6. Verify indexing (check if peaks have HKLs assigned)
+        with h5py.File(indexed_h5, "r") as f:
+            assert "peaks/h" in f
+            h = f["peaks/h"][()]
+            indexed_count = np.sum((h != 0))
+            print(f"[{label}] Indexed peaks: {indexed_count} / {len(h)}")
 
-        # Check run_index
-        assert "peaks/run_index" in f
-        run_indices = f["peaks/run_index"][()]
-        assert len(run_indices) == len(h)
-        if len(h) > 0:
-            assert np.max(run_indices) >= 1
+            # Check run_index
+            assert "peaks/run_index" in f
+            run_indices = f["peaks/run_index"][()]
+            assert len(run_indices) == len(h)
+            if len(h) > 0:
+                assert np.max(run_indices) >= 1
 
-        from subhkl.metrics import compute_metrics
+            from subhkl.metrics import compute_metrics
 
-        m = compute_metrics(str(indexed_h5))
-        ang_err = m["median_ang_err"]
-        print(f"Median angular error: {ang_err}")
+            m = compute_metrics(str(indexed_h5))
+            ang_err = m["median_ang_err"]
+            print(f"[{label}] Median angular error: {ang_err}")
 
-        indexed_ratio = indexed_count / len(h)
-        print(f"Indexed ratio: {indexed_ratio:.2%}")
+            indexed_ratio = indexed_count / len(h)
+            print(f"[{label}] Indexed ratio: {indexed_ratio:.2%}")
 
-        assert indexed_count > 10
-        assert indexed_ratio >= 0.75
-        assert ang_err < 0.2
+            assert indexed_count > 10
+            assert indexed_ratio >= 0.75
+            assert ang_err < 0.2
