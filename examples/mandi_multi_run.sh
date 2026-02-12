@@ -56,16 +56,16 @@ python -m subhkl.io.parser finder "$OUT_DIR/scan_master.h5" $INSTRUMENT \
 echo "--- Indexing Stage 1 (Coarse) ---"
 python -m subhkl.io.parser indexer "$OUT_DIR/finder.h5" "$OUT_DIR/stage1.h5" $INDEXER_PARAMS \
     --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX \
-    --n-runs=10 --popsize=100 --gens=200 --strategy=de \
+    --n-runs=100 --popsize=100 --gens=200 --strategy=de \
     --tolerance-deg=0.5 --loss-method gaussian \
-    --hkl-search-range 35 --batch-size=1
+    --hkl-search-range 35 --batch-size=100
 
 echo "--- Indexing Stage 2 (Fine) ---"
 python -m subhkl.io.parser indexer --bootstrap "$OUT_DIR/stage1.h5" "$OUT_DIR/finder.h5" "$OUT_DIR/indexer.h5" $INDEXER_PARAMS \
     --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX \
-    --n-runs=10 --popsize=100 --gens=250 --strategy=de \
+    --n-runs=100 --popsize=100 --gens=250 --strategy=de \
     --tolerance-deg=0.1 --refine-lattice --lattice-bound-frac 0.05 \
-    --loss-method gaussian --hkl-search-range 35 --batch-size=1
+    --loss-method gaussian --hkl-search-range 35 --batch-size=100
 
 python -m subhkl.io.parser metrics "$OUT_DIR/indexer.h5"
 
