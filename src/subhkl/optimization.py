@@ -180,7 +180,8 @@ def get_lattice_system(
     if violation_msg:
         warnings.warn(
             f"\n[Lattice System] Input parameters violate {space_group_name} ({expected}) constraints: {', '.join(violation_msg)}.\n"
-            f"optimization will enforce {expected} constraints, which may cause a jump in parameters."
+            f"optimization will enforce {expected} constraints, which may cause a jump in parameters.",
+            stacklevel=2,
         )
 
     # --- 3. Geometric Inference (Legacy Logic) ---
@@ -271,8 +272,8 @@ def rotation_matrix_from_rodrigues_jax(w):
     theta = jnp.linalg.norm(w) + 1e-9
     k = w / theta
     K = jnp.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
-    I = jnp.eye(3)
-    R = I + jnp.sin(theta) * K + (1 - jnp.cos(theta)) * (K @ K)
+    eye = jnp.eye(3)
+    R = eye + jnp.sin(theta) * K + (1 - jnp.cos(theta)) * (K @ K)
     return R
 
 
@@ -349,7 +350,6 @@ class VectorizedObjective:
             self.peak_run_indices = jnp.array(peak_run_indices, dtype=jnp.int32)
         # Default heuristic:
         # 1. If R is a stack of N rotations and we have N peaks, assume 1-to-1 mapping.
-        # 2. If R is a stack of M rotations and we have N peaks, check if M matches unique runs.
         elif self.static_R.ndim == 3:
             num_rotations = self.static_R.shape[0]
             if num_rotations == num_peaks:
@@ -391,8 +391,8 @@ class VectorizedObjective:
             v = self.peak_xyz - self.sample_nominal[:, None]
             dist = jnp.linalg.norm(v, axis=0)
             self.kf_lab_fixed = v / jnp.where(dist == 0, 1.0, dist[None, :])
-            # If we have xyz positions and a rotation stack, the positions are in Lab frame.
-            self.input_is_rotated = not (static_R is not None and static_R.ndim == 3)
+            # Input is in LAB frame, so it is NOT yet rotated to Sample frame.
+            self.input_is_rotated = False
 
         if kf_lab_fixed_vectors is not None and self.kf_lab_fixed is None:
             # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
@@ -414,8 +414,10 @@ class VectorizedObjective:
             self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(
                 self.kf_lab_fixed, axis=0
             )
-            # Heuristic: if we have a stack of rotations, it's Lab frame
-            self.input_is_rotated = not (static_R is not None and static_R.ndim == 3)
+            # FIX: Lab angles (two_theta, azimuthal) are ALWAYS in Lab frame.
+            # We must set input_is_rotated to False to ensure the optimizer
+            # applies the Lab -> Sample rotation (R^T) during objective evaluation.
+            self.input_is_rotated = False
 
         self.tolerance_deg = tolerance_deg
         self.loss_method = loss_method
@@ -540,7 +542,8 @@ class VectorizedObjective:
                         f"\n[WARNING] search_window_size ({self.search_window_size}) is likely too small "
                         f"for resolution {self.d_min:.2f}A and Volume {vol_real:.0f}A^3.\n"
                         f"Binary search indexer may miss valid peaks.\n"
-                        f"RECOMMENDED SIZE: >= {heuristic_win}\n"
+                        f"RECOMMENDED SIZE: >= {heuristic_win}\n",
+                        stacklevel=2,
                     )
 
         # --- HKL Mask Generation ---
@@ -576,8 +579,10 @@ class VectorizedObjective:
         r_h = jnp.arange(-h_max, h_max + 1)
         r_k = jnp.arange(-k_max, k_max + 1)
         r_l = jnp.arange(-l_max, l_max + 1)
-        h, k, l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")
-        hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
+        miller_h, miller_k, miller_l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")
+        hkl_pool = jnp.stack(
+            [miller_h.flatten(), miller_k.flatten(), miller_l.flatten()], axis=0
+        )
 
         # Apply Symmetry Mask to Pool
         mask_cpu = generate_hkl_mask(h_max, k_max, l_max, self.space_group)
@@ -796,8 +801,12 @@ class VectorizedObjective:
             d_pred = 1.0 / jnp.sqrt(q_sq_pred + 1e-9)
             valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
 
-            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            is_allowed = self.is_allowed_jax(h, k, l)
+            miller_h, miller_k, miller_l = (
+                hkl_int[:, 0, :],
+                hkl_int[:, 1, :],
+                hkl_int[:, 2, :],
+            )
+            is_allowed = self.is_allowed_jax(miller_h, miller_k, miller_l)
 
             # Combine masks
             final_mask = is_allowed & valid_res
@@ -831,7 +840,6 @@ class VectorizedObjective:
 
         # kappa for von Mises-Fisher-like concentration in HKL space
         # Uniform angular tolerance: sigma_h approx tolerance_rad * h.
-        kappa = 1.0 / ((tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2)
 
         initial_carry = (
             jnp.full(max_v_val.shape, -1e12),
@@ -956,8 +964,12 @@ class VectorizedObjective:
             q_sq = jnp.sum(q_pred**2, axis=3)
             d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9)  # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
-            h, k, l = hkl_cands[..., 0], hkl_cands[..., 1], hkl_cands[..., 2]
-            valid_sym = self.is_allowed_jax(h, k, l)
+            miller_h, miller_k, miller_l = (
+                hkl_cands[..., 0],
+                hkl_cands[..., 1],
+                hkl_cands[..., 2],
+            )
+            valid_sym = self.is_allowed_jax(miller_h, miller_k, miller_l)
             valid_mask = valid_lamb & valid_res & valid_sym
             q_obs_opt = k_obs / jnp.where(lambda_opt == 0, 1.0, lambda_opt)[..., None]
             diff = q_obs_opt - q_pred
@@ -1191,7 +1203,7 @@ class VectorizedObjective:
 
         return score, jnp.exp(log_prob_any), best_hkl, best_lamb
 
-    def is_allowed_jax(self, h, k, l):
+    def is_allowed_jax(self, h, k, miller_l):
         """
         Robust symmetry check in JAX. Uses pre-computed mask for speed,
         and falls back to centring parity checks for out-of-bounds HKLs.
@@ -1199,29 +1211,34 @@ class VectorizedObjective:
         rh, rk, rl = self.mask_range_h, self.mask_range_k, self.mask_range_l
         idx_h = jnp.clip(h + rh, 0, 2 * rh).astype(jnp.int32)
         idx_k = jnp.clip(k + rk, 0, 2 * rk).astype(jnp.int32)
-        idx_l = jnp.clip(l + rl, 0, 2 * rl).astype(jnp.int32)
+        idx_l = jnp.clip(miller_l + rl, 0, 2 * rl).astype(jnp.int32)
 
         in_bounds = (
-            (h >= -rh) & (h <= rh) & (k >= -rk) & (k <= rk) & (l >= -rl) & (l <= rl)
+            (h >= -rh)
+            & (h <= rh)
+            & (k >= -rk)
+            & (k <= rk)
+            & (miller_l >= -rl)
+            & (miller_l <= rl)
         )
 
         # Parity checks for centring
         h_even = h % 2 == 0
         k_even = k % 2 == 0
-        l_even = l % 2 == 0
+        l_even = miller_l % 2 == 0
 
         if self.centering == "F":
             # All odd or all even
             allowed_out = (h_even == k_even) & (k_even == l_even)
         elif self.centering == "I":
             # h+k+l is even
-            allowed_out = (h + k + l) % 2 == 0
+            allowed_out = (h + k + miller_l) % 2 == 0
         elif self.centering == "A":
             # k+l is even
-            allowed_out = (k + l) % 2 == 0
+            allowed_out = (k + miller_l) % 2 == 0
         elif self.centering == "B":
             # h+l is even
-            allowed_out = (h + l) % 2 == 0
+            allowed_out = (h + miller_l) % 2 == 0
         elif self.centering == "C":
             # h+k is even
             allowed_out = (h + k) % 2 == 0
@@ -1244,14 +1261,14 @@ class VectorizedObjective:
             # Fallback to static rotations
             R_curr = self.static_R  # (N_runs, 3, 3) or (3, 3)
 
-        # Expand rotations to per-peak if mapping is provided
+        # Expand rotations to per-observation if mapping is provided
         if R_curr is not None:
             if R_curr.ndim == 4:
                 # (S, N_runs, 3, 3) -> (S, N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=1)
+                R_per_peak = R_curr[:, self.peak_run_indices, :, :]
             elif R_curr.ndim == 3:
                 # (N_runs, 3, 3) -> (N_peaks, 3, 3)
-                R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+                R_per_peak = R_curr[self.peak_run_indices, :, :]
             else:
                 # (3, 3)
                 R_per_peak = R_curr
@@ -1293,7 +1310,8 @@ class VectorizedObjective:
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
-        if R_per_peak is not None:
+        # ONLY if input is NOT already rotated.
+        if R_per_peak is not None and not self.input_is_rotated:
             # q_lab is (S, 3, N). We want (S, N, 3) for matrix multiplication
             q_lab_T = q_lab.transpose(0, 2, 1)
             if R_per_peak.ndim == 4:
@@ -1380,7 +1398,7 @@ class FindUB:
         self.beta = data["sample/beta"]
         self.gamma = data["sample/gamma"]
         self.wavelength = data["instrument/wavelength"]
-        self.R = data["goniometer/R"]
+        self.R = data.get("goniometer/R")
         self.two_theta = data["peaks/two_theta"]
         self.az_phi = data["peaks/azimuthal"]
         self.intensity = data["peaks/intensity"]
@@ -1626,17 +1644,18 @@ class FindUB:
             unique_runs, first_indices = np.unique(self.run_indices, return_index=True)
 
             if goniometer_angles is not None and goniometer_angles.shape[1] == num_obs:
-                # Create expanded array covering all run IDs
-                # Fill missing runs with the first available rotation/angle
-                new_angles = np.tile(
-                    goniometer_angles[:, first_indices[0:1]], (1, num_runs_range)
-                )
+                # We have per-peak angles. We need to reduce them to per-run for refinement.
+                # Use first appearance per run.
+                new_angles = np.zeros((goniometer_angles.shape[0], num_runs_range))
+                # Fill with defaults (first available) then overwrite with unique runs
+                new_angles[:] = goniometer_angles[:, first_indices[0:1]]
                 new_angles[:, unique_runs] = goniometer_angles[:, first_indices]
                 goniometer_angles = new_angles
 
             if self.R is not None and self.R.ndim == 3 and self.R.shape[0] == num_obs:
-                # Create expanded stack covering all run IDs
-                new_R = np.tile(self.R[first_indices[0:1]], (num_runs_range, 1, 1))
+                # We have per-peak rotations. Reduce to per-run.
+                new_R = np.zeros((num_runs_range, 3, 3))
+                new_R[:] = self.R[first_indices[0:1]]
                 new_R[unique_runs] = self.R[first_indices]
                 static_R_input = new_R
 
@@ -1963,7 +1982,9 @@ class FindUB:
         if refine_sample:
             print("--- Refined Sample Offset (mm) ---")
             print(
-                f"X: {1000 * self.sample_offset[0]:.4f}, Y: {1000 * self.sample_offset[1]:.4f}, Z: {1000 * self.sample_offset[2]:.4f}"
+                f"X: {1000 * self.sample_offset[0]:.4f}, "
+                f"Y: {1000 * self.sample_offset[1]:.4f}, "
+                f"Z: {1000 * self.sample_offset[2]:.4f}"
             )
 
         if refine_beam:
@@ -1975,7 +1996,9 @@ class FindUB:
         if self.goniometer_offsets is not None:
             print("--- Refined Goniometer Offsets (deg) ---")
             if goniometer_names is not None:
-                for name, val in zip(goniometer_names, self.goniometer_offsets):
+                for name, val in zip(
+                    goniometer_names, self.goniometer_offsets, strict=True
+                ):
                     print(f"{name}: {val:.4f}")
             else:
                 print(self.goniometer_offsets)

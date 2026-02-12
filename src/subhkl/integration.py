@@ -851,6 +851,14 @@ class Peaks:
 
             img_label = self.get_image_label(img_key)
 
+            # FIX: Skip banks that are not in beamlines config
+            if str(physical_bank) not in beamlines[self.instrument]:
+                print(
+                    f"WARNING: Bank {physical_bank} not found in beamlines config "
+                    f"for {self.instrument}. Skipping..."
+                )
+                continue
+
             det_config = beamlines[self.instrument][str(physical_bank)]
 
             if self.goniometer_rotation.ndim == 3:

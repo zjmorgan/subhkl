@@ -110,6 +110,10 @@ def calc_goniometer_rotation_matrix(axes, angles):
         # Make rotation vector by combining angle and spec
         sign = axis_spec[3]
         direction = np.array(axis_spec[:3], dtype=float)
+        # FIX: Normalize axis direction to prevent scaling the angle
+        norm = np.linalg.norm(direction)
+        if norm > 1e-12:
+            direction /= norm
         rot_vec = sign * angle_deg * direction
 
         # Multiply rotation matrix on the right to achieve the ordering

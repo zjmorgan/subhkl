@@ -100,14 +100,14 @@ class BaseConcatenateMerger:
                                 data = np.array(f_in[merge_key])
                                 # Increment run_index or image_index if it's per-file local
                                 if merge_key == "peaks/run_index" or merge_key == "peaks/image_index":
-                                    # We assign a global run index based on the file index.
-                                    # This assumes each file is a separate 'run' group.
-                                    data += i_file
+                                    # We assign a global run index based on the running offset.
+                                    # This ensures indices from multiple files do not collide.
+                                    data += run_offset
 
                                 f_out[merge_key][peak_range] = data
                         elif num_items > 0 and merge_key == "peaks/run_index":
-                            # Fallback: if no run_index exists in input, we assign i_file
-                            f_out["peaks/run_index"][peak_range] = i_file
+                            # Fallback: if no run_index exists in input, we assign global run offset
+                            f_out["peaks/run_index"][peak_range] = run_offset
 
                     # 2. Merge per-file/run keys
                     num_runs_in_file = 0
@@ -185,7 +185,10 @@ class MTZExporter:
         mtz = gemmi.Mtz(with_base=True)
         mtz.set_logging(sys.stdout)
 
-        mtz.spacegroup = gemmi.find_spacegroup_by_name(self.space_group)
+        sg = gemmi.find_spacegroup_by_name(self.space_group)
+        if sg is None:
+            raise ValueError(f"Could not find space group: {self.space_group}")
+        mtz.spacegroup = sg
 
         unit_cell = gemmi.UnitCell(
             self.a, self.b, self.c, self.alpha, self.beta, self.gamma

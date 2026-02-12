@@ -248,7 +248,18 @@ def compute_metrics(
                 matched_k = f["peaks/k"][()]
                 matched_l = f["peaks/l"][()]
                 matched_lam = f["peaks/lambda"][()]
-                matched_xyz = f["peaks/xyz"][()]
+                if "peaks/xyz" in f:
+                    matched_xyz = f["peaks/xyz"][()]
+                else:
+                    # Fallback to reconstructing kf_dir from angles
+                    # tt, az are in degrees
+                    tt = np.deg2rad(f["peaks/two_theta"][()])
+                    az = np.deg2rad(f["peaks/azimuthal"][()])
+                    kx = np.sin(tt) * np.cos(az)
+                    ky = np.sin(tt) * np.sin(az)
+                    kz = np.cos(tt)
+                    matched_xyz = np.stack([kx, ky, kz], axis=1)
+
                 matched_run = (
                     f["peaks/run_index"][()] if "peaks/run_index" in f else None
                 )

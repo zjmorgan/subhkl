@@ -14,13 +14,13 @@ def get_space_group_object(sg_name_or_centering):
     # This maintains backward compatibility with 'P', 'F', 'I', etc.
     centering_map = {
         "P": "P 1",
-        "A": "A 1",  # gemmi handles non-standard settings if provided correctly, or use P1 + centering op
-        "B": "B 1",
-        "C": "C 1",
+        "A": "C 2",  # A-centering usually seen in C2 or similar
+        "B": "C 2",
+        "C": "C 2",
         "I": "I 1",
         "F": "F 1",
-        "R": "R 3",  # R lattice usually implies R3 or R3m basis
-        "H": "H 1",  # Hexagonal centering? usually just P for Hex
+        "R": "R 3",
+        "H": "P 3",  # Hexagonal centering -> P3
     }
 
     if name.upper() in centering_map:
@@ -39,6 +39,11 @@ def get_space_group_object(sg_name_or_centering):
 
 
 def get_centering(space_group_name):
+    # Handle single-letter centering codes directly
+    name = str(space_group_name).strip().upper()
+    if name in ["P", "A", "B", "C", "I", "F", "R", "H"]:
+        return name
+    
     sg = get_space_group_object(space_group_name)
     return sg.centring_type()
 

@@ -50,6 +50,8 @@ def index(
     top_k: int = 32,
     B_sharpen: float | None = None,
     input_data: dict | None = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -60,6 +62,9 @@ def index(
         opt = FindUB(data=input_data)
     else:
         opt = FindUB(filename=hdf5_peaks_filename)
+
+    if wavelength_min is not None and wavelength_max is not None:
+        opt.wavelength = [wavelength_min, wavelength_max]
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
@@ -75,7 +80,8 @@ def index(
     if refine_goniometer:
         if nexus_filename and instrument_name:
             print(
-                f"Refining goniometer angles from Nexus with {goniometer_bound_deg} deg bounds."
+                f"Refining goniometer angles from Nexus with "
+                f"{goniometer_bound_deg} deg bounds."
             )
             axes, angles, names = get_rotation_data_from_nexus(
                 nexus_filename, instrument_name
@@ -492,21 +498,34 @@ def indexer(
     # Logic to resolve SG
     sg_to_use = "P 1"
     if space_group:
-        sg_to_use = space_group
+        from subhkl.spacegroup import get_space_group_object
+        try:
+            get_space_group_object(space_group)
+            sg_to_use = space_group
+        except ValueError as e:
+            print(f"ERROR: Invalid space group '{space_group}': {e}")
+            raise typer.Exit(code=1)
 
     print(f"Loading peaks from: {peaks_h5_filename}")
     input_data = {}
+
+    # Handle OptionInfo objects if called directly as a function
+    def _val(x):
+        return x.default if hasattr(x, "default") else x
+
     with h5py.File(peaks_h5_filename, "r") as f:
         # Load auto-detected wavelength if not provided
-        if wavelength_min is None or wavelength_max is None:
+        w_min_val = _val(wavelength_min)
+        w_max_val = _val(wavelength_max)
+        if w_min_val is None or w_max_val is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
-                if wavelength_min is None:
+                if w_min_val is None:
                     wavelength_min = float(wl[0])
-                if wavelength_max is None:
+                if w_max_val is None:
                     wavelength_max = float(wl[1])
                 print(
-                    f"Auto-detected wavelength: {wavelength_min:.2f} - {wavelength_max:.2f} A"
+                    f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A"
                 )
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
@@ -537,6 +556,51 @@ def indexer(
             if k in f:
                 input_data[k] = f[k][()]
 
+    # --- FIX: Refine run_index to prevent Geometry Compression ---
+    # We must ensure that every unique rotation matrix or angle set has its own 
+    # run_index during optimization, otherwise the indexer picks only the first one per run.
+    R_stack = input_data.get("goniometer/R")
+    angles_stack = input_data.get("goniometer/angles")
+    old_run_indices = input_data.get("peaks/run_index")
+    num_peaks = len(old_run_indices) if old_run_indices is not None else 0
+
+    if old_run_indices is not None:
+        combined_keys = [old_run_indices[:, None].astype(float)]
+        
+        # Add R to uniqueness check if per-peak
+        if R_stack is not None and R_stack.ndim == 3 and R_stack.shape[0] == num_peaks:
+            R_flat = R_stack.reshape(num_peaks, -1)
+            combined_keys.append(R_flat)
+            
+        # Add angles to uniqueness check if per-peak
+        if angles_stack is not None and angles_stack.ndim == 2 and angles_stack.shape[1] == num_peaks:
+            combined_keys.append(angles_stack.T)
+            
+        if len(combined_keys) > 1:
+            print("Refining run_index based on unique geometries...")
+            combined = np.hstack(combined_keys)
+            _, unique_mapping = np.unique(combined, axis=0, return_inverse=True)
+            input_data["peaks/run_index"] = unique_mapping
+            
+            # Update R and angles to match the new unique mapping
+            # Explicitly find the first index for each unique ID to guarantee alignment
+            num_unique_runs = np.max(unique_mapping) + 1
+            unique_indices = np.zeros(num_unique_runs, dtype=int)
+            for i in range(num_unique_runs):
+                unique_indices[i] = np.where(unique_mapping == i)[0][0]
+            
+            if R_stack is not None and R_stack.ndim == 3 and R_stack.shape[0] == num_peaks:
+                input_data["goniometer/R"] = R_stack[unique_indices]
+                
+            if angles_stack is not None and angles_stack.ndim == 2 and angles_stack.shape[1] == num_peaks:
+                input_data["goniometer/angles"] = angles_stack[:, unique_indices]
+
+            print(
+                f"  > Expanded runs from {np.max(old_run_indices) + 1} to "
+                f"{np.max(unique_mapping) + 1} unique geometries."
+            )
+
+
     input_data["sample/a"] = a
     input_data["sample/b"] = b
     input_data["sample/c"] = c
@@ -544,12 +608,19 @@ def indexer(
     input_data["sample/beta"] = beta
     input_data["sample/gamma"] = gamma
     input_data["sample/space_group"] = sg_to_use
-    input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
+    # Handle OptionInfo objects if called directly as a function
+    def _val(x):
+        return x.default if hasattr(x, "default") else x
+
+    input_data["instrument/wavelength"] = [
+        float(_val(wavelength_min)),
+        float(_val(wavelength_max)),
+    ]
 
     # --- NEW: Check d_max for sanity ---
     cell_max = max(a, b, c)
-    # Handle OptionInfo objects if called directly as a function
-    d_max_val = d_max.default if hasattr(d_max, "default") else d_max
+    d_max_val = _val(d_max)
     if d_max_val is not None and d_max_val < cell_max:
         print(
             f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f})."
@@ -559,42 +630,45 @@ def indexer(
         )
 
     gonio_axes_list = None
-    if refine_goniometer_axes:
-        gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(",")]
+    refine_goniometer_axes_val = _val(refine_goniometer_axes)
+    if refine_goniometer_axes_val:
+        gonio_axes_list = [x.strip() for x in refine_goniometer_axes_val.split(",")]
 
     index(
         input_data=input_data,
         output_peaks_filename=output_peaks_filename,
-        strategy_name=strategy_name,
-        population_size=population_size,
-        gens=gens,
-        sigma_init=sigma_init,
-        n_runs=n_runs,
-        seed=seed,
+        strategy_name=_val(strategy_name),
+        population_size=_val(population_size),
+        gens=_val(gens),
+        sigma_init=_val(sigma_init),
+        n_runs=_val(n_runs),
+        seed=_val(seed),
         tolerance_deg=tolerance_deg,
-        refine_lattice=refine_lattice,
-        lattice_bound_frac=lattice_bound_frac,
-        bootstrap_filename=bootstrap_filename,
-        refine_goniometer=refine_goniometer,
+        refine_lattice=_val(refine_lattice),
+        lattice_bound_frac=_val(lattice_bound_frac),
+        bootstrap_filename=_val(bootstrap_filename),
+        refine_goniometer=_val(refine_goniometer),
         refine_goniometer_axes=gonio_axes_list,
-        goniometer_bound_deg=goniometer_bound_deg,
-        refine_sample=refine_sample,
-        sample_bound_meters=sample_bound_meters,
-        refine_beam=refine_beam,
-        beam_bound_deg=beam_bound_deg,
+        goniometer_bound_deg=_val(goniometer_bound_deg),
+        refine_sample=_val(refine_sample),
+        sample_bound_meters=_val(sample_bound_meters),
+        refine_beam=_val(refine_beam),
+        beam_bound_deg=_val(beam_bound_deg),
         nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,
-        loss_method=loss_method,
-        hkl_search_range=hkl_search_range,
-        d_min=d_min,
-        d_max=d_max,
-        search_window_size=search_window_size,
-        batch_size=batch_size,
-        window_batch_size=window_batch_size,
-        chunk_size=chunk_size,
-        num_iters=num_iters,
-        top_k=top_k,
-        B_sharpen=B_sharpen,
+        loss_method=_val(loss_method),
+        hkl_search_range=_val(hkl_search_range),
+        d_min=_val(d_min),
+        d_max=d_max_val,
+        search_window_size=_val(search_window_size),
+        batch_size=_val(batch_size),
+        window_batch_size=_val(window_batch_size),
+        chunk_size=_val(chunk_size),
+        num_iters=_val(num_iters),
+        top_k=_val(top_k),
+        B_sharpen=_val(B_sharpen),
+        wavelength_min=input_data["instrument/wavelength"][0],
+        wavelength_max=input_data["instrument/wavelength"][1],
     )
 
 
@@ -865,13 +939,13 @@ def peak_predictor(
 
         # Save Peaks
         # Structure: banks/{img_key}/...
-        for img_key, (i, j, h, k, l, wl) in results_map.items():
+        for img_key, (i, j, h, k, miller_l, wl) in results_map.items():
             grp = f.create_group(f"banks/{img_key}")
             grp.create_dataset("i", data=i)
             grp.create_dataset("j", data=j)
             grp.create_dataset("h", data=h)
             grp.create_dataset("k", data=k)
-            grp.create_dataset("l", data=l)
+            grp.create_dataset("l", data=miller_l)
             grp.create_dataset("wavelength", data=wl)
 
 

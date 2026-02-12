@@ -108,6 +108,8 @@ def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2
     """
     Generates unique HKL indices for a given unit cell and resolution cutoff.
     """
+    if space_group is None:
+        space_group = "P 1"
     constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
     B, Gstar = cartesian_matrix_metric_tensor(*constants)
 

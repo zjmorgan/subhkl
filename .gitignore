@@ -174,3 +174,4 @@ tests/data/MANDI/mesolite/
 ADVERSARY.md
 ruff.toml
 sum_complexity.py
+tools/

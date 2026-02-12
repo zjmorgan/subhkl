@@ -224,8 +224,8 @@ class Detector:
             D_vec = np.cross(dir_vec.T, v).T
 
             QA = np.sum(D_vec**2, axis=0)
-            QB = 2 * np.dot(B_vec, D_vec)
-            QC = np.dot(B_vec, B_vec) - self.radius**2
+            QB = 2 * np.sum(B_vec * D_vec.T, axis=1) # FIX: handle stack
+            QC = np.sum(B_vec**2, axis=1) - self.radius**2
 
             delta = QB**2 - 4 * QA * QC
 
@@ -236,9 +236,14 @@ class Detector:
                 t = np.where((t2 > 0), t2, t1)
                 t = np.where(delta < 0, -1.0, t)
 
-        X = s[0] + t * dir_vec[0]
-        Y = s[1] + t * dir_vec[1]
-        Z = s[2] + t * dir_vec[2]
+        if s.ndim == 2:
+            X = s[:, 0] + t * dir_vec[0]
+            Y = s[:, 1] + t * dir_vec[1]
+            Z = s[:, 2] + t * dir_vec[2]
+        else:
+            X = s[0] + t * dir_vec[0]
+            Y = s[1] + t * dir_vec[1]
+            Z = s[2] + t * dir_vec[2]
 
         row, col = self.lab_to_pixel(X, Y, Z)
         mask = (row > 0) & (col > 0) & (row < self.n - 1) & (col < self.m - 1) & (t > 0)
