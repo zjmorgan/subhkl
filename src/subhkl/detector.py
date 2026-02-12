@@ -120,8 +120,8 @@ class Detector:
         """
         p = np.array([x, y, z])
 
-        dw = self.width / (self.m - 1)  # Width / Cols (n)
-        dh = self.height / (self.n - 1)  # Height / Rows (m)
+        dw = self.width / (self.m - 1)  # Width / Cols (m)
+        dh = self.height / (self.n - 1)  # Height / Rows (n)
 
         vec = p.T - self.center
 
@@ -246,6 +246,6 @@ class Detector:
             Z = s[2] + t * dir_vec[2]
 
         row, col = self.lab_to_pixel(X, Y, Z)
-        mask = (row > 0) & (col > 0) & (row < self.n - 1) & (col < self.m - 1) & (t > 0)
+        mask = (row >= 0) & (col >= 0) & (row < self.n) & (col < self.m) & (t > 0)
 
         return mask, row, col

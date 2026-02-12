@@ -125,9 +125,8 @@ class PeakIntegrator:
         is_peak, peak_masks, bg_masks, peak_hulls, adjusted_centers = self._find_peak_regions(
             intensity, peak_centers
         )
-        
-        # Convert to list to allow sub-pixel refinement assignment
-        adjusted_centers = adjusted_centers.tolist()
+        # Ensure float array for sub-pixel refinement
+        adjusted_centers = adjusted_centers.astype(float)
 
         if return_headers:
             output_data = [
@@ -515,7 +514,12 @@ class PeakIntegrator:
             model[model <= 0] = 1e-9
 
             # NLL = sum(model - data * log(model))
-            nll = np.sum(model - data * np.log(model))
+            # Guard against NaN/Inf values (e.g. from invalid model parameters)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                nll_terms = model - data * np.log(model)
+                nll = np.sum(
+                    np.nan_to_num(nll_terms, nan=1e12, posinf=1e12, neginf=1e12)
+                )
             return nll
 
         # --- 2. Get Pixel Data ---
