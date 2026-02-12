@@ -1094,7 +1094,7 @@ def integrator(
         f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
-        f["peaks/run_index"] = result.bank  # Crucial for metrics --per-run
+        f["peaks/run_index"] = result.run_id  # Fix: Use correct run_id field
         f["peaks/xyz"] = result.xyz
 
         # Save per-peak goniometer data (standard finder format)

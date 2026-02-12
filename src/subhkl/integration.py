@@ -74,6 +74,7 @@ IntegrationResult = namedtuple(
         "az",
         "wavelength",
         "bank",
+        "run_id",
         "xyz",
         "R",
         "angles",
@@ -592,6 +593,7 @@ def _integrate_single_bank(
                     )
 
         # New Naming: {prefix}_{label}_int.png
+        # viz_label already includes _bank{physical_bank} from Peaks.integrate
         out_name = f"{viz_label}_int.png"
         if viz_prefix:
             out_name = f"{viz_prefix}_{out_name}"
@@ -609,6 +611,7 @@ def _integrate_single_bank(
         "wavelength": bank_wl[keep],
         "xyz": lab_coords.tolist(),
         "bank": [bank_id] * sum(keep),
+        "run_id": [run_id] * sum(keep),
         "R": [current_R_val] * sum(keep) if current_R_val is not None else [],
         "angles": [current_angles_val] * sum(keep)
         if current_angles_val is not None
@@ -1103,6 +1106,7 @@ class Peaks:
         tt, az = [], []
         wavelength = []
         banks = []
+        run_ids = []
         xyz = []
         R_out = []
         angles_out = []
@@ -1120,7 +1124,8 @@ class Peaks:
                         files_db = f["files"][()]
                         offsets = f["file_offsets"][()]
                         target_name = os.path.basename(self.filename)
-                        match_idx = -1
+                        match_idxs = []
+                        # 1. Direct match
                         for i, fname_bytes in enumerate(files_db):
                             fname_str = (
                                 fname_bytes.decode("utf-8")
@@ -1128,23 +1133,46 @@ class Peaks:
                                 else str(fname_bytes)
                             )
                             if target_name in fname_str:
-                                match_idx = i
-                                break
-                        if match_idx >= 0:
-                            start = int(offsets[match_idx])
-                            end = (
-                                int(offsets[match_idx + 1])
-                                if match_idx < len(files_db) - 1
-                                else f["peaks/xyz"].shape[0]
-                            )
-                            found_peaks_xyz = f["peaks/xyz"][start:end]
-                            if "bank" in f:
-                                found_peaks_bank = f["bank"][start:end]
-                            elif "peaks/bank" in f:
-                                found_peaks_bank = f["peaks/bank"][start:end]
+                                match_idxs.append(i)
+                        
+                        # 2. Match via source files (if self is a merged master)
+                        if not match_idxs and hasattr(self, "image_files_raw") and self.image_files_raw:
+                            for src_file in self.image_files_raw:
+                                src_name = os.path.basename(src_file)
+                                for i, fname_bytes in enumerate(files_db):
+                                    fname_str = (
+                                        fname_bytes.decode("utf-8")
+                                        if isinstance(fname_bytes, bytes)
+                                        else str(fname_bytes)
+                                    )
+                                    if src_name == os.path.basename(fname_str):
+                                        if i not in match_idxs:
+                                            match_idxs.append(i)
 
-                            if "peaks/run_index" in f:
-                                found_peaks_run = f["peaks/run_index"][start:end]
+                        if match_idxs:
+                            # Load and concatenate from all matched indices
+                            xyz_list = []
+                            bank_list = []
+                            run_list = []
+                            for idx in match_idxs:
+                                start = int(offsets[idx])
+                                end = (
+                                    int(offsets[idx + 1])
+                                    if idx < len(files_db) - 1
+                                    else f["peaks/xyz"].shape[0]
+                                )
+                                xyz_list.append(f["peaks/xyz"][start:end])
+                                if "bank" in f:
+                                    bank_list.append(f["bank"][start:end])
+                                elif "peaks/bank" in f:
+                                    bank_list.append(f["peaks/bank"][start:end])
+
+                                if "peaks/run_index" in f:
+                                    run_list.append(f["peaks/run_index"][start:end])
+                            
+                            found_peaks_xyz = np.concatenate(xyz_list, axis=0) if xyz_list else None
+                            found_peaks_bank = np.concatenate(bank_list, axis=0) if bank_list else None
+                            found_peaks_run = np.concatenate(run_list, axis=0) if run_list else None
                     elif "peaks/xyz" in f:
                         found_peaks_xyz = f["peaks/xyz"][()]
                         if "bank" in f:
@@ -1249,6 +1277,7 @@ class Peaks:
                         wavelength.extend(res["wavelength"])
                         xyz.extend(res["xyz"])
                         banks.extend(res["bank"])
+                        run_ids.extend(res["run_id"])
                         R_out.extend(res["R"])
                         angles_out.extend(res["angles"])
                 except Exception as e:
@@ -1264,6 +1293,7 @@ class Peaks:
             az,
             wavelength,
             banks,
+            run_ids,
             xyz,
             R_out,
             angles_out,
