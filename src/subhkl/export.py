@@ -54,7 +54,10 @@ class BaseConcatenateMerger:
                         num_runs_in_file = len(f_in[self.per_file_keys[0]])
                 
                 if num_runs_in_file == 0:
-                    num_runs_in_file = 1
+                    if "peaks/run_index" in f_in and len(f_in["peaks/run_index"]) > 0:
+                        num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                    else:
+                        num_runs_in_file = 1
                 
                 total_runs += num_runs_in_file
 
@@ -125,7 +128,10 @@ class BaseConcatenateMerger:
                                 f_out[per_file_key][run_range] = data
                         
                     if num_runs_in_file == 0 and num_items > 0:
-                        num_runs_in_file = 1
+                        if "peaks/run_index" in f_in:
+                            num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                        else:
+                            num_runs_in_file = 1
 
                     offset += num_items
                     run_offset += num_runs_in_file
