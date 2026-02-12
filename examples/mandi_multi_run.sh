@@ -46,39 +46,39 @@ python -m subhkl.io.parser merge-images "${FILE_LIST[*]}" "$OUT_DIR/scan_master.
 
 # 3. Find peaks
 echo "--- Finding peaks ---"
-XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false MIOPEN_DISABLE_CACHE=1 
-python -m subhkl.io.parser finder "$OUT_DIR/scan_master.h5" $INSTRUMENT 
-    --output-filename "$OUT_DIR/finder.h5" 
-    --finder-algorithm thresholding $FINDER_THRESHOLDS 
+XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false MIOPEN_DISABLE_CACHE=1 \
+python -m subhkl.io.parser finder "$OUT_DIR/scan_master.h5" $INSTRUMENT \
+    --output-filename "$OUT_DIR/finder.h5" \
+    --finder-algorithm thresholding $FINDER_THRESHOLDS \
     --create-visualizations --show-progress
 
 # 4. Indexing (Two stages)
 echo "--- Indexing Stage 1 (Coarse) ---"
-python -m subhkl.io.parser indexer "$OUT_DIR/finder.h5" "$OUT_DIR/stage1.h5" $INDEXER_PARAMS 
-    --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX 
-    --n-runs=10 --popsize=100 --gens=200 --strategy=de 
-    --tolerance-deg=0.5 --loss-method gaussian 
+python -m subhkl.io.parser indexer "$OUT_DIR/finder.h5" "$OUT_DIR/stage1.h5" $INDEXER_PARAMS \
+    --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX \
+    --n-runs=10 --popsize=100 --gens=200 --strategy=de \
+    --tolerance-deg=0.5 --loss-method gaussian \
     --hkl-search-range 35 --batch-size=1
 
 echo "--- Indexing Stage 2 (Fine) ---"
-python -m subhkl.io.parser indexer --bootstrap "$OUT_DIR/stage1.h5" "$OUT_DIR/finder.h5" "$OUT_DIR/indexer.h5" $INDEXER_PARAMS 
-    --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX 
-    --n-runs=10 --popsize=100 --gens=250 --strategy=de 
-    --tolerance-deg=0.1 --refine-lattice --lattice-bound-frac 0.05 
+python -m subhkl.io.parser indexer --bootstrap "$OUT_DIR/stage1.h5" "$OUT_DIR/finder.h5" "$OUT_DIR/indexer.h5" $INDEXER_PARAMS \
+    --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX \
+    --n-runs=10 --popsize=100 --gens=250 --strategy=de \
+    --tolerance-deg=0.1 --refine-lattice --lattice-bound-frac 0.05 \
     --loss-method gaussian --hkl-search-range 35 --batch-size=1
 
 python -m subhkl.io.parser metrics "$OUT_DIR/indexer.h5"
 
 # 5. Predict peaks
 echo "--- Predicting peaks ---"
-python -m subhkl.io.parser peak-predictor "$OUT_DIR/scan_master.h5" $INSTRUMENT "$OUT_DIR/indexer.h5" "$OUT_DIR/peak_predictor.h5" 
+python -m subhkl.io.parser peak-predictor "$OUT_DIR/scan_master.h5" $INSTRUMENT "$OUT_DIR/indexer.h5" "$OUT_DIR/peak_predictor.h5" \
     --wavel-min $WAVEL_MIN --wavel-max $WAVEL_MAX --d-min ${D_MIN}
 
 # 6. Integrate peaks
 echo "--- Integrating peaks ---"
-python -m subhkl.io.parser integrator "$OUT_DIR/scan_master.h5" $INSTRUMENT "$OUT_DIR/peak_predictor.h5" "$OUT_DIR/integrator.h5" 
-    --integration-method gaussian_fit --found-peaks-file "$OUT_DIR/finder.h5" 
-    $INTEGRATOR_THRESHOLDS --create-visualizations 
+python -m subhkl.io.parser integrator "$OUT_DIR/scan_master.h5" $INSTRUMENT "$OUT_DIR/peak_predictor.h5" "$OUT_DIR/integrator.h5" \
+    --integration-method gaussian_fit --found-peaks-file "$OUT_DIR/finder.h5" \
+    $INTEGRATOR_THRESHOLDS --create-visualizations \
     --peak-minimum-signal-to-noise 1.0 --show-progress
 
 echo "--- Final Metrics ---"
