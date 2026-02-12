@@ -1,7 +1,7 @@
 # subhkl
 Solving crystal orientation from Laue diffraction images
 
-## ⚖️ Physics and Conventions
+## Physics and Conventions
 
 This project uses the **Laue Equation** relating Miller indices $(h, k, l)$ to the scattering vector $Q$ in the laboratory frame:
 
