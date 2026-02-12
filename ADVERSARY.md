@@ -20,6 +20,7 @@
     - Fixed `compute_metrics` in `metrics.py` to use robust index resolution.
     - Fixed `indexer` command in `parser.py` to save updated `run_index`.
     - Fixed `cosine` loss to correctly pass and use `k_sq_override`.
+    - Fixed `ValueError` in `FindUB.load_from_dict` caused by ambiguous array truth value.
 - **Verification:** `tests/test_multi_run_indexing_vulnerability.py` PASSED with error 0.002 deg.
 
 ---

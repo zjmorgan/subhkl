@@ -23,8 +23,8 @@ INSTRUMENT=MANDI
 # Mesolite lattice parameters
 INDEXER_PARAMS="18.39 56.55 6.54 90 90 90 Fdd2"
 
-WAVEL_MIN=2.0
-WAVEL_MAX=4.5
+WAVEL_MIN=1.1
+WAVEL_MAX=8.5
 D_MIN=1.1
 
 # 1. Reduce neutron counts of all runs (in parallel)
