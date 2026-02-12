@@ -90,7 +90,8 @@ class RegionGrower:
 
             if (
                 n_neighbors > 0
-                and (total_neighbor_intensity / n_neighbors) >= self.min_intensity
+                and (total_neighbor_intensity / n_neighbors)
+                >= self.min_intensity
             ):
                 for neighbor_point in neighbor_indices:
                     if neighbor_point in visited:

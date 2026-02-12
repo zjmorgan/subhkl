@@ -52,13 +52,18 @@ class BaseConcatenateMerger:
                     # Assume each file is ONE run for now, OR check length of first per_file_key
                     if self.per_file_keys[0] in f_in:
                         num_runs_in_file = len(f_in[self.per_file_keys[0]])
-                
+
                 if num_runs_in_file == 0:
-                    if "peaks/run_index" in f_in and len(f_in["peaks/run_index"]) > 0:
-                        num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                    if (
+                        "peaks/run_index" in f_in
+                        and len(f_in["peaks/run_index"]) > 0
+                    ):
+                        num_runs_in_file = int(
+                            np.max(f_in["peaks/run_index"]) + 1
+                        )
                     else:
                         num_runs_in_file = 1
-                
+
                 total_runs += num_runs_in_file
 
                 # Use the first file with data as the template to ensure
@@ -82,7 +87,9 @@ class BaseConcatenateMerger:
 
                 for per_file_key in self.per_file_keys:
                     if per_file_key in f_typical:
-                        shape = (total_runs,) + f_typical[per_file_key].shape[1:]
+                        shape = (total_runs,) + f_typical[per_file_key].shape[
+                            1:
+                        ]
                         dtype = f_typical[per_file_key].dtype
                         f_out.create_dataset(per_file_key, shape, dtype)
 
@@ -91,7 +98,9 @@ class BaseConcatenateMerger:
             f_out["files"] = np.array(
                 list(map(lambda s: s.encode("utf-8"), self.h5_files))
             )
-            f_out.create_dataset("file_offsets", (len(self.h5_files),), dtype=np.int64)
+            f_out.create_dataset(
+                "file_offsets", (len(self.h5_files),), dtype=np.int64
+            )
 
             for i_file, indexed_file in enumerate(self.h5_files):
                 with h5py.File(indexed_file, "r") as f_in:
@@ -106,7 +115,10 @@ class BaseConcatenateMerger:
                             if num_items > 0:
                                 data = np.array(f_in[merge_key])
                                 # Increment run_index or image_index if it's per-file local
-                                if merge_key == "peaks/run_index" or merge_key == "peaks/image_index":
+                                if (
+                                    merge_key == "peaks/run_index"
+                                    or merge_key == "peaks/image_index"
+                                ):
                                     # We assign a global run index based on the running offset.
                                     # This ensures indices from multiple files do not collide.
                                     data += run_offset
@@ -126,10 +138,12 @@ class BaseConcatenateMerger:
                                 num_runs_in_file = max(num_runs_in_file, n_r)
                                 run_range = slice(run_offset, run_offset + n_r)
                                 f_out[per_file_key][run_range] = data
-                        
+
                     if num_runs_in_file == 0 and num_items > 0:
                         if "peaks/run_index" in f_in:
-                            num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                            num_runs_in_file = int(
+                                np.max(f_in["peaks/run_index"]) + 1
+                            )
                         else:
                             num_runs_in_file = 1
 
@@ -156,7 +170,9 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
         ]
         per_file_keys = []
         copy_keys = ["goniometer/axes", "goniometer/names"]
-        super().__init__(h5_files, copy_keys, merge_keys, per_file_keys=per_file_keys)
+        super().__init__(
+            h5_files, copy_keys, merge_keys, per_file_keys=per_file_keys
+        )
 
 
 class MTZExporter:
@@ -220,7 +236,9 @@ class MTZExporter:
         # Column order: h, k, l, I, sigI, [FP, sigFP,] wavel, theta, phi, batch
         n_base_cols = 9  # h, k, l, I, sigI, wavel, theta, phi, batch
         n_structure_factor_cols = 2  # FP, sigFP
-        n_cols = n_base_cols + (n_structure_factor_cols if self.f is not None else 0)
+        n_cols = n_base_cols + (
+            n_structure_factor_cols if self.f is not None else 0
+        )
 
         data = []
 
@@ -243,7 +261,19 @@ class MTZExporter:
 
             if self.f is not None:
                 f, f_sigma = self.f[i], self.f_sigma[i]
-                row = [h, k, l, intensity, sigma, f, f_sigma, wl, theta, phi, run]
+                row = [
+                    h,
+                    k,
+                    l,
+                    intensity,
+                    sigma,
+                    f,
+                    f_sigma,
+                    wl,
+                    theta,
+                    phi,
+                    run,
+                ]
             else:
                 row = [h, k, l, intensity, sigma, wl, theta, phi, run]
 

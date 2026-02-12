@@ -87,7 +87,12 @@ IntegrationResult = namedtuple(
 
 
 def _run_harvest_local_max(
-    im, max_peaks=200, min_pix=50, min_rel_intensity=0.5, normalize=False, **kwargs
+    im,
+    max_peaks=200,
+    min_pix=50,
+    min_rel_intensity=0.5,
+    normalize=False,
+    **kwargs,
 ):
     """
     Worker for finding peak candidates using local maxima search.
@@ -229,7 +234,9 @@ def _process_single_image(
                 if hull is not None:
                     for simplex in hull.simplices:
                         axes[1].plot(
-                            hull.points[simplex, 1], hull.points[simplex, 0], c="red"
+                            hull.points[simplex, 1],
+                            hull.points[simplex, 0],
+                            c="red",
                         )
             axes[1].set_title("Integrated Hulls")
             fname = f"{img_label}_bank{physical_bank}.png"
@@ -294,7 +301,9 @@ def _process_single_image(
             "xyz": lab_coords.tolist(),
             "banks": [physical_bank] * num,
             "image_indices": [img_key] * num,
-            "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
+            "gonio_angles": [gonio_angles] * num
+            if gonio_angles is not None
+            else [],
             "count": num,
         }
         log_msg = (
@@ -379,7 +388,9 @@ def _integrate_single_bank(
 
     # CORRECTED: Account for Sample-frame offset rotation
     s_lab = (
-        current_R_val @ sample_offset if current_R_val is not None else sample_offset
+        current_R_val @ sample_offset
+        if current_R_val is not None
+        else sample_offset
     )
     bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
 
@@ -409,16 +420,25 @@ def _integrate_single_bank(
 
             if len(f_xyz_front) > 0:
                 f_row, f_col = det.lab_to_pixel(
-                    f_xyz_front[:, 0], f_xyz_front[:, 1], f_xyz_front[:, 2], clip=False
+                    f_xyz_front[:, 0],
+                    f_xyz_front[:, 1],
+                    f_xyz_front[:, 2],
+                    clip=False,
                 )
                 on_sensor = (
-                    (f_row >= 0) & (f_row < det.n) & (f_col >= 0) & (f_col < det.m)
+                    (f_row >= 0)
+                    & (f_row < det.n)
+                    & (f_col >= 0)
+                    & (f_col < det.m)
                 )
                 f_xyz_valid = f_xyz_front[on_sensor]
 
         if len(f_xyz_valid) > 0:
             f_row_valid, f_col_valid = det.lab_to_pixel(
-                f_xyz_valid[:, 0], f_xyz_valid[:, 1], f_xyz_valid[:, 2], clip=False
+                f_xyz_valid[:, 0],
+                f_xyz_valid[:, 1],
+                f_xyz_valid[:, 2],
+                clip=False,
             )
             on_panel_found = (
                 (f_row_valid >= 0)
@@ -589,7 +609,9 @@ def _integrate_single_bank(
             if hull is not None:
                 for simplex in hull.simplices:
                     axes[1].plot(
-                        hull.points[simplex, 1], hull.points[simplex, 0], c="red"
+                        hull.points[simplex, 1],
+                        hull.points[simplex, 0],
+                        c="red",
                     )
 
         # New Naming: {prefix}_{label}_int.png
@@ -677,10 +699,14 @@ class Peaks:
                     if goniometer_axes is None or goniometer_angles is None:
                         if "goniometer/axes" in f and "goniometer/angles" in f:
                             self.goniometer_axes_raw = f["goniometer/axes"][()]
-                            self.goniometer_angles_raw = f["goniometer/angles"][()]
+                            self.goniometer_angles_raw = f["goniometer/angles"][
+                                ()
+                            ]
                             if "goniometer/names" in f:
                                 self.goniometer_names_raw = [
-                                    n.decode() if isinstance(n, bytes) else str(n)
+                                    n.decode()
+                                    if isinstance(n, bytes)
+                                    else str(n)
                                     for n in f["goniometer/names"][()]
                                 ]
                             if self.goniometer_angles_raw.ndim == 2:
@@ -795,7 +821,9 @@ class Peaks:
     def get_run_id(self, img_key: int) -> int:
         """Helper to resolve the run ID for an image key."""
         if hasattr(self, "file_offsets") and self.file_offsets is not None:
-            return int(np.searchsorted(self.file_offsets, img_key, side="right") - 1)
+            return int(
+                np.searchsorted(self.file_offsets, img_key, side="right") - 1
+            )
         return 0
 
     def get_image_label(self, img_key):
@@ -809,7 +837,9 @@ class Peaks:
             if 0 <= file_idx < len(self.image_files_raw):
                 orig_name = os.path.basename(self.image_files_raw[file_idx])
                 clean_name = os.path.splitext(orig_name)[0]
-                clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
+                clean_name = clean_name.replace(".nxs.h5", "").replace(
+                    ".h5", ""
+                )
                 return clean_name
         return f"img{img_key}"
 
@@ -942,9 +972,13 @@ class Peaks:
 
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(
+            mp_context=ctx, max_workers=max_workers
+        ) as executor:
             # FIX: Map futures to img_key to preserve order
-            future_to_key = {executor.submit(_process_single_image, *t): t[0] for t in tasks}
+            future_to_key = {
+                executor.submit(_process_single_image, *t): t[0] for t in tasks
+            }
 
             results_by_key = {}
             for future in tqdm(
@@ -979,7 +1013,9 @@ class Peaks:
                     banks.extend(res["banks"])
                     actual_img_key = res["image_indices"][0]
                     image_indices.extend(res["image_indices"])
-                    run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
+                    run_ids.extend(
+                        [self.get_run_id(actual_img_key)] * res["count"]
+                    )
                     if res["gonio_angles"]:
                         gonio_angles_out.extend(res["gonio_angles"])
 
@@ -1078,9 +1114,11 @@ class Peaks:
 
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(
+            mp_context=ctx, max_workers=max_workers
+        ) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
-            
+
             # Map results to a temporary list to allow sorting
             results_list = []
             for future in tqdm(
@@ -1135,7 +1173,11 @@ class Peaks:
 
                 print(f"Loading found peaks from: {found_peaks_file}")
                 with h5py.File(found_peaks_file, "r") as f:
-                    if "files" in f and "file_offsets" in f and "peaks/xyz" in f:
+                    if (
+                        "files" in f
+                        and "file_offsets" in f
+                        and "peaks/xyz" in f
+                    ):
                         files_db = f["files"][()]
                         offsets = f["file_offsets"][()]
                         target_name = os.path.basename(self.filename)
@@ -1149,9 +1191,13 @@ class Peaks:
                             )
                             if target_name in fname_str:
                                 match_idxs.append(i)
-                        
+
                         # 2. Match via source files (if self is a merged master)
-                        if not match_idxs and hasattr(self, "image_files_raw") and self.image_files_raw:
+                        if (
+                            not match_idxs
+                            and hasattr(self, "image_files_raw")
+                            and self.image_files_raw
+                        ):
                             for src_file in self.image_files_raw:
                                 src_name = os.path.basename(src_file)
                                 for i, fname_bytes in enumerate(files_db):
@@ -1183,11 +1229,25 @@ class Peaks:
                                     bank_list.append(f["peaks/bank"][start:end])
 
                                 if "peaks/run_index" in f:
-                                    run_list.append(f["peaks/run_index"][start:end])
-                            
-                            found_peaks_xyz = np.concatenate(xyz_list, axis=0) if xyz_list else None
-                            found_peaks_bank = np.concatenate(bank_list, axis=0) if bank_list else None
-                            found_peaks_run = np.concatenate(run_list, axis=0) if run_list else None
+                                    run_list.append(
+                                        f["peaks/run_index"][start:end]
+                                    )
+
+                            found_peaks_xyz = (
+                                np.concatenate(xyz_list, axis=0)
+                                if xyz_list
+                                else None
+                            )
+                            found_peaks_bank = (
+                                np.concatenate(bank_list, axis=0)
+                                if bank_list
+                                else None
+                            )
+                            found_peaks_run = (
+                                np.concatenate(run_list, axis=0)
+                                if run_list
+                                else None
+                            )
                     elif "peaks/xyz" in f:
                         found_peaks_xyz = f["peaks/xyz"][()]
                         if "bank" in f:
@@ -1232,7 +1292,9 @@ class Peaks:
 
             current_angles_val = None
             if angles_stack is not None:
-                idx_a = bank if angles_stack.shape[0] == len(self.ims) else run_id
+                idx_a = (
+                    bank if angles_stack.shape[0] == len(self.ims) else run_id
+                )
                 if idx_a < angles_stack.shape[0]:
                     current_angles_val = angles_stack[idx_a]
                 else:
@@ -1270,9 +1332,13 @@ class Peaks:
 
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(
+            mp_context=ctx, max_workers=max_workers
+        ) as executor:
             # FIX: Map futures to bank ID to preserve order
-            future_to_bank = {executor.submit(_integrate_single_bank, *t): t[0] for t in tasks}
+            future_to_bank = {
+                executor.submit(_integrate_single_bank, *t): t[0] for t in tasks
+            }
 
             results_by_bank = {}
             for future in tqdm(
@@ -1363,7 +1429,9 @@ class Peaks:
                 f["peaks/run_index"] = run_id
 
             if hasattr(self, "image_files_raw") and self.image_files_raw:
-                f["files"] = np.array([s.encode("utf-8") for s in self.image_files_raw])
+                f["files"] = np.array(
+                    [s.encode("utf-8") for s in self.image_files_raw]
+                )
                 f["file_offsets"] = self.file_offsets
 
             if gonio_axes is not None:

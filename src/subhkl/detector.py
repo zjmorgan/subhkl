@@ -75,7 +75,9 @@ class Detector:
         else:
             raise ValueError(f"Unknown panel type: {self.panel_type}")
 
-    def pixel_to_lab(self, row: npt.ArrayLike, col: npt.ArrayLike) -> npt.NDArray:
+    def pixel_to_lab(
+        self, row: npt.ArrayLike, col: npt.ArrayLike
+    ) -> npt.NDArray:
         """
         Convert detector pixel coordinates (row, col) to lab frame (x, y, z).
 
@@ -224,7 +226,7 @@ class Detector:
             D_vec = np.cross(dir_vec.T, v).T
 
             QA = np.sum(D_vec**2, axis=0)
-            QB = 2 * np.sum(B_vec * D_vec.T, axis=1) # FIX: handle stack
+            QB = 2 * np.sum(B_vec * D_vec.T, axis=1)  # FIX: handle stack
             QC = np.sum(B_vec**2, axis=1) - self.radius**2
 
             delta = QB**2 - 4 * QA * QC
@@ -246,6 +248,8 @@ class Detector:
             Z = s[2] + t * dir_vec[2]
 
         row, col = self.lab_to_pixel(X, Y, Z)
-        mask = (row >= 0) & (col >= 0) & (row < self.n) & (col < self.m) & (t > 0)
+        mask = (
+            (row >= 0) & (col >= 0) & (row < self.n) & (col < self.m) & (t > 0)
+        )
 
         return mask, row, col

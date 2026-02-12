@@ -28,7 +28,9 @@ from subhkl.io.parser import (
 from subhkl.metrics import compute_metrics
 
 # Test data configuration
-MESOLITE_FILE = "MANDI_11613.nxs.h5"  # Use the first file from the Zenodo dataset
+MESOLITE_FILE = (
+    "MANDI_11613.nxs.h5"  # Use the first file from the Zenodo dataset
+)
 INSTRUMENT = "MANDI"
 
 # Expected lattice parameters for mesolite (from the bash script)
@@ -135,7 +137,9 @@ class TestMandiMesoliteSingleRun:
             required_datasets = ["intensity", "two_theta", "azimuthal", "xyz"]
             for dataset in required_datasets:
                 assert dataset in peaks, f"Missing dataset '{dataset}' in peaks"
-                assert len(peaks[dataset]) > 0, f"No peaks in dataset '{dataset}'"
+                assert len(peaks[dataset]) > 0, (
+                    f"No peaks in dataset '{dataset}'"
+                )
 
             num_peaks = len(peaks["intensity"])
             print(f"\n  Found {num_peaks} peaks")
@@ -173,7 +177,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Verify output file
-        assert os.path.exists(indexer_output), "Indexer output file was not created"
+        assert os.path.exists(indexer_output), (
+            "Indexer output file was not created"
+        )
 
         # Verify indexing results
         with h5py.File(indexer_output, "r") as f:
@@ -227,7 +233,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Run peak predictor
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
+        predictor_output = os.path.join(
+            temp_output_dir, "mesolite.peak_predictor.h5"
+        )
         peak_predictor(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -295,7 +303,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Run peak predictor
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
+        predictor_output = os.path.join(
+            temp_output_dir, "mesolite.peak_predictor.h5"
+        )
         peak_predictor(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -332,11 +342,18 @@ class TestMandiMesoliteSingleRun:
             assert len(bank_group["h"]) > 0, "No predicted peaks in first bank"
 
         metrics = compute_metrics(indexer_output)
-        assert metrics["median_d_err"] is not None and metrics["median_d_err"] > 0
+        assert (
+            metrics["median_d_err"] is not None and metrics["median_d_err"] > 0
+        )
         assert metrics["mean_d_err"] is not None and metrics["mean_d_err"] > 0
         assert metrics["max_d_err"] is not None and metrics["max_d_err"] > 0
-        assert metrics["median_ang_err"] is not None and metrics["median_ang_err"] > 0
-        assert metrics["mean_ang_err"] is not None and metrics["mean_ang_err"] > 0
+        assert (
+            metrics["median_ang_err"] is not None
+            and metrics["median_ang_err"] > 0
+        )
+        assert (
+            metrics["mean_ang_err"] is not None and metrics["mean_ang_err"] > 0
+        )
         assert metrics["max_ang_err"] is not None and metrics["max_ang_err"] > 0
         assert metrics["num_peaks"] is not None and metrics["num_peaks"] > 0
 
@@ -371,7 +388,9 @@ class TestMandiMesoliteSingleRun:
             **INDEXER_DEFAULTS,
         )
 
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
+        predictor_output = os.path.join(
+            temp_output_dir, "mesolite.peak_predictor.h5"
+        )
         peak_predictor(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -381,7 +400,9 @@ class TestMandiMesoliteSingleRun:
         )
 
         # Run integrator
-        integrator_output = os.path.join(temp_output_dir, "mesolite.integrator.h5")
+        integrator_output = os.path.join(
+            temp_output_dir, "mesolite.integrator.h5"
+        )
         integrator(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -439,7 +460,9 @@ class TestMandiMesoliteSingleRun:
             **INDEXER_DEFAULTS,
         )
 
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
+        predictor_output = os.path.join(
+            temp_output_dir, "mesolite.peak_predictor.h5"
+        )
         peak_predictor(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -448,7 +471,9 @@ class TestMandiMesoliteSingleRun:
             d_min=1.35,
         )
 
-        integrator_output = os.path.join(temp_output_dir, "mesolite.integrator.h5")
+        integrator_output = os.path.join(
+            temp_output_dir, "mesolite.integrator.h5"
+        )
         integrator(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -482,8 +507,12 @@ class TestMandiMesoliteSingleRun:
         # Define output filenames
         finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
         indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
-        integrator_output = os.path.join(temp_output_dir, "mesolite.integrator.h5")
+        predictor_output = os.path.join(
+            temp_output_dir, "mesolite.peak_predictor.h5"
+        )
+        integrator_output = os.path.join(
+            temp_output_dir, "mesolite.integrator.h5"
+        )
         mtz_output = os.path.join(temp_output_dir, "mesolite.mtz")
 
         print("\n[1/5] Running peak finder...")

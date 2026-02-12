@@ -38,7 +38,8 @@ def simulate(n, rate, rng):
 
 
 xp, yp = np.stack(
-    np.meshgrid(np.arange(image_width), np.arange(image_height), indexing="ij"), axis=0
+    np.meshgrid(np.arange(image_width), np.arange(image_height), indexing="ij"),
+    axis=0,
 )
 
 rate = calc_rate(xp, yp)
@@ -62,7 +63,11 @@ peak_integrator = PeakIntegrator(
 )
 
 result, hulls, _ = peak_integrator.integrate_peaks(
-    0, counts[0], np.array([[rate_x, rate_y]]), return_hulls=True, return_headers=True
+    0,
+    counts[0],
+    np.array([[rate_x, rate_y]]),
+    return_hulls=True,
+    return_headers=True,
 )
 plt.imshow(counts[0], vmin=v_min, vmax=v_max)
 for _, hull, _, _ in hulls:
@@ -83,7 +88,9 @@ peak_integrator.integrate_peaks(
 integrated_i = []
 integrated_sigma = []
 for intensity in counts:
-    result, _ = peak_integrator.integrate_peaks(0, intensity, np.array([[rate_x, rate_y]]))
+    result, _ = peak_integrator.integrate_peaks(
+        0, intensity, np.array([[rate_x, rate_y]])
+    )
     integrated_i.append(result[0][3])
     integrated_sigma.append(result[0][5])
 
@@ -103,7 +110,10 @@ new_integrated_i = []
 new_integrated_sigma = []
 for intensity in counts:
     result, _ = peak_integrator.integrate_peaks(
-        0, intensity, np.array([[rate_x, rate_y]]), integration_method="gaussian_fit"
+        0,
+        intensity,
+        np.array([[rate_x, rate_y]]),
+        integration_method="gaussian_fit",
     )
     if result[0][3] is not None:
         new_integrated_i.append(result[0][3])

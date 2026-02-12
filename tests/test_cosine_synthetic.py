@@ -5,6 +5,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 from subhkl.io.parser import index, metrics
 
+
 def create_synthetic_finder(filename):
     # Unit cell a=10 cubic
     a, b, c = 10.0, 10.0, 10.0
@@ -59,7 +60,9 @@ def create_synthetic_finder(filename):
         f["peaks/sigma"] = np.ones(len(xyz)) * 0.1
         f["peaks/radius"] = np.zeros(len(xyz))
         f["goniometer/R"] = R0[None, ...]
-        f["goniometer/axes"] = np.array([[0, 1, 0, 1], [0, 0, 1, 1], [0, 1, 0, 1]])
+        f["goniometer/axes"] = np.array(
+            [[0, 1, 0, 1], [0, 0, 1, 1], [0, 1, 0, 1]]
+        )
         f["goniometer/angles"] = np.zeros((1, 3))
         f["goniometer/names"] = [b"omega", b"chi", b"phi"]
         f["sample/a"] = a
@@ -71,6 +74,7 @@ def create_synthetic_finder(filename):
         f["sample/space_group"] = "P 1"
         f["instrument/wavelength"] = [1.0, 8.0]
         f.attrs["instrument"] = "MANDI"
+
 
 def test_cosine_synthetic_indexing(tmp_path):
     finder_h5 = os.path.join(tmp_path, "synthetic_finder.h5")
@@ -122,6 +126,7 @@ def test_cosine_synthetic_indexing(tmp_path):
     # Run metrics
     import io
     from contextlib import redirect_stdout
+
     f = io.StringIO()
     with redirect_stdout(f):
         metrics(indexer_h5, instrument="MANDI")

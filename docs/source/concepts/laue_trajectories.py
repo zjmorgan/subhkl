@@ -79,7 +79,9 @@ ax[0].set_xlabel(r"$Q_x$ [$\AA^{-1}$]")
 ax[0].set_ylabel(r"$Q_z$ [$\AA^{-1}$]")
 
 for _x, _z in zip(x, z):
-    ax[0].plot(2 * np.pi / wl * _x / l2, 2 * np.pi / wl * (_z / l2 - 1), color="C0")
+    ax[0].plot(
+        2 * np.pi / wl * _x / l2, 2 * np.pi / wl * (_z / l2 - 1), color="C0"
+    )
 
 t = np.deg2rad(np.linspace(-175, 175, 500) + 90)
 
@@ -103,5 +105,9 @@ ax[1].arrow(
 
 for _x, _z in zip(x, z):
     ax[1].plot(
-        [_x * 5, _x * 100], [_z * 5, _z * 100], linestyle="-", linewidth=1, color="C0"
+        [_x * 5, _x * 100],
+        [_z * 5, _z * 100],
+        linestyle="-",
+        linewidth=1,
+        color="C0",
     )

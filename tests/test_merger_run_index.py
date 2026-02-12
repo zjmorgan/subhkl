@@ -3,6 +3,7 @@ import h5py
 import pytest
 from subhkl.export import FinderConcatenateMerger
 
+
 def test_finder_merger_run_index_collision(tmp_path):
     """
     Reproduces the bug where FinderConcatenateMerger causes run_index collisions
@@ -11,7 +12,7 @@ def test_finder_merger_run_index_collision(tmp_path):
     file1 = tmp_path / "peaks1.h5"
     file2 = tmp_path / "peaks2.h5"
     merged_h5 = tmp_path / "merged.h5"
-    
+
     # 1. Create File 1 with 2 runs (0, 1)
     with h5py.File(file1, "w") as f:
         # Minimal data for merge_keys
@@ -25,7 +26,7 @@ def test_finder_merger_run_index_collision(tmp_path):
         f["peaks/xyz"] = np.random.rand(2, 3)
         f["bank"] = [0, 0]
         f["peaks/image_index"] = [0, 1]
-        f["peaks/run_index"] = [0, 1] # 2 unique runs
+        f["peaks/run_index"] = [0, 1]  # 2 unique runs
         f["goniometer/R"] = np.random.rand(2, 3, 3)
         f["goniometer/angles"] = np.random.rand(2, 3)
         f["goniometer/axes"] = [[0, 1, 0, 1]]
@@ -43,7 +44,7 @@ def test_finder_merger_run_index_collision(tmp_path):
         f["peaks/xyz"] = np.random.rand(2, 3)
         f["bank"] = [0, 0]
         f["peaks/image_index"] = [0, 1]
-        f["peaks/run_index"] = [0, 1] # 2 unique runs
+        f["peaks/run_index"] = [0, 1]  # 2 unique runs
         f["goniometer/R"] = np.random.rand(2, 3, 3)
         f["goniometer/angles"] = np.random.rand(2, 3)
         f["goniometer/axes"] = [[0, 1, 0, 1]]
@@ -52,15 +53,17 @@ def test_finder_merger_run_index_collision(tmp_path):
     # 3. Merge
     merger = FinderConcatenateMerger([str(file1), str(file2)])
     merger.merge(str(merged_h5))
-    
+
     with h5py.File(merged_h5, "r") as f:
         run_indices = f["peaks/run_index"][()]
         print(f"DEBUG: Merged run_indices: {run_indices}")
-        
+
         # We expect 4 unique runs: [0, 1, 2, 3]
         # But File 1 (0, 1) + 0 -> (0, 1)
         # And File 2 (0, 1) + 1 -> (1, 2)
         # Result: [0, 1, 1, 2] -> COLLISION at index 1!
-        
+
         unique_runs = np.unique(run_indices)
-        assert len(unique_runs) == 4, f"Run Index Collision! Expected 4 unique runs, got {len(unique_runs)}: {run_indices}"
+        assert len(unique_runs) == 4, (
+            f"Run Index Collision! Expected 4 unique runs, got {len(unique_runs)}: {run_indices}"
+        )

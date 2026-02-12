@@ -40,12 +40,16 @@ def test_mesolite():
 
     extent = [-p / 2, p / 2, -h / 2, h / 2]
 
-    ax[0].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
+    ax[0].imshow(
+        pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent
+    )
 
     ax[0].minorticks_on()
     ax[0].set_aspect(1)
 
-    ax[1].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
+    ax[1].imshow(
+        pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent
+    )
 
     ax[1].scatter(x, y, edgecolor="r", facecolor="none")
     ax[1].minorticks_on()
@@ -82,7 +86,9 @@ def test_mesolite():
     while tries < 5:
         num, hkl, lamda = opt.minimize(48)
 
-        ax[2].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
+        ax[2].imshow(
+            pks.im, norm="log", cmap="binary", origin="lower", extent=extent
+        )
 
         ax[2].plot(x, y, "r.")
         ax[2].minorticks_on()
@@ -104,7 +110,13 @@ def test_mesolite():
         lamda = -4 * np.pi * Qz / Q**2
         mask = np.logical_and(lamda > wl_min, lamda < wl_max)
 
-        Qx, Qy, Qz, Q, lamda = Qx[mask], Qy[mask], Qz[mask], Q[mask], lamda[mask]
+        Qx, Qy, Qz, Q, lamda = (
+            Qx[mask],
+            Qy[mask],
+            Qz[mask],
+            Q[mask],
+            lamda[mask],
+        )
 
         tt = -2 * np.arcsin(Qz / Q)
         az = np.arctan2(Qy, Qx)

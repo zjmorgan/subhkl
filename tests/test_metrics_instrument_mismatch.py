@@ -3,6 +3,7 @@ import pytest
 import h5py
 from subhkl.metrics import compute_metrics
 
+
 def test_mtz_exporter_sg_mismatch():
     """
     Reproduces the bug where MTZExporter fails if the space group name
@@ -10,7 +11,7 @@ def test_mtz_exporter_sg_mismatch():
     """
     from subhkl.export import MTZExporter
     import h5py
-    
+
     indexed_h5 = "temp_dummy.h5"
     # Create a minimal indexed file
     with h5py.File(indexed_h5, "w") as f:
@@ -26,13 +27,14 @@ def test_mtz_exporter_sg_mismatch():
         f["peaks/run_index"] = [0, 0, 0]
         f["sample/a"], f["sample/b"], f["sample/c"] = 10, 10, 10
         f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = 90, 90, 90
-    
+
     # This should crash on invalid SG during MTZ writing
     exporter = MTZExporter(indexed_h5, space_group="InvalidSG")
     with pytest.raises(ValueError, match="Could not find space group"):
         exporter.write_mtz("test.mtz")
-    
+
     import os
+
     if os.path.exists(indexed_h5):
         os.remove(indexed_h5)
     if os.path.exists("test.mtz"):

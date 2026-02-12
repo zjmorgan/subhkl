@@ -61,7 +61,9 @@ def create_synthetic_finder(filename):
         f["peaks/sigma"] = np.ones(len(xyz)) * 0.1
         f["peaks/radius"] = np.zeros(len(xyz))
         f["goniometer/R"] = R0[None, ...]
-        f["goniometer/axes"] = np.array([[0, 1, 0, 1], [0, 0, 1, 1], [0, 1, 0, 1]])
+        f["goniometer/axes"] = np.array(
+            [[0, 1, 0, 1], [0, 0, 1, 1], [0, 1, 0, 1]]
+        )
         f["goniometer/angles"] = np.zeros((1, 3))
         f["goniometer/names"] = [b"omega", b"chi", b"phi"]
         f["sample/a"] = a

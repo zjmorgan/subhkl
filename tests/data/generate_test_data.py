@@ -45,7 +45,9 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     uc = cs.getUnitCell()
 
     CreatePeaksWorkspace(
-        NumberOfPeaks=0, OutputType="LeanElasticPeak", OutputWorkspace="reference"
+        NumberOfPeaks=0,
+        OutputType="LeanElasticPeak",
+        OutputWorkspace="reference",
     )
 
     SetUB(
@@ -66,7 +68,10 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     SetUB(Workspace="instrument", UB=UB)
 
     SetGoniometer(
-        Workspace="instrument", Axis0="0,0,1,0,1", Axis1="0,0,0,1,1", Axis2="0,0,1,0,1"
+        Workspace="instrument",
+        Axis0="0,0,1,0,1",
+        Axis1="0,0,0,1,1",
+        Axis2="0,0,1,0,1",
     )
 
     mtd["instrument"].run().getGoniometer().setR(R)

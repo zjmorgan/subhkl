@@ -94,7 +94,9 @@ def test_rotating_sample_offset():
     if score < 1.9:
         print("FAILURE: Indexer could not find the solution.")
     else:
-        print("SUCCESS: Indexer found the solution with rotating sample offset model.")
+        print(
+            "SUCCESS: Indexer found the solution with rotating sample offset model."
+        )
 
 
 if __name__ == "__main__":

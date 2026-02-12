@@ -60,7 +60,10 @@ def test_multi_run_mapping_fix_via_minimize():
 
     if run_indices is not None:
         unique_runs, first_indices = np.unique(run_indices, return_index=True)
-        if goniometer_angles is not None and goniometer_angles.shape[1] == num_obs:
+        if (
+            goniometer_angles is not None
+            and goniometer_angles.shape[1] == num_obs
+        ):
             goniometer_angles_reduced = goniometer_angles[:, first_indices]
 
     print(f"Original gonio angles shape: {goniometer_angles.shape}")

@@ -35,7 +35,9 @@ def test_forbidden_reflections_allowed_if_out_of_bounds():
     # Simulate an HKL that is out of bounds
     h, k, l = 1, 0, 0
     r = hkl_search_range
-    in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
+    in_bounds = (
+        (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
+    )
 
     # The logic in the code is:
     # is_allowed = jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], True)
@@ -52,7 +54,9 @@ def test_forbidden_reflections_allowed_if_out_of_bounds():
     # idx_h, idx_k, idx_l = clip(h+r, 0, 2r)
     # is_allowed = jnp.where(in_bounds, mask[idx], False)
 
-    assert not is_allowed_in_code, "Logic should REJECT out-of-bounds by default"
+    assert not is_allowed_in_code, (
+        "Logic should REJECT out-of-bounds by default"
+    )
     print(
         "FIX CONFIRMED: Forbidden reflections are now rejected if they exceed hkl_search_range!"
     )

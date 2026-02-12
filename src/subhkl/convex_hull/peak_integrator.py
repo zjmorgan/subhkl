@@ -27,15 +27,23 @@ class PeakIntegrator:
             "distance_threshold": integration_params.pop(
                 "region_growth_distance_threshold"
             ),
-            "min_intensity": integration_params.pop("region_growth_minimum_intensity"),
-            "max_size": integration_params.pop("region_growth_maximum_pixel_radius"),
+            "min_intensity": integration_params.pop(
+                "region_growth_minimum_intensity"
+            ),
+            "max_size": integration_params.pop(
+                "region_growth_maximum_pixel_radius"
+            ),
         }
         other_params = {
             "box_size": integration_params["peak_center_box_size"],
-            "smoothing_window_size": integration_params["peak_smoothing_window_size"],
+            "smoothing_window_size": integration_params[
+                "peak_smoothing_window_size"
+            ],
             "min_peak_pixels": integration_params["peak_minimum_pixels"],
             "min_peak_snr": integration_params["peak_minimum_signal_to_noise"],
-            "outlier_threshold": integration_params["peak_pixel_outlier_threshold"],
+            "outlier_threshold": integration_params[
+                "peak_pixel_outlier_threshold"
+            ],
         }
         integrator = PeakIntegrator(
             RegionGrower(**region_growth_params), **other_params
@@ -122,8 +130,8 @@ class PeakIntegrator:
         """
 
         # Get masks and hulls
-        is_peak, peak_masks, bg_masks, peak_hulls, adjusted_centers = self._find_peak_regions(
-            intensity, peak_centers
+        is_peak, peak_masks, bg_masks, peak_hulls, adjusted_centers = (
+            self._find_peak_regions(intensity, peak_centers)
         )
         # Ensure float array for sub-pixel refinement
         adjusted_centers = adjusted_centers.astype(float)
@@ -149,11 +157,18 @@ class PeakIntegrator:
                     )
 
                 if stats[0] is not None:
-                    bg_density, peak_intensity, peak_bg_intensity, sigma, y0, x0 = stats
+                    (
+                        bg_density,
+                        peak_intensity,
+                        peak_bg_intensity,
+                        sigma,
+                        y0,
+                        x0,
+                    ) = stats
                     if y0 is not None and x0 is not None:
                         # Update the center with sub-pixel refined coordinates
                         adjusted_centers[i_peak] = [float(y0), float(x0)]
-                    
+
                     bg_density, peak_intensity, peak_bg_intensity, sigma = (
                         float(bg_density),
                         float(peak_intensity),
@@ -196,7 +211,14 @@ class PeakIntegrator:
                 )
 
             output_data.append(
-                [bank_id, i_peak, bg_density, peak_intensity, peak_bg_intensity, sigma]
+                [
+                    bank_id,
+                    i_peak,
+                    bg_density,
+                    peak_intensity,
+                    peak_bg_intensity,
+                    sigma,
+                ]
             )
 
         if return_hulls:
@@ -333,12 +355,16 @@ class PeakIntegrator:
 
             # Move center to local maximum *in the smoothed image*
             try:
-                adjusted_center = self._local_max(smoothed_intensity, estimated_center)
+                adjusted_center = self._local_max(
+                    smoothed_intensity, estimated_center
+                )
             except ValueError:
                 adjusted_center = None
 
             adjusted_centers.append(
-                adjusted_center if adjusted_center is not None else estimated_center
+                adjusted_center
+                if adjusted_center is not None
+                else estimated_center
             )
 
             # Make sure center starts from a non-zero point *in the original
@@ -374,7 +400,9 @@ class PeakIntegrator:
             )
 
             # Build masks and hulls
-            masks, hulls = self._make_peak_hulls_and_masks(core_points, im_shape)
+            masks, hulls = self._make_peak_hulls_and_masks(
+                core_points, im_shape
+            )
 
             # Check for failure (degenerate hulls)
             if masks is None:
@@ -406,9 +434,17 @@ class PeakIntegrator:
 
         for bg_mask in bg_masks:
             if bg_mask is not None:
-                bg_mask &= not_any_inner_mask  # keep points not in any inner region
+                bg_mask &= (
+                    not_any_inner_mask  # keep points not in any inner region
+                )
 
-        return is_peak, peak_masks, bg_masks, peak_hulls, np.array(adjusted_centers)
+        return (
+            is_peak,
+            peak_masks,
+            bg_masks,
+            peak_hulls,
+            np.array(adjusted_centers),
+        )
 
     @staticmethod
     def _calculate_statistics(intensity, peak_mask, bg_mask):
@@ -502,7 +538,9 @@ class PeakIntegrator:
                     [sigma_x * sigma_y * rho, sigma_y**2],
                 ]
             )
-            u = np.einsum("...i,ij,...j->...", xy, np.linalg.inv(covariance), xy)
+            u = np.einsum(
+                "...i,ij,...j->...", xy, np.linalg.inv(covariance), xy
+            )
             model = background + amplitude * np.exp(-u / 2)
             return model
 
@@ -619,13 +657,22 @@ class PeakIntegrator:
                     / (1 - rho**2) ** 0.5
                 ) ** 2
 
-                peak_integral_error = np.sqrt(term_A + term_sy + term_sx + term_rho)
+                peak_integral_error = np.sqrt(
+                    term_A + term_sy + term_sx + term_rho
+                )
 
             except Exception:
                 # Fallback if Hessian inversion fails
                 peak_integral_error = np.sqrt(peak_integral + peak_bg_integral)
 
-            return bg_level, peak_integral, peak_bg_integral, peak_integral_error, y0, x0
+            return (
+                bg_level,
+                peak_integral,
+                peak_bg_integral,
+                peak_integral_error,
+                y0,
+                x0,
+            )
 
         except (ValueError, np.linalg.LinAlgError):
             # Handle optimization or numerical errors
@@ -689,7 +736,10 @@ class PeakIntegrator:
 
         # Find the index of the max value in the window
         max_idx_flat = np.argmax(window)
-        max_idx_2d = (max_idx_flat // window.shape[1], max_idx_flat % window.shape[1])
+        max_idx_2d = (
+            max_idx_flat // window.shape[1],
+            max_idx_flat % window.shape[1],
+        )
 
         # Map local index back to global coordinates
         global_max_idx = (

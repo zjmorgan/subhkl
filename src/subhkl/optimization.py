@@ -355,6 +355,20 @@ class VectorizedObjective:
         # Handle Peak-to-Run mapping metadata
         if peak_run_indices is not None:
             self.peak_run_indices = jnp.array(peak_run_indices, dtype=jnp.int32)
+            # Validation: Ensure R stack is large enough for the max run_index
+            if self.static_R.ndim == 3:
+                max_run = jnp.max(self.peak_run_indices)
+                num_rot = self.static_R.shape[0]
+                if max_run >= num_rot:
+                    # If we only have ONE rotation, broadcast it to match the peaks
+                    if num_rot == 1:
+                        self.static_R = jnp.tile(
+                            self.static_R, (max_run + 1, 1, 1)
+                        )
+                    else:
+                        # Major mismatch: Force everything to run 0 to prevent crash, but warn
+                        # (JAX doesn't warn easily in JIT, so we'll just clamp later)
+                        pass
         # Default heuristic:
         # 1. If R is a stack of N rotations and we have N peaks, assume 1-to-1 mapping.
         elif self.static_R.ndim == 3:
@@ -366,6 +380,12 @@ class VectorizedObjective:
                 self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
         else:
             self.peak_run_indices = jnp.zeros(num_peaks, dtype=jnp.int32)
+
+        # Final safety: Clamp run indices to R stack bounds to prevent UB in JAX
+        if self.static_R.ndim == 3:
+            self.peak_run_indices = jnp.clip(
+                self.peak_run_indices, 0, self.static_R.shape[0] - 1
+            )
 
         if peak_xyz_lab is not None:
             # peak_xyz_lab is (N, 3) or (3, N). We want (3, N).
@@ -904,24 +924,30 @@ class VectorizedObjective:
             hkl_float = v / lambda_opt[:, None, :]
 
             # Robust Multi-Scale Kernel: Mixture of Narrow + Wide peaks
-            # We scale kappa by 1/h^2 to represent a uniform angular tolerance
-            # (sigma_h approx tolerance_rad * h)
-            hkl_sq = jnp.where(jnp.abs(hkl_float) < 1e-3, 1e-6, hkl_float**2)
+            # We use an isotropic tolerance based on the total HKL magnitude
+            # to represent a uniform angular tolerance (sigma_h approx tolerance_rad * |h|).
+            # This prevents the 'delta function' behavior for components near zero.
+            hkl_mag_sq = jnp.sum(hkl_float**2, axis=1, keepdims=True)
+            hkl_mag_sq = jnp.maximum(hkl_mag_sq, 1e-6)
 
             kappa_scaled = 1.0 / (
-                hkl_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
+                hkl_mag_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
             )
             cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
             log_p_narrow = jnp.sum(kappa_scaled * cos_diff, axis=1)
 
             kappa_wide_scaled = 1.0 / (
-                hkl_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
+                hkl_mag_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
             )
             log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff, axis=1)
-            # Combine via LogSumExp
+
+            # Combine via LogSumExp with 1% weight on wide kernel
+            # This prevents double-counting and ensures the wide kernel
+            # doesn't drown out the high-precision narrow kernel.
             log_prob = jax.nn.logsumexp(
-                jnp.stack([log_p_narrow, log_p_wide]), axis=0
+                jnp.stack([log_p_narrow, log_p_wide - 4.605]), axis=0
             )
+
 
             # --- VALIDATION LOGIC ---
             # Resolution Filter
@@ -1498,6 +1524,9 @@ class FindUB:
         else:
             self.space_group = str(sg)
 
+        if "sample/offset" in data:
+            self.base_sample_offset = data["sample/offset"]
+
         if "peaks/xyz" in data:
             self.peak_xyz = data["peaks/xyz"]
         if "goniometer/axes" in data:
@@ -1722,8 +1751,9 @@ class FindUB:
         num_obs = kf_ki_dir_lab.shape[1]
 
         # --- Gonio Mapping Fix ---
-        # If goniometer data is per-peak, reduce it to per-run (image) to allow
-        # consistent mapping via run_indices in VectorizedObjective.
+        # If goniometer data is per-peak, reduce it to per-run (image) IF AND ONLY IF
+        # all peaks in a run share the same geometry. This saves memory in the
+        # optimizer. If they differ, we MUST use per-peak indexing.
         static_R_input = self.R if self.R is not None else np.eye(3)
         if self.run_indices is not None:
             max_run_id = int(np.max(self.run_indices))
@@ -1732,30 +1762,55 @@ class FindUB:
                 self.run_indices, return_index=True
             )
 
-            if (
+            # Check for intra-run variations
+            def has_variation(data, indices):
+                if data is None:
+                    return False
+                for r in unique_runs:
+                    mask = indices == r
+                    if np.sum(mask) <= 1:
+                        continue
+                    subset = data[mask] if data.ndim == 2 else data[mask, ...]
+                    if not np.allclose(subset, subset[0:1], atol=1e-7):
+                        return True
+                return False
+
+            can_reduce_angles = (
                 goniometer_angles is not None
                 and goniometer_angles.shape[1] == num_obs
-            ):
-                # We have per-peak angles. We need to reduce them to per-run for refinement.
-                # Use first appearance per run.
+                and not has_variation(goniometer_angles.T, self.run_indices)
+            )
+            can_reduce_R = (
+                self.R is not None
+                and self.R.ndim == 3
+                and self.R.shape[0] == num_obs
+                and not has_variation(self.R, self.run_indices)
+            )
+
+            if can_reduce_angles:
+                # We have per-peak angles. We can reduce them to per-run.
                 new_angles = np.zeros(
                     (goniometer_angles.shape[0], num_runs_range)
                 )
-                # Fill with defaults (first available) then overwrite with unique runs
                 new_angles[:] = goniometer_angles[:, first_indices[0:1]]
                 new_angles[:, unique_runs] = goniometer_angles[:, first_indices]
                 goniometer_angles = new_angles
 
-            if (
-                self.R is not None
-                and self.R.ndim == 3
-                and self.R.shape[0] == num_obs
-            ):
+            if can_reduce_R:
                 # We have per-peak rotations. Reduce to per-run.
                 new_R = np.zeros((num_runs_range, 3, 3))
                 new_R[:] = self.R[first_indices[0:1]]
                 new_R[unique_runs] = self.R[first_indices]
                 static_R_input = new_R
+            elif (
+                self.R is not None
+                and self.R.ndim == 3
+                and self.R.shape[0] == num_obs
+            ):
+                # Per-peak variation detected. Use per-peak mapping (peak_run_indices = 0..N)
+                static_R_input = self.R
+                # This will trigger VectorizedObjective's per-peak mode (arange)
+                self.run_indices = np.arange(num_obs, dtype=np.int32)
 
         # Always use Lab frame vectors for Objective initialization.
         kf_ki_input = kf_ki_dir_lab
