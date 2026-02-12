@@ -21,7 +21,7 @@ class BaseConcatenateMerger:
         per_file_keys : list[str]
             List of keys that are per-run/per-file (shape [N_runs, ...])
         """
-        self.h5_files = h5_files
+        self.h5_files = sorted(list(set(h5_files)))
         self.copy_keys = copy_keys
         self.merge_keys = merge_keys
         self.per_file_keys = per_file_keys if per_file_keys is not None else []

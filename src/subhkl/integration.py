@@ -943,36 +943,45 @@ class Peaks:
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            futures = [executor.submit(_process_single_image, *t) for t in tasks]
+            # FIX: Map futures to img_key to preserve order
+            future_to_key = {executor.submit(_process_single_image, *t): t[0] for t in tasks}
 
+            results_by_key = {}
             for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
+                as_completed(future_to_key),
+                total=len(future_to_key),
                 desc="Integrating",
                 disable=not show_progress,
             ):
+                img_key = future_to_key[future]
                 try:
                     res, msg = future.result()
                     if show_progress:
                         tqdm.write(msg)
                     if res:
-                        two_theta.extend(res["two_theta"])
-                        az_phi.extend(res["az_phi"])
-                        R.extend(res["R"])
-                        lamda_min.extend(res["lamda_min"])
-                        lamda_max.extend(res["lamda_max"])
-                        intensity.extend(res["intensity"])
-                        sigma.extend(res["sigma"])
-                        radii.extend(res["radii"])
-                        xyz_out.extend(res["xyz"])
-                        banks.extend(res["banks"])
-                        actual_img_key = res["image_indices"][0]
-                        image_indices.extend(res["image_indices"])
-                        run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
-                        if res["gonio_angles"]:
-                            gonio_angles_out.extend(res["gonio_angles"])
+                        results_by_key[img_key] = res
                 except Exception as e:
-                    print(f"Worker failed: {e}")
+                    print(f"Worker failed for image {img_key}: {e}")
+
+            # Assemble results in DETERMINISTIC (sorted) order
+            for img_key in sorted(self.ims.keys()):
+                res = results_by_key.get(img_key)
+                if res:
+                    two_theta.extend(res["two_theta"])
+                    az_phi.extend(res["az_phi"])
+                    R.extend(res["R"])
+                    lamda_min.extend(res["lamda_min"])
+                    lamda_max.extend(res["lamda_max"])
+                    intensity.extend(res["intensity"])
+                    sigma.extend(res["sigma"])
+                    radii.extend(res["radii"])
+                    xyz_out.extend(res["xyz"])
+                    banks.extend(res["banks"])
+                    actual_img_key = res["image_indices"][0]
+                    image_indices.extend(res["image_indices"])
+                    run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
+                    if res["gonio_angles"]:
+                        gonio_angles_out.extend(res["gonio_angles"])
 
         return DetectorPeaks(
             R,
@@ -1071,16 +1080,22 @@ class Peaks:
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = [executor.submit(_predict_single_bank, *t) for t in tasks]
-            # Use tqdm for progress bar
+            
+            # Map results to a temporary list to allow sorting
+            results_list = []
             for future in tqdm(
                 as_completed(futures), total=len(futures), desc="Predicting"
             ):
                 try:
                     bank_id, res = future.result()
                     if res:
-                        peak_dict[bank_id] = res
+                        results_list.append((bank_id, res))
                 except Exception as e:
                     print(f"Prediction failed for a bank: {e}")
+
+            # Insert into dict in sorted order
+            for bank_id, res in sorted(results_list, key=lambda x: x[0]):
+                peak_dict[bank_id] = res
 
         return peak_dict
 
@@ -1256,32 +1271,41 @@ class Peaks:
         # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            futures = [executor.submit(_integrate_single_bank, *t) for t in tasks]
+            # FIX: Map futures to bank ID to preserve order
+            future_to_bank = {executor.submit(_integrate_single_bank, *t): t[0] for t in tasks}
 
+            results_by_bank = {}
             for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
+                as_completed(future_to_bank),
+                total=len(future_to_bank),
                 desc="Integrating",
                 disable=not show_progress,
             ):
+                bank_id = future_to_bank[future]
                 try:
                     res = future.result()
                     if res:
-                        h.extend(res["h"])
-                        k.extend(res["k"])
-                        miller_l.extend(res["l"])
-                        intensity.extend(res["intensity"])
-                        sigma.extend(res["sigma"])
-                        tt.extend(res["tt"])
-                        az.extend(res["az"])
-                        wavelength.extend(res["wavelength"])
-                        xyz.extend(res["xyz"])
-                        banks.extend(res["bank"])
-                        run_ids.extend(res["run_id"])
-                        R_out.extend(res["R"])
-                        angles_out.extend(res["angles"])
+                        results_by_bank[bank_id] = res
                 except Exception as e:
-                    print(f"Integration worker failed: {e}")
+                    print(f"Integration worker failed for bank {bank_id}: {e}")
+
+            # Assemble results in DETERMINISTIC (sorted) order
+            for bank_id in sorted(peak_dict.keys()):
+                res = results_by_bank.get(bank_id)
+                if res:
+                    h.extend(res["h"])
+                    k.extend(res["k"])
+                    miller_l.extend(res["l"])
+                    intensity.extend(res["intensity"])
+                    sigma.extend(res["sigma"])
+                    tt.extend(res["tt"])
+                    az.extend(res["az"])
+                    wavelength.extend(res["wavelength"])
+                    xyz.extend(res["xyz"])
+                    banks.extend(res["bank"])
+                    run_ids.extend(res["run_id"])
+                    R_out.extend(res["R"])
+                    angles_out.extend(res["angles"])
 
         return IntegrationResult(
             h,
