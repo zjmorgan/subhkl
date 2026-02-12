@@ -47,12 +47,16 @@ class BaseConcatenateMerger:
                 num = len(f_in[self.merge_keys[0]])
                 total_peaks += num
 
+                num_runs_in_file = 0
                 if self.per_file_keys:
                     # Assume each file is ONE run for now, OR check length of first per_file_key
                     if self.per_file_keys[0] in f_in:
-                        total_runs += len(f_in[self.per_file_keys[0]])
-                    else:
-                        total_runs += 1
+                        num_runs_in_file = len(f_in[self.per_file_keys[0]])
+                
+                if num_runs_in_file == 0:
+                    num_runs_in_file = 1
+                
+                total_runs += num_runs_in_file
 
                 # Use the first file with data as the template to ensure
                 # multidimensional shapes (like 3x3 matrices) are preserved.
@@ -120,8 +124,8 @@ class BaseConcatenateMerger:
                                 run_range = slice(run_offset, run_offset + n_r)
                                 f_out[per_file_key][run_range] = data
                         
-                        if num_runs_in_file == 0 and num_items > 0:
-                            num_runs_in_file = 1
+                    if num_runs_in_file == 0 and num_items > 0:
+                        num_runs_in_file = 1
 
                     offset += num_items
                     run_offset += num_runs_in_file
@@ -141,8 +145,10 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "bank",
             "peaks/image_index",
             "peaks/run_index",
+            "goniometer/R",
+            "goniometer/angles",
         ]
-        per_file_keys = ["goniometer/R", "goniometer/angles"]
+        per_file_keys = []
         copy_keys = ["goniometer/axes", "goniometer/names"]
         super().__init__(h5_files, copy_keys, merge_keys, per_file_keys=per_file_keys)
 

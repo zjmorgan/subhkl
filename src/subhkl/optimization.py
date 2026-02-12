@@ -9,7 +9,11 @@ import scipy.linalg
 import scipy.spatial
 
 from subhkl.detector import scattering_vector_from_angles
-from subhkl.spacegroup import generate_hkl_mask, get_centering, get_space_group_object
+from subhkl.spacegroup import (
+    generate_hkl_mask,
+    get_centering,
+    get_space_group_object,
+)
 
 # Import JAX with fallback from utils (centralized)
 from subhkl.utils import (
@@ -328,7 +332,10 @@ class VectorizedObjective:
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
         if self.kf_ki_dir_init.ndim == 2:
-            if self.kf_ki_dir_init.shape[0] != 3 and self.kf_ki_dir_init.shape[1] == 3:
+            if (
+                self.kf_ki_dir_init.shape[0] != 3
+                and self.kf_ki_dir_init.shape[1] == 3
+            ):
                 self.kf_ki_dir_init = self.kf_ki_dir_init.T
 
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
@@ -483,9 +490,13 @@ class VectorizedObjective:
             if goniometer_nominal_offsets is None:
                 self.gonio_nominal_offsets = jnp.zeros(self.num_gonio_axes)
             else:
-                self.gonio_nominal_offsets = jnp.array(goniometer_nominal_offsets)
+                self.gonio_nominal_offsets = jnp.array(
+                    goniometer_nominal_offsets
+                )
 
-            self.gonio_min = jnp.full(self.num_gonio_axes, -goniometer_bound_deg)
+            self.gonio_min = jnp.full(
+                self.num_gonio_axes, -goniometer_bound_deg
+            )
             self.gonio_max = jnp.full(self.num_gonio_axes, goniometer_bound_deg)
         else:
             self.gonio_axes = None
@@ -550,7 +561,9 @@ class VectorizedObjective:
         # Robustly determine search range from cell and observed resolution
         # inv(B @ B.T) = inv(G*) = G (Real space metric tensor)
         # sqrt(diag(G)) = [a, b, c]
-        a_real, b_real, c_real = jnp.sqrt(jnp.diag(jnp.linalg.inv(self.B @ self.B.T)))
+        a_real, b_real, c_real = jnp.sqrt(
+            jnp.diag(jnp.linalg.inv(self.B @ self.B.T))
+        )
 
         # Calculate resolution of observed peaks
         q_obs_max = jnp.max(jnp.linalg.norm(self.kf_ki_dir_init, axis=0))
@@ -579,7 +592,9 @@ class VectorizedObjective:
         r_h = jnp.arange(-h_max, h_max + 1)
         r_k = jnp.arange(-k_max, k_max + 1)
         r_l = jnp.arange(-l_max, l_max + 1)
-        miller_h, miller_k, miller_l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")
+        miller_h, miller_k, miller_l = jnp.meshgrid(
+            r_h, r_k, r_l, indexing="ij"
+        )
         hkl_pool = jnp.stack(
             [miller_h.flatten(), miller_k.flatten(), miller_l.flatten()], axis=0
         )
@@ -590,9 +605,7 @@ class VectorizedObjective:
         self.mask_range_h = h_max
         self.mask_range_k = k_max
         self.mask_range_l = l_max
-        self.mask_range = (
-            h_max  # Alias for backward compatibility with cubic-assumption tests
-        )
+        self.mask_range = h_max  # Alias for backward compatibility with cubic-assumption tests
 
         idx_h = hkl_pool[0] + h_max
         idx_k = hkl_pool[1] + k_max
@@ -633,7 +646,9 @@ class VectorizedObjective:
             sample_delta = _forward_map_param(s_norm, self.sample_bound)
             sample_total = self.sample_nominal + sample_delta
         else:
-            sample_total = self.sample_nominal[None, :].repeat(x.shape[0], axis=0)
+            sample_total = self.sample_nominal[None, :].repeat(
+                x.shape[0], axis=0
+            )
 
         if self.refine_beam:
             bound_rad = jnp.deg2rad(self.beam_bound_deg)
@@ -655,7 +670,9 @@ class VectorizedObjective:
                 )
                 idx += self.num_active_gonio
 
-            offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
+            offsets_delta = _forward_map_param(
+                gonio_norm, self.goniometer_bound_deg
+            )
             offsets_total = self.gonio_nominal_offsets + offsets_delta
             R = self.compute_goniometer_R_jax(
                 gonio_norm
@@ -696,7 +713,12 @@ class VectorizedObjective:
             a, b, c = p_free[:, 0], p_free[:, 1], p_free[:, 2]
             return jnp.stack([a, b, c, deg90, deg90, deg90], axis=1)
         if self.lattice_system == "Monoclinic":
-            a, b, c, beta = p_free[:, 0], p_free[:, 1], p_free[:, 2], p_free[:, 3]
+            a, b, c, beta = (
+                p_free[:, 0],
+                p_free[:, 1],
+                p_free[:, 2],
+                p_free[:, 3],
+            )
             return jnp.stack([a, b, c, deg90, beta, deg90], axis=1)
         return p_free
 
@@ -704,7 +726,11 @@ class VectorizedObjective:
         p = self.reconstruct_cell_params(cell_params_norm)
         a, b, c = p[:, 0], p[:, 1], p[:, 2]
         deg2rad = jnp.pi / 180.0
-        alpha, beta, gamma = p[:, 3] * deg2rad, p[:, 4] * deg2rad, p[:, 5] * deg2rad
+        alpha, beta, gamma = (
+            p[:, 3] * deg2rad,
+            p[:, 4] * deg2rad,
+            p[:, 5] * deg2rad,
+        )
         g11, g22, g33 = a**2, b**2, c**2
         g12, g13, g23 = (
             a * b * jnp.cos(gamma),
@@ -754,7 +780,11 @@ class VectorizedObjective:
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
-        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
+        k_sq = (
+            k_sq_override
+            if k_sq_override is not None
+            else self.k_sq_init[None, :]
+        )
         k_norm = jnp.sqrt(k_sq)
 
         initial_carry = (
@@ -774,7 +804,9 @@ class VectorizedObjective:
             q_int = jnp.einsum("sij,sjm->sim", ub_mat, hkl_int)
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+            lambda_opt = jnp.clip(
+                k_sq / safe_dot, self.wl_min_val, self.wl_max_val
+            )
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int) ** 2, axis=1)
             safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
@@ -816,7 +848,9 @@ class VectorizedObjective:
             new_sum = curr_sum + prob
             update_mask = prob > curr_max
             new_max = jnp.where(update_mask, prob, curr_max)
-            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
+            new_best_hkl = jnp.where(
+                update_mask[:, None, :], hkl_int, curr_best_hkl
+            )
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
@@ -862,7 +896,9 @@ class VectorizedObjective:
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             k_sq = self.k_sq_init[None, :]
-            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+            lambda_opt = jnp.clip(
+                k_sq / safe_dot, self.wl_min_val, self.wl_max_val
+            )
 
             # Recalculate HKL float at the optimal wavelength for the cosine kernel
             hkl_float = v / lambda_opt[:, None, :]
@@ -872,14 +908,20 @@ class VectorizedObjective:
             # (sigma_h approx tolerance_rad * h)
             hkl_sq = jnp.where(jnp.abs(hkl_float) < 1e-3, 1e-6, hkl_float**2)
 
-            kappa_scaled = 1.0 / (hkl_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2)
+            kappa_scaled = 1.0 / (
+                hkl_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
+            )
             cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
             log_p_narrow = jnp.sum(kappa_scaled * cos_diff, axis=1)
 
-            kappa_wide_scaled = 1.0 / (hkl_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2)
+            kappa_wide_scaled = 1.0 / (
+                hkl_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
+            )
             log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff, axis=1)
             # Combine via LogSumExp
-            log_prob = jax.nn.logsumexp(jnp.stack([log_p_narrow, log_p_wide]), axis=0)
+            log_prob = jax.nn.logsumexp(
+                jnp.stack([log_p_narrow, log_p_wide]), axis=0
+            )
 
             # --- VALIDATION LOGIC ---
             # Resolution Filter
@@ -903,11 +945,15 @@ class VectorizedObjective:
 
             # Update carry
             # curr_sum will now store the logsumexp of valid candidates
-            new_sum = jax.nn.logsumexp(jnp.stack([curr_sum, log_prob_masked]), axis=0)
+            new_sum = jax.nn.logsumexp(
+                jnp.stack([curr_sum, log_prob_masked]), axis=0
+            )
 
             update_mask = log_prob_masked > curr_max
             new_max = jnp.where(update_mask, log_prob_masked, curr_max)
-            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
+            new_best_hkl = jnp.where(
+                update_mask[:, None, :], hkl_int, curr_best_hkl
+            )
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
@@ -916,7 +962,12 @@ class VectorizedObjective:
         )
         _, log_prob_max, best_hkl, best_lamb = final_carry
         score = -jnp.sum(self.weights * jnp.exp(log_prob_max), axis=1)
-        return score, jnp.exp(log_prob_max), best_hkl.transpose((0, 2, 1)), best_lamb
+        return (
+            score,
+            jnp.exp(log_prob_max),
+            best_hkl.transpose((0, 2, 1)),
+            best_lamb,
+        )
 
     def indexer_dynamic_binary_jax(
         self,
@@ -926,12 +977,18 @@ class VectorizedObjective:
         tolerance_rad=0.002,
         window_batch_size=32,
     ):
-        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
+        k_sq = (
+            k_sq_override
+            if k_sq_override is not None
+            else self.k_sq_init[None, :]
+        )
         k_norm = jnp.sqrt(k_sq)
         ub_inv = jnp.linalg.inv(ub_mat)
         hkl_float = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
         hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float)
-        phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :])
+        phi_obs = jnp.arctan2(
+            hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :]
+        )
         idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs)
         half_win = self.search_window_size // 2
         raw_offsets = jnp.arange(-half_win, half_win + 1)
@@ -962,7 +1019,9 @@ class VectorizedObjective:
                 lambda_opt <= self.wl_max_val
             )
             q_sq = jnp.sum(q_pred**2, axis=3)
-            d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9)  # crystallographic convention
+            d_spacings = 1.0 / jnp.sqrt(
+                q_sq + 1e-9
+            )  # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
             miller_h, miller_k, miller_l = (
                 hkl_cands[..., 0],
@@ -971,7 +1030,9 @@ class VectorizedObjective:
             )
             valid_sym = self.is_allowed_jax(miller_h, miller_k, miller_l)
             valid_mask = valid_lamb & valid_res & valid_sym
-            q_obs_opt = k_obs / jnp.where(lambda_opt == 0, 1.0, lambda_opt)[..., None]
+            q_obs_opt = (
+                k_obs / jnp.where(lambda_opt == 0, 1.0, lambda_opt)[..., None]
+            )
             diff = q_obs_opt - q_pred
             dist_sq = jnp.sum(diff**2, axis=3)
             dist_sq_masked = jnp.where(valid_mask, dist_sq, 1e9)
@@ -984,11 +1045,15 @@ class VectorizedObjective:
                 lambda_opt, batch_best_local_idx[..., None], axis=2
             ).squeeze(axis=2)
             improve_mask = batch_min_dist < curr_min_dist
-            new_min_dist = jnp.where(improve_mask, batch_min_dist, curr_min_dist)
+            new_min_dist = jnp.where(
+                improve_mask, batch_min_dist, curr_min_dist
+            )
             new_best_hkl = jnp.where(
                 improve_mask[..., None], batch_best_hkl, curr_best_hkl
             )
-            new_best_lamb = jnp.where(improve_mask, batch_best_lamb, curr_best_lamb)
+            new_best_lamb = jnp.where(
+                improve_mask, batch_best_lamb, curr_best_lamb
+            )
             return (new_min_dist, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
@@ -1029,7 +1094,9 @@ class VectorizedObjective:
         r_obs_proj_unit = jnp.einsum("sji,sjn->sin", ub_mat, r_obs_unit)
 
         k_sq_obs = (
-            k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
+            k_sq_override
+            if k_sq_override is not None
+            else self.k_sq_init[None, :]
         )
 
         batch_size, _, n_obs = kf_ki_sample.shape
@@ -1091,11 +1158,15 @@ class VectorizedObjective:
             )
 
             global_idxs = jnp.arange(chunk_size) + idx_start
-            combined_vals = jnp.concatenate([curr_vals, selection_metric], axis=2)
+            combined_vals = jnp.concatenate(
+                [curr_vals, selection_metric], axis=2
+            )
             combined_idxs = jnp.concatenate(
                 [
                     curr_idxs,
-                    jnp.tile(global_idxs[None, None, :], (batch_size, n_obs, 1)),
+                    jnp.tile(
+                        global_idxs[None, None, :], (batch_size, n_obs, 1)
+                    ),
                 ],
                 axis=2,
             )
@@ -1134,9 +1205,9 @@ class VectorizedObjective:
         # Soft Lambda Penalty (Gaussian penalty for being outside bandwidth)
         # Using a broader width (10% of bandwidth) to prevent numerical drowning of angular signal
         bw_width = self.wl_max_val - self.wl_min_val
-        dist_wl = jnp.maximum(0.0, self.wl_min_val - lambda_sparse) + jnp.maximum(
-            0.0, lambda_sparse - self.wl_max_val
-        )
+        dist_wl = jnp.maximum(
+            0.0, self.wl_min_val - lambda_sparse
+        ) + jnp.maximum(0.0, lambda_sparse - self.wl_max_val)
         # Scale: lambda penalty should be comparable to angular penalty (order of 1-10)
         # dist_wl of 0.1A should not give 1e5 cost.
         log_P_wl = -0.5 * (dist_wl / (0.1 * bw_width + 1e-9)) ** 2
@@ -1242,8 +1313,11 @@ class VectorizedObjective:
         elif self.centering == "C":
             # h+k is even
             allowed_out = (h + k) % 2 == 0
+        elif self.centering == "R":
+            # -h+k+l is divisible by 3
+            allowed_out = (-h + k + miller_l) % 3 == 0
         else:
-            # P or R: Assume allowed unless we have a specific reason to reject
+            # P or other: Assume allowed unless we have a specific reason to reject
             allowed_out = True
 
         return jnp.where(
@@ -1352,7 +1426,10 @@ class VectorizedObjective:
                 top_k=self.top_k,
             )
         return self.indexer_dynamic_soft_jax(
-            UB, kf_ki_vec, k_sq_override=k_sq_dyn, tolerance_rad=self.tolerance_rad
+            UB,
+            kf_ki_vec,
+            k_sq_override=k_sq_dyn,
+            tolerance_rad=self.tolerance_rad,
         )
 
     @partial(jax.jit, static_argnames="self")
@@ -1432,7 +1509,8 @@ class FindUB:
             names = data["goniometer/names"]
             # Handle list of bytes vs list of strings
             self.goniometer_names = [
-                n.decode("utf-8") if isinstance(n, bytes) else str(n) for n in names
+                n.decode("utf-8") if isinstance(n, bytes) else str(n)
+                for n in names
             ]
 
         if "beam/ki_vec" in data:
@@ -1518,7 +1596,9 @@ class FindUB:
             b_alpha = f["sample/alpha"][()]
             b_beta = f["sample/beta"][()]
             b_gamma = f["sample/gamma"][()]
-            b_offset = f["sample/offset"][()] if "sample/offset" in f else np.zeros(3)
+            b_offset = (
+                f["sample/offset"][()] if "sample/offset" in f else np.zeros(3)
+            )
             b_ki = (
                 f["beam/ki_vec"][()]
                 if "beam/ki_vec" in f
@@ -1578,9 +1658,14 @@ class FindUB:
 
         if refine_goniometer:
             active_mask = []
-            if refine_goniometer_axes is not None and self.goniometer_names is not None:
+            if (
+                refine_goniometer_axes is not None
+                and self.goniometer_names is not None
+            ):
                 for name in self.goniometer_names:
-                    is_active = any(req in name for req in refine_goniometer_axes)
+                    is_active = any(
+                        req in name for req in refine_goniometer_axes
+                    )
                     active_mask.append(is_active)
             else:
                 active_mask = [True] * len(self.goniometer_axes)
@@ -1631,7 +1716,9 @@ class FindUB:
         if goniometer_names is None and self.goniometer_names is not None:
             goniometer_names = self.goniometer_names
 
-        kf_ki_dir_lab = scattering_vector_from_angles(self.two_theta, self.az_phi)
+        kf_ki_dir_lab = scattering_vector_from_angles(
+            self.two_theta, self.az_phi
+        )
         num_obs = kf_ki_dir_lab.shape[1]
 
         # --- Gonio Mapping Fix ---
@@ -1641,18 +1728,29 @@ class FindUB:
         if self.run_indices is not None:
             max_run_id = int(np.max(self.run_indices))
             num_runs_range = max_run_id + 1
-            unique_runs, first_indices = np.unique(self.run_indices, return_index=True)
+            unique_runs, first_indices = np.unique(
+                self.run_indices, return_index=True
+            )
 
-            if goniometer_angles is not None and goniometer_angles.shape[1] == num_obs:
+            if (
+                goniometer_angles is not None
+                and goniometer_angles.shape[1] == num_obs
+            ):
                 # We have per-peak angles. We need to reduce them to per-run for refinement.
                 # Use first appearance per run.
-                new_angles = np.zeros((goniometer_angles.shape[0], num_runs_range))
+                new_angles = np.zeros(
+                    (goniometer_angles.shape[0], num_runs_range)
+                )
                 # Fill with defaults (first available) then overwrite with unique runs
                 new_angles[:] = goniometer_angles[:, first_indices[0:1]]
                 new_angles[:, unique_runs] = goniometer_angles[:, first_indices]
                 goniometer_angles = new_angles
 
-            if self.R is not None and self.R.ndim == 3 and self.R.shape[0] == num_obs:
+            if (
+                self.R is not None
+                and self.R.ndim == 3
+                and self.R.shape[0] == num_obs
+            ):
                 # We have per-peak rotations. Reduce to per-run.
                 new_R = np.zeros((num_runs_range, 3, 3))
                 new_R[:] = self.R[first_indices[0:1]]
@@ -1670,9 +1768,13 @@ class FindUB:
                 )
             else:
                 mask = []
-                print(f"Refining specific goniometer axes: {refine_goniometer_axes}")
+                print(
+                    f"Refining specific goniometer axes: {refine_goniometer_axes}"
+                )
                 for name in self.goniometer_names:
-                    should_refine = any(req in name for req in refine_goniometer_axes)
+                    should_refine = any(
+                        req in name for req in refine_goniometer_axes
+                    )
                     mask.append(should_refine)
                 goniometer_refine_mask = np.array(mask, dtype=bool)
                 print(
@@ -1795,8 +1897,12 @@ class FindUB:
                 start_sol_processed = start_sol
 
         sample_solution = jnp.zeros(num_dims)
-        target_sigma = sigma_init or (0.01 if start_sol_processed is not None else 3.14)
-        print(f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}")
+        target_sigma = sigma_init or (
+            0.01 if start_sol_processed is not None else 3.14
+        )
+        print(
+            f"Strategy: {strategy_name.upper()} | Target Sigma: {target_sigma}"
+        )
 
         if strategy_name.lower() == "de":
             strategy = DifferentialEvolution(
@@ -1804,10 +1910,14 @@ class FindUB:
             )
             strategy_type = "population_based"
         elif strategy_name.lower() == "pso":
-            strategy = PSO(solution=sample_solution, population_size=population_size)
+            strategy = PSO(
+                solution=sample_solution, population_size=population_size
+            )
             strategy_type = "population_based"
         elif strategy_name.lower() == "cma_es":
-            strategy = CMA_ES(solution=sample_solution, population_size=population_size)
+            strategy = CMA_ES(
+                solution=sample_solution, population_size=population_size
+            )
             strategy_type = "distribution_based"
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
@@ -1825,7 +1935,9 @@ class FindUB:
                     )
                     p_orient = start_sol[:3] + noise[:, :3]
                     p_rest = jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)
-                    population_init = jnp.concatenate([p_orient, p_rest], axis=1)
+                    population_init = jnp.concatenate(
+                        [p_orient, p_rest], axis=1
+                    )
                     fitness_init = objective(population_init)
                     state = strategy.init(
                         rng_init, population_init, fitness_init, es_params
@@ -1835,13 +1947,16 @@ class FindUB:
                     state = state.replace(std=target_sigma)
             elif strategy_type == "population_based":
                 pop_orient = (
-                    jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+                    jax.random.normal(rng_pop, (population_size, 3))
+                    * target_sigma
                 )
                 rng_rest, _ = jax.random.split(rng_pop)
                 pop_rest = jax.random.uniform(
                     rng_rest, (population_size, max(0, num_dims - 3))
                 )
-                population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
+                population_init = jnp.concatenate(
+                    [pop_orient, pop_rest], axis=1
+                )
                 fitness_init = objective(population_init)
                 state = strategy.init(
                     rng_init, population_init, fitness_init, es_params
@@ -1878,7 +1993,9 @@ class FindUB:
         step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0)))
 
         exec_batch_size = batch_size if batch_size is not None else n_runs
-        print(f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---")
+        print(
+            f"\n--- Starting {n_runs} Runs (Batch Size: {exec_batch_size}) ---"
+        )
 
         seeds = jnp.arange(seed, seed + n_runs)
         all_keys = jax.vmap(jax.random.PRNGKey)(seeds)
@@ -1970,7 +2087,9 @@ class FindUB:
         if refine_lattice:
             print("--- Refined Lattice Parameters ---")
             idx_lat = 3
-            cell_norm = jnp.array(self.x[None, idx_lat : idx_lat + num_lattice_params])
+            cell_norm = jnp.array(
+                self.x[None, idx_lat : idx_lat + num_lattice_params]
+            )
             p_full = np.array(objective.reconstruct_cell_params(cell_norm)[0])
             print(f"a: {p_full[0]:.4f}, b: {p_full[1]:.4f}, c: {p_full[2]:.4f}")
             print(

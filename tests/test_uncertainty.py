@@ -61,7 +61,7 @@ peak_integrator = PeakIntegrator(
     min_peak_snr=1.0,
 )
 
-result, hulls = peak_integrator.integrate_peaks(
+result, hulls, _ = peak_integrator.integrate_peaks(
     0, counts[0], np.array([[rate_x, rate_y]]), return_hulls=True, return_headers=True
 )
 plt.imshow(counts[0], vmin=v_min, vmax=v_max)
@@ -83,7 +83,7 @@ peak_integrator.integrate_peaks(
 integrated_i = []
 integrated_sigma = []
 for intensity in counts:
-    result = peak_integrator.integrate_peaks(0, intensity, np.array([[rate_x, rate_y]]))
+    result, _ = peak_integrator.integrate_peaks(0, intensity, np.array([[rate_x, rate_y]]))
     integrated_i.append(result[0][3])
     integrated_sigma.append(result[0][5])
 
@@ -102,7 +102,7 @@ print("Mean estimated std", np.mean(integrated_sigma))
 new_integrated_i = []
 new_integrated_sigma = []
 for intensity in counts:
-    result = peak_integrator.integrate_peaks(
+    result, _ = peak_integrator.integrate_peaks(
         0, intensity, np.array([[rate_x, rate_y]]), integration_method="gaussian_fit"
     )
     if result[0][3] is not None:

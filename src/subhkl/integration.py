@@ -187,7 +187,7 @@ def _process_single_image(
         integrator.region_grower.min_intensity = mean + n_sigma * std
 
     # 4. Integrate
-    int_result, hulls = integrator.integrate_peaks(
+    int_result, hulls, refined_centers = integrator.integrate_peaks(
         physical_bank, image, centers, return_hulls=True
     )
 
@@ -201,7 +201,11 @@ def _process_single_image(
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
 
-    # 5. Visualization
+    # 5. Refine centers (DEPRECATED: Keep predicted centers for finder)
+    # i, j = refined_centers[keep, 0], refined_centers[keep, 1]
+    i, j = i[keep], j[keep]
+
+    # 6. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
 
@@ -237,7 +241,6 @@ def _process_single_image(
 
     # 6. Gather Results
     if sum(keep) > 0:
-        i, j = i[keep], j[keep]
         intensities = bank_intensity[keep]
         sigmas = bank_sigma[keep]
         tt, az = det.pixel_to_angles(i, j)
@@ -344,6 +347,7 @@ def _predict_single_bank(
 
 def _integrate_single_bank(
     bank_id,
+    physical_bank,
     image,
     peaks,
     det_config,
@@ -364,6 +368,7 @@ def _integrate_single_bank(
         found_peaks_xyz,
         found_peaks_bank,
         found_peaks_run,
+        run_id,
         RUB,
         current_angles_val,
         current_R_val,
@@ -387,11 +392,11 @@ def _integrate_single_bank(
 
         # Priority 1: Filter by run index (for merged multi-run files)
         if found_peaks_run is not None:
-            mask_run = found_peaks_run == bank_id
+            mask_run = found_peaks_run == run_id
             f_xyz_valid = found_peaks_xyz[mask_run]
         # Priority 2: Filter by physical bank ID
         elif found_peaks_bank is not None:
-            mask_bank = found_peaks_bank == bank_id
+            mask_bank = found_peaks_bank == physical_bank
             f_xyz_valid = found_peaks_xyz[mask_bank]
         # Priority 3: Spatial proximity (for single files)
         else:
@@ -491,7 +496,7 @@ def _integrate_single_bank(
     bank_wl = bank_wl[valid_indices]
     lab_coords = lab_coords[valid_indices]
 
-    int_result, hulls = integrator.integrate_peaks(
+    int_result, hulls, refined_centers = integrator.integrate_peaks(
         bank_id,
         image,
         centers,
@@ -507,6 +512,20 @@ def _integrate_single_bank(
         has_hull = hulls[idx][1] is not None
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
+
+    # Re-calculate angles and lab coordinates using refined centers
+    # Only for kept peaks
+    if not np.any(keep):
+        return None
+
+    kept_centers = refined_centers[keep]
+    # Re-calculate angles and lab coordinates
+    bank_tt, bank_az = det.pixel_to_angles(
+        kept_centers[:, 0], kept_centers[:, 1], sample_offset=s_lab
+    )
+    lab_coords = det.pixel_to_lab(kept_centers[:, 0], kept_centers[:, 1])
+    if lab_coords.ndim == 1:
+        lab_coords = lab_coords[np.newaxis, :]
 
     # --- VISUALIZATION ---
     # UPDATED: Use viz_label for filename
@@ -585,10 +604,10 @@ def _integrate_single_bank(
         "l": bank_l[keep],
         "intensity": bank_intensity[keep],
         "sigma": bank_sigma[keep],
-        "tt": bank_tt[keep],
-        "az": bank_az[keep],
+        "tt": bank_tt,
+        "az": bank_az,
         "wavelength": bank_wl[keep],
-        "xyz": lab_coords[keep].tolist(),
+        "xyz": lab_coords.tolist(),
         "bank": [bank_id] * sum(keep),
         "R": [current_R_val] * sum(keep) if current_R_val is not None else [],
         "angles": [current_angles_val] * sum(keep)
@@ -1180,6 +1199,7 @@ class Peaks:
                 found_peaks_xyz,
                 found_peaks_bank,
                 found_peaks_run,
+                run_id,
                 current_rub,
                 current_angles_val,
                 current_R_val,
@@ -1192,6 +1212,7 @@ class Peaks:
             tasks.append(
                 (
                     bank,
+                    physical_bank,
                     self.ims[bank],
                     peaks,
                     det_config,
