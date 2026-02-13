@@ -34,9 +34,9 @@ INTEGRATOR_PARAMS = {
 # Explicitly define all options to avoid typer OptionInfo errors
 INDEXER_PARAMS = {
     "strategy_name": "DE",
-    "n_runs": 2,
+    "n_runs": 4,
     "population_size": 1000,
-    "gens": 500,
+    "gens": 1000,
     "seed": 12345,
     "sigma_init": None,
     "tolerance_deg": 0.5,
