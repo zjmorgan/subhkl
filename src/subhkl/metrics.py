@@ -115,31 +115,13 @@ def compute_metrics(
 
         # Robust Run Index Resolution for Metrics
         def resolve_indices(f_handle):
-            idx_run = (
-                f_handle["peaks/run_index"][()]
-                if "peaks/run_index" in f_handle
-                else None
-            )
-            idx_img = (
-                f_handle["peaks/image_index"][()]
-                if "peaks/image_index" in f_handle
-                else None
-            )
-            idx_bank = f_handle["bank"][()] if "bank" in f_handle else None
-
-            if R_file is not None and R_file.ndim == 3:
-                num_rot = R_file.shape[0]
-                if idx_run is not None and int(np.max(idx_run)) + 1 == num_rot:
-                    return idx_run
-                if idx_img is not None and int(np.max(idx_img)) + 1 == num_rot:
-                    return idx_img
-                if idx_bank is not None and int(np.max(idx_bank)) + 1 == num_rot:
-                    return idx_bank
-            return (
-                idx_run
-                if idx_run is not None
-                else (idx_img if idx_img is not None else idx_bank)
-            )
+            if "peaks/run_index" in f_handle:
+                return f_handle["peaks/run_index"][()]
+            if "peaks/image_index" in f_handle:
+                return f_handle["peaks/image_index"][()]
+            if "bank" in f_handle:
+                return f_handle["bank"][()]
+            return None
 
         if found_peaks_file is not None:
             if instrument is None:
