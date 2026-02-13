@@ -56,9 +56,9 @@ INTEGRATOR_PARAMS = {
 # to avoid OptionInfo type errors when calling functions directly
 INDEXER_DEFAULTS = {
     "strategy_name": "DE",
-    "n_runs": 1,
+    "n_runs": 2,
     "population_size": 1000,
-    "gens": 200,
+    "gens": 500,
     "seed": 12345,
     "sigma_init": None,
     "tolerance_deg": 0.5,

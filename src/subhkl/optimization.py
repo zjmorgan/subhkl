@@ -843,17 +843,15 @@ class VectorizedObjective:
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int) ** 2, axis=1)
 
-            # Use pinned lambda to prevent the optimizer from enlarging the
-            # tolerance artificially by changing lattice parameters.
             effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
-                k_norm / self.safe_lamb_pinned
+                k_norm / lambda_opt
             )
             # Robust Multi-Scale Kernel
             # 1. Narrow (High precision)
             log_p_narrow = -dist_sq / (2 * effective_sigma**2 + 1e-9)
 
             # 2. Wide (Capture range: 5 degrees)
-            sigma_wide = jnp.deg2rad(5.0) * (k_norm / self.safe_lamb_pinned)
+            sigma_wide = jnp.deg2rad(5.0) * (k_norm / lambda_opt)
             log_p_wide = -dist_sq / (2 * sigma_wide**2 + 1e-9)
 
             # Combine via LogSumExp with 1% weight on wide kernel
@@ -941,9 +939,7 @@ class VectorizedObjective:
             hkl_mag_sq = jnp.sum(hkl_float**2, axis=1, keepdims=True)
             hkl_mag_sq = jnp.maximum(hkl_mag_sq, 1e-6)
 
-            # Use pinned HKL magnitude to prevent the optimizer from 'cheating' by
-            # enlarging the tolerance through lattice parameter changes.
-            hkl_mag_sq_safe = self.hkl_mag_sq_pinned
+            hkl_mag_sq_safe = jnp.maximum(hkl_mag_sq, 1e-6)
 
             kappa_scaled = 1.0 / (
                 hkl_mag_sq_safe * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
@@ -1081,9 +1077,9 @@ class VectorizedObjective:
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
 
-        # Use pinned lambda to prevent lattice parameter bias
+        # Use dynamic lambda for accurate physical tolerance scaling
         effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
-            k_norm / self.safe_lamb_pinned
+            k_norm / best_lamb
         )
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
         score = -jnp.sum(self.weights * probs, axis=1)
@@ -2094,15 +2090,43 @@ class FindUB:
         best_overall_fitness = all_fitness[best_idx]
         best_overall_member = all_solutions[best_idx]
 
+        # --- Local Refinement (BFGS) ---
+        # Polishing the best member using JAX gradients for sub-arcsec precision
+        print("Polishing solution with BFGS refinement...")
+
+        # Use a small subset of generations for JAX JIT warm-up if needed,
+        # but here we can just use scipy.optimize
+        from scipy.optimize import minimize as scipy_minimize
+
+        def ref_func(x_flat):
+            # Objective returns a scalar (minimized)
+            return float(objective(x_flat[None, :])[0])
+
+        def ref_grad(x_flat):
+            # Use jax.grad for the objective
+            grad_fn = jax.grad(lambda x: objective(x[None, :])[0])
+            return np.array(grad_fn(x_flat))
+
+        res_ref = scipy_minimize(
+            ref_func,
+            np.array(best_overall_member),
+            jac=ref_grad,
+            method="L-BFGS-B",
+            bounds=[(0.0, 1.0) if i >= 3 else (None, None) for i in range(num_dims)],
+            options={"maxiter": 50},
+        )
+
+        if res_ref.success:
+            print(f"Refinement successful. Final cost: {res_ref.fun:.4f}")
+            best_overall_member = res_ref.x
+        else:
+            print(f"Refinement did not converge: {res_ref.message}")
+
         print("\n--- Optimization Complete ---")
         if loss_method == "sinkhorn":
-            print(
-                f"Best overall cost: {best_overall_fitness:.4f} (from Run {best_idx + 1})"
-            )
+            print(f"Best overall cost: {best_overall_fitness:.4f}")
         else:
-            print(
-                f"Best overall peaks: {-best_overall_fitness:.2f} (from Run {best_idx + 1})"
-            )
+            print(f"Best overall peaks: {-best_overall_fitness:.2f}")
 
         self.x = np.array(best_overall_member)
 
