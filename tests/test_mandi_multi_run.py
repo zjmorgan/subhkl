@@ -130,7 +130,7 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
 
         assert indexed_count > 10
         assert indexed_ratio >= 0.75
-        assert ang_err < 0.3
+        assert ang_err < 0.2
     
     return indexed_h5
 
