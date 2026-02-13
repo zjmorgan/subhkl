@@ -65,7 +65,8 @@ python -m subhkl.io.parser indexer --bootstrap "$OUT_DIR/stage1.h5" "$OUT_DIR/fi
     --wavelength-min $WAVEL_MIN --wavelength-max $WAVEL_MAX \
     --n-runs=100 --popsize=100 --gens=250 --strategy=de \
     --tolerance-deg=0.1 --refine-lattice --lattice-bound-frac 0.05 \
-    --loss-method gaussian --hkl-search-range 35 --batch-size=100
+    --refine-goniometer --refine-goniometer-axes omega,chi --goniometer-bound-deg 5 \
+    --loss-method gaussian --hkl-search-range 35 --batch-size=100 \
 
 python -m subhkl.io.parser metrics "$OUT_DIR/indexer.h5"
 
