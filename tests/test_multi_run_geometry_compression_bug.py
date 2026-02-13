@@ -22,9 +22,7 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     thetas = np.deg2rad([0, 1, 10, 11])
     R_stack = []
     for t in thetas:
-        R = np.array(
-            [[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]]
-        )
+        R = np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
         R_stack.append(R)
     R_stack = np.array(R_stack)
 
@@ -75,9 +73,7 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     # R_expanded should be per-peak for the indexer to use it
     R_per_peak = []
     for t in thetas_expanded:
-        R = np.array(
-            [[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]]
-        )
+        R = np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
         R_per_peak.append(R)
     R_per_peak = np.array(R_per_peak)
 

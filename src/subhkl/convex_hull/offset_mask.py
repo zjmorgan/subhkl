@@ -41,24 +41,14 @@ class OffsetMask:
             return OffsetMask(np.zeros((0, 0), dtype=bool), (0, 0))
 
         my_i = (
-            slice(
-                result_min[0] - self.offset[0], result_max[0] - self.offset[0]
-            ),
-            slice(
-                result_min[1] - self.offset[1], result_max[1] - self.offset[1]
-            ),
+            slice(result_min[0] - self.offset[0], result_max[0] - self.offset[0]),
+            slice(result_min[1] - self.offset[1], result_max[1] - self.offset[1]),
         )
         other_i = (
-            slice(
-                result_min[0] - other.offset[0], result_max[0] - other.offset[0]
-            ),
-            slice(
-                result_min[1] - other.offset[1], result_max[1] - other.offset[1]
-            ),
+            slice(result_min[0] - other.offset[0], result_max[0] - other.offset[0]),
+            slice(result_min[1] - other.offset[1], result_max[1] - other.offset[1]),
         )
-        result_mask = (
-            self.mask[my_i[0], my_i[1]] & other.mask[other_i[0], other_i[1]]
-        )
+        result_mask = self.mask[my_i[0], my_i[1]] & other.mask[other_i[0], other_i[1]]
 
         return OffsetMask(result_mask, result_min)
 
@@ -83,12 +73,8 @@ class OffsetMask:
 
         other_offset_rel = other.offset - result_min
         other_i = (
-            slice(
-                other_offset_rel[0], other_offset_rel[0] + other.mask.shape[0]
-            ),
-            slice(
-                other_offset_rel[1], other_offset_rel[1] + other.mask.shape[1]
-            ),
+            slice(other_offset_rel[0], other_offset_rel[0] + other.mask.shape[0]),
+            slice(other_offset_rel[1], other_offset_rel[1] + other.mask.shape[1]),
         )
         result_mask[other_i[0], other_i[1]] &= other.mask
 

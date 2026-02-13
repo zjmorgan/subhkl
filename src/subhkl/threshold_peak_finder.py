@@ -70,9 +70,7 @@ class ThresholdingPeakFinder:
         area = cv2.contourArea(contour)
         if area == 0:
             return float("inf")
-        diameter = np.max(
-            np.linalg.norm(contour[None, :, 0, :] - contour, axis=-1)
-        )
+        diameter = np.max(np.linalg.norm(contour[None, :, 0, :] - contour, axis=-1))
         return diameter * cv2.arcLength(contour, True) / area
 
     def split_contour(self, points):
@@ -123,17 +121,13 @@ class ThresholdingPeakFinder:
             mask = np.ones(im.shape, dtype=bool)
         else:
             mask = self.mask
-            assert mask.shape == im.shape, (
-                "Invalid size of mask for given image"
-            )
+            assert mask.shape == im.shape, "Invalid size of mask for given image"
 
         if self.show_steps:
             plt.imshow(mask)
             plt.title("Mask")
             plt.show()
-            plt.imshow(
-                im * mask.astype(float), cmap="binary", norm=self.show_scale
-            )
+            plt.imshow(im * mask.astype(float), cmap="binary", norm=self.show_scale)
             plt.title("Masked image")
             plt.show()
             plt.savefig("masked_image.png")
@@ -142,9 +136,7 @@ class ThresholdingPeakFinder:
         big_sigma = 1.6 * self.blur_kernel_sigma
         k_size_desired = max(1, int(big_sigma * 3))
         k_size = 2 * (k_size_desired // 2) + 1
-        blur_small = cv2.GaussianBlur(
-            im, (k_size, k_size), self.blur_kernel_sigma
-        )
+        blur_small = cv2.GaussianBlur(im, (k_size, k_size), self.blur_kernel_sigma)
         blur_big = cv2.GaussianBlur(im, (k_size, k_size), big_sigma)
 
         # small - big ~ -Laplacian, so peaks occur at *large* values of im_dog
@@ -170,9 +162,7 @@ class ThresholdingPeakFinder:
             plt.show()
             plt.savefig("threshold.png")
 
-        open_kernel = (
-            _open_kernel3 if self.open_kernel_size == 3 else _open_kernel5
-        )
+        open_kernel = _open_kernel3 if self.open_kernel_size == 3 else _open_kernel5
         im_opened = cv2.morphologyEx(
             ((im_thresh > 0) * mask).astype(np.uint8),
             cv2.MORPH_OPEN,
@@ -181,9 +171,7 @@ class ThresholdingPeakFinder:
 
         if self.show_steps:
             fig, axes = plt.subplots(1, 2)
-            axes[0].imshow(
-                im_thresh * mask.astype(float), cmap="binary", vmax=1.0
-            )
+            axes[0].imshow(im_thresh * mask.astype(float), cmap="binary", vmax=1.0)
             axes[0].set_title("Noise-subtracted")
             axes[1].imshow(im_opened)
             axes[1].set_title("Opened")
@@ -196,9 +184,9 @@ class ThresholdingPeakFinder:
 
         if self.show_steps:
             if self.show_scale == "linear":
-                bg_im = (
-                    255 - (im - im.min()) / (im.max() - im.min()) * 255
-                ).astype(np.uint8)
+                bg_im = (255 - (im - im.min()) / (im.max() - im.min()) * 255).astype(
+                    np.uint8
+                )
             else:
                 log_im = np.maximum(0, np.log(im + 1e-5))
                 bg_im = (255 - (log_im / log_im.max()) * 255).astype(np.uint8)
@@ -245,9 +233,7 @@ class ThresholdingPeakFinder:
             contours = keep_contours + split_contours
 
             if self.show_steps:
-                im_contours = cv2.drawContours(
-                    bg_color, contours, -1, (0, 255, 0)
-                )
+                im_contours = cv2.drawContours(bg_color, contours, -1, (0, 255, 0))
                 plt.imshow(im_contours)
                 if len(contours) > 0:
                     contour_centers = np.stack(

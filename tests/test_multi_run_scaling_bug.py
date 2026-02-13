@@ -52,13 +52,9 @@ def test_init_sample_offset_rotation():
     expected_kf = expected_v / np.linalg.norm(expected_v)
 
     if not np.allclose(kf_init[:, 0], expected_kf):
-        print(
-            "BUG FOUND: VectorizedObjective.__init__ does not rotate sample_nominal!"
-        )
+        print("BUG FOUND: VectorizedObjective.__init__ does not rotate sample_nominal!")
     else:
-        print(
-            "SUCCESS: VectorizedObjective.__init__ correctly rotates sample_nominal"
-        )
+        print("SUCCESS: VectorizedObjective.__init__ correctly rotates sample_nominal")
 
 
 if __name__ == "__main__":

@@ -17,9 +17,7 @@ def test_missing_xyz_rotation_regression(tmp_path):
     thetas = np.deg2rad([90])
     R_stack = []
     for t in thetas:
-        R = np.array(
-            [[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]]
-        )
+        R = np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
         R_stack.append(R)
     R_stack = np.array(R_stack)
 

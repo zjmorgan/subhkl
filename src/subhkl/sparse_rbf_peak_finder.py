@@ -100,13 +100,9 @@ class SparseRBFPeakFinder:
         return jnp.sum(basis_stack, axis=0)
 
     @staticmethod
-    def _loss_fn(
-        params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple
-    ):
+    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple):
         H, W, min_s, max_s = bounds_tuple
-        params_phys = SparseRBFPeakFinder._to_physical(
-            params_flat, H, W, min_s, max_s
-        )
+        params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid)
 
         mse = 0.5 * jnp.sum((recon - target) ** 2)
@@ -147,9 +143,7 @@ class SparseRBFPeakFinder:
 
             def check_sigma(s):
                 kernel = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
-                corr = jax.scipy.signal.correlate2d(
-                    residual, kernel, mode="same"
-                )
+                corr = jax.scipy.signal.correlate2d(residual, kernel, mode="same")
                 flat_idx = jnp.argmax(jnp.abs(corr))
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_val = jnp.abs(corr[r_idx, c_idx])
@@ -195,18 +189,14 @@ class SparseRBFPeakFinder:
             params = run_opt(params)
             return (params, idx + 1), None
 
-        final_state, _ = lax.scan(
-            step_fn, init_state, None, length=max_peaks_local
-        )
+        final_state, _ = lax.scan(step_fn, init_state, None, length=max_peaks_local)
         final_params, _ = final_state
         return final_params
 
     # =========================================================================
     # KERNEL 2: PATCHY SOLVER w/ HALO
     # =========================================================================
-    @partial(
-        jit, static_argnames=["self", "Win_H", "Win_W", "Halo_P", "Refine_P"]
-    )
+    @partial(jit, static_argnames=["self", "Win_H", "Win_W", "Halo_P", "Refine_P"])
     def _solve_patchy_window(
         self, window_with_halo, seeds, Win_H, Win_W, Halo_P, Refine_P
     ):
@@ -350,9 +340,7 @@ class SparseRBFPeakFinder:
 
             else:
                 # RECURSIVE: PATCHY
-                print(
-                    f"  > Refining seeds on {total_wins_all} windows (w/ Halo)..."
-                )
+                print(f"  > Refining seeds on {total_wins_all} windows (w/ Halo)...")
                 M_S = self.max_seeds_per_window
                 P = self.refine_patch_size
                 HALO = P // 2 + 1
@@ -373,15 +361,11 @@ class SparseRBFPeakFinder:
 
                 solver = jit(
                     vmap(
-                        lambda w, s: self._solve_patchy_window(
-                            w, s, w_h, w_w, HALO, P
-                        )
+                        lambda w, s: self._solve_patchy_window(w, s, w_h, w_w, HALO, P)
                     )
                 )
 
-                with tqdm(
-                    total=total_wins_all, desc="Refinement", unit="win"
-                ) as pbar:
+                with tqdm(total=total_wins_all, desc="Refinement", unit="win") as pbar:
                     for i in range(0, total_wins_all, chunk_size):
                         chunk_coords = window_coords_arr[i : i + chunk_size]
 
@@ -396,12 +380,8 @@ class SparseRBFPeakFinder:
                             r_end = r + w_h
                             c_end = c + w_w
 
-                            in_r = (valid_cp[:, 1] >= r) & (
-                                valid_cp[:, 1] < r_end
-                            )
-                            in_c = (valid_cp[:, 2] >= c) & (
-                                valid_cp[:, 2] < c_end
-                            )
+                            in_r = (valid_cp[:, 1] >= r) & (valid_cp[:, 1] < r_end)
+                            in_c = (valid_cp[:, 2] >= c) & (valid_cp[:, 2] < c_end)
                             seeds = valid_cp[in_r & in_c]
 
                             if len(seeds) > 0:
@@ -411,9 +391,7 @@ class SparseRBFPeakFinder:
                                 if len(seeds_local) > M_S:
                                     order = np.argsort(seeds_local[:, 0])[::-1]
                                     seeds_local = seeds_local[order[:M_S]]
-                                chunk_seeds[k, : len(seeds_local), :] = (
-                                    seeds_local
-                                )
+                                chunk_seeds[k, : len(seeds_local), :] = seeds_local
 
                         c_win_halo = extract_chunk_with_halo(
                             chunk_coords[:, 0],

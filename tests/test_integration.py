@@ -40,16 +40,12 @@ def test_mesolite():
 
     extent = [-p / 2, p / 2, -h / 2, h / 2]
 
-    ax[0].imshow(
-        pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent
-    )
+    ax[0].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
 
     ax[0].minorticks_on()
     ax[0].set_aspect(1)
 
-    ax[1].imshow(
-        pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent
-    )
+    ax[1].imshow(pks.ims[0], norm="log", cmap="binary", origin="lower", extent=extent)
 
     ax[1].scatter(x, y, edgecolor="r", facecolor="none")
     ax[1].minorticks_on()
@@ -86,9 +82,7 @@ def test_mesolite():
     while tries < 5:
         num, hkl, lamda = opt.minimize(48)
 
-        ax[2].imshow(
-            pks.im, norm="log", cmap="binary", origin="lower", extent=extent
-        )
+        ax[2].imshow(pks.im, norm="log", cmap="binary", origin="lower", extent=extent)
 
         ax[2].plot(x, y, "r.")
         ax[2].minorticks_on()

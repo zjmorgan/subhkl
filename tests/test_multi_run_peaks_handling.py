@@ -18,12 +18,8 @@ def test_repro_multi_run_mapping_logic(tmp_path):
 
     with h5py.File(master_h5, "w") as f:
         f.create_dataset("images", data=np.zeros((4, 10, 10)))
-        f.create_dataset(
-            "bank_ids", data=np.array([1, 2, 1, 2])
-        )  # Banks 1,2 repeated
-        f.create_dataset(
-            "files", data=np.array([file1.encode(), file2.encode()])
-        )
+        f.create_dataset("bank_ids", data=np.array([1, 2, 1, 2]))  # Banks 1,2 repeated
+        f.create_dataset("files", data=np.array([file1.encode(), file2.encode()]))
         f.create_dataset("file_offsets", data=np.array([0, 2]))
         f.create_dataset("instrument/wavelength", data=[2.0, 4.0])
         # Correct axis spec: [x, y, z, sign]
@@ -38,9 +34,7 @@ def test_repro_multi_run_mapping_logic(tmp_path):
         f.create_dataset("peaks/bank", data=np.array([1, 2, 1, 2]))
         # CRITICAL: peaks/run_index in finder.h5 corresponds to the file index (0 or 1)
         f.create_dataset("peaks/run_index", data=np.array([0, 0, 1, 1]))
-        f.create_dataset(
-            "files", data=np.array([file1.encode(), file2.encode()])
-        )
+        f.create_dataset("files", data=np.array([file1.encode(), file2.encode()]))
         f.create_dataset("file_offsets", data=np.array([0, 2]))
 
     # 3. Setup Peaks object
@@ -53,9 +47,7 @@ def test_repro_multi_run_mapping_logic(tmp_path):
     # 4. Simulate the loop in Peaks.integrate
     # For bank index 2 (which is the first bank of the SECOND file)
     bank_idx = 2
-    physical_bank = peaks_handler.bank_mapping.get(
-        bank_idx, bank_idx
-    )  # Should be 1
+    physical_bank = peaks_handler.bank_mapping.get(bank_idx, bank_idx)  # Should be 1
     run_id = peaks_handler.get_run_id(bank_idx)  # Should be 1
 
     assert physical_bank == 1

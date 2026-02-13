@@ -15,9 +15,7 @@ def test_merger_run_offset_increment(tmp_path):
 
     with h5py.File(file1, "w") as f:
         f.create_dataset("peaks/intensity", data=np.array([10.0, 20.0]))
-        f.create_dataset(
-            "peaks/run_index", data=np.array([0, 0], dtype=np.int32)
-        )
+        f.create_dataset("peaks/run_index", data=np.array([0, 0], dtype=np.int32))
 
     with h5py.File(file2, "w") as f:
         f.create_dataset("peaks/intensity", data=np.array([30.0]))

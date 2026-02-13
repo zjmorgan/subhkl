@@ -32,9 +32,7 @@ def generate_synthetic_data(
         for ang, axis_spec in zip(rot_angles, gonio_axes):
             sign = axis_spec[3]
             axis = axis_spec[:3]
-            R_axis = Rotation.from_rotvec(
-                sign * np.deg2rad(ang) * axis
-            ).as_matrix()
+            R_axis = Rotation.from_rotvec(sign * np.deg2rad(ang) * axis).as_matrix()
             R_run = R_run @ R_axis
         if sample_offset_true is not None:
             s_lab = R_run @ sample_offset_true
@@ -98,9 +96,7 @@ def test_multi_run_indexing_refinement():
     U_true = Rotation.from_euler("xyz", [15, 25, 35], degrees=True).as_matrix()
     gonio_axes = np.array([[0, 1, 0, 1]])
     rotations = [[0.0], [45.0]]
-    data = generate_synthetic_data(
-        a, b, c, 90, 90, 90, U_true, rotations, gonio_axes
-    )
+    data = generate_synthetic_data(a, b, c, 90, 90, 90, U_true, rotations, gonio_axes)
     fu = FindUB(data=data)
     num_peaks, hkl_res, lam_res, U_res = fu.minimize(
         strategy_name="DE",
@@ -139,12 +135,8 @@ def test_clipping_logic_direct():
     idx_h = jnp.clip(h + r, 0, 2 * r).astype(jnp.int32)
     idx_k = jnp.clip(k + r, 0, 2 * r).astype(jnp.int32)
     idx_l = jnp.clip(l + r, 0, 2 * r).astype(jnp.int32)
-    in_bounds = (
-        (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-    )
-    is_allowed = jnp.where(
-        in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True
-    )
+    in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
+    is_allowed = jnp.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
     from subhkl.spacegroup import is_systematically_absent
 
     expected_absent = is_systematically_absent(h[:2], k[:2], l[:2], "P 1 21 1")
@@ -244,9 +236,7 @@ def test_predictor_multirun_sample_rotation():
     assert len(res1[0]) > 0, "Peak not on panel in Run 1"
     assert len(res2[0]) > 0, "Peak not on panel in Run 2"
     shift_col = np.abs(res1[1][0] - res2[1][0])
-    assert shift_col > 1.0, (
-        "Predictor ignored goniometer rotation for sample offset!"
-    )
+    assert shift_col > 1.0, "Predictor ignored goniometer rotation for sample offset!"
 
 
 def test_ghost_indexing_vulnerability():

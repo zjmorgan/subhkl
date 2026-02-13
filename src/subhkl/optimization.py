@@ -638,6 +638,34 @@ class VectorizedObjective:
         self.pool_phi_sorted = phis[sort_idx]
         self.pool_hkl_sorted = hkl_pool[:, sort_idx]
 
+        # --- PINNING INITIALIZATION ---
+        # Pre-calculate reference HKL and Q magnitudes to prevent lattice bias
+        # in derivative-free optimization. Assume identity orientation for pinning.
+        B_inv_init = jnp.linalg.inv(self.B)
+        h_init = B_inv_init @ self.kf_ki_dir_init
+        self.hkl_mag_sq_pinned = jnp.sum(h_init**2, axis=0, keepdims=True)
+        self.hkl_mag_sq_pinned = jnp.maximum(self.hkl_mag_sq_pinned, 1e-6)
+
+        # Reference Lambda for soft/binary kernels
+        # lambda = |k|^2 / (k . Q)
+        k_dot_q_init = jnp.sum(self.kf_ki_dir_init * self.kf_ki_dir_init, axis=0)
+        self.safe_lamb_pinned = jnp.clip(
+            self.k_sq_init / jnp.maximum(k_dot_q_init, 1e-9),
+            self.wl_min_val,
+            self.wl_max_val,
+        )[None, :]
+
+        # Reference Pool Norms for Sinkhorn
+        # Use padded pool to match chunked indexing in sinkhorn
+        pad_len = (chunk_size - (hkl_pool.shape[1] % chunk_size)) % chunk_size
+        hkl_pool_padded = (
+            jnp.pad(hkl_pool, ((0, 0), (0, pad_len)), constant_values=0)
+            if pad_len > 0
+            else hkl_pool
+        )
+        q_pool_init = self.B @ hkl_pool_padded
+        self.pool_norm_q_pinned = jnp.sqrt(jnp.sum(q_pool_init**2, axis=0) + 1e-9)
+
     def _get_physical_params_jax(self, x):
         """Reconstruct physical parameters (Base + Delta) for a batch of solutions x."""
         idx = 0
@@ -814,16 +842,18 @@ class VectorizedObjective:
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
             q_obs = kf_ki_sample / lambda_opt[:, None, :]
             dist_sq = jnp.sum((q_obs - q_int) ** 2, axis=1)
-            safe_lamb = jnp.where(lambda_opt == 0, 1.0, lambda_opt)
+
+            # Use pinned lambda to prevent the optimizer from enlarging the
+            # tolerance artificially by changing lattice parameters.
             effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
-                k_norm / safe_lamb
+                k_norm / self.safe_lamb_pinned
             )
             # Robust Multi-Scale Kernel
             # 1. Narrow (High precision)
             log_p_narrow = -dist_sq / (2 * effective_sigma**2 + 1e-9)
 
             # 2. Wide (Capture range: 5 degrees)
-            sigma_wide = jnp.deg2rad(5.0) * (k_norm / safe_lamb)
+            sigma_wide = jnp.deg2rad(5.0) * (k_norm / self.safe_lamb_pinned)
             log_p_wide = -dist_sq / (2 * sigma_wide**2 + 1e-9)
 
             # Combine via LogSumExp with 1% weight on wide kernel
@@ -875,8 +905,6 @@ class VectorizedObjective:
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
 
-        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
-
         # kappa for von Mises-Fisher-like concentration in HKL space
         # Uniform angular tolerance: sigma_h approx tolerance_rad * h.
 
@@ -913,14 +941,18 @@ class VectorizedObjective:
             hkl_mag_sq = jnp.sum(hkl_float**2, axis=1, keepdims=True)
             hkl_mag_sq = jnp.maximum(hkl_mag_sq, 1e-6)
 
+            # Use pinned HKL magnitude to prevent the optimizer from 'cheating' by
+            # enlarging the tolerance through lattice parameter changes.
+            hkl_mag_sq_safe = self.hkl_mag_sq_pinned
+
             kappa_scaled = 1.0 / (
-                hkl_mag_sq * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
+                hkl_mag_sq_safe * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
             )
             cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
             log_p_narrow = jnp.sum(kappa_scaled * cos_diff, axis=1)
 
             kappa_wide_scaled = 1.0 / (
-                hkl_mag_sq * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
+                hkl_mag_sq_safe * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
             )
             log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff, axis=1)
 
@@ -1048,8 +1080,10 @@ class VectorizedObjective:
 
         final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
+
+        # Use pinned lambda to prevent lattice parameter bias
         effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
-            k_norm / jnp.where(best_lamb == 0, 1.0, best_lamb)
+            k_norm / self.safe_lamb_pinned
         )
         probs = jnp.exp(-best_dist_sq / (2 * effective_sigma**2 + 1e-9))
         score = -jnp.sum(self.weights * probs, axis=1)
@@ -1114,9 +1148,13 @@ class VectorizedObjective:
             dot_raw = jnp.einsum("sin,ik->snk", r_obs_proj_unit, hkl_chunk)
 
             # cosine = dot_raw / |UB h|
-            q_chunk = jnp.einsum("sij,jk->sik", ub_mat, hkl_chunk)
-            norm_q_chunk = jnp.sqrt(jnp.sum(q_chunk**2, axis=1) + 1e-9)
-            dots_chunk = dot_raw / (norm_q_chunk[:, None, :] + 1e-9)
+
+            # Use pinned norms to prevent the optimizer from 'cheating' by
+            # enlarging the lattice to reduce the predicted |Q|.
+            norm_q_chunk_pinned = jax.lax.dynamic_slice(
+                self.pool_norm_q_pinned, (idx_start,), (chunk_size,)
+            )
+            dots_chunk = dot_raw / (norm_q_chunk_pinned[None, None, :] + 1e-9)
 
             # --- FIX: Resolution & Wavelength Aware Top-K ---
             # lambda = k_sq_obs / (norm_obs * dot_raw)
@@ -1130,19 +1168,19 @@ class VectorizedObjective:
             wl_half_width = 0.5 * (self.wl_max_val - self.wl_min_val)
             wl_penalty = -jnp.abs(est_lambda - wl_mid) / (wl_half_width + 1e-9)
 
-            # norm_q_chunk is (batch, chunk)
-            d_chunk = 1.0 / (norm_q_chunk + 1e-9)
+            # norm_q_chunk_pinned is (chunk,)
+            d_chunk = 1.0 / (norm_q_chunk_pinned + 1e-9)
             res_mid = 0.5 * (self.d_min + self.d_max)
             res_half_width = 0.5 * (self.d_max - self.d_min)
             res_penalty = -jnp.abs(d_chunk - res_mid) / (res_half_width + 1e-9)
 
             selection_metric = (
-                dots_chunk + 0.1 * wl_penalty + 0.1 * res_penalty[:, None, :]
+                dots_chunk + 0.1 * wl_penalty + 0.1 * res_penalty[None, None, :]
             )
 
             # Handle padded 0,0,0 vectors (norm 0) by ensuring they have low metrics
             selection_metric = jnp.where(
-                norm_q_chunk[:, None, :] < 1e-6, -1e9, selection_metric
+                norm_q_chunk_pinned[None, None, :] < 1e-6, -1e9, selection_metric
             )
 
             global_idxs = jnp.arange(chunk_size) + idx_start

@@ -70,9 +70,7 @@ def test_cosine_indexer_accuracy(test_data_dir, tmp_path):
     Test that the cosine indexer achieves < 0.3 deg median angular deviation.
     Known to fail currently.
     """
-    mesolite_input_file = (
-        Path(test_data_dir) / "MANDI" / "mesolite" / MESOLITE_FILE
-    )
+    mesolite_input_file = Path(test_data_dir) / "MANDI" / "mesolite" / MESOLITE_FILE
     if not mesolite_input_file.exists():
         pytest.skip("Mesolite data not found")
 

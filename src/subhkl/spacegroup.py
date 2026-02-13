@@ -33,9 +33,7 @@ def get_space_group_object(sg_name_or_centering):
         try:
             sg = gemmi.SpaceGroup(int(name))
         except ValueError:
-            raise ValueError(
-                f"Could not interpret space group: {sg_name_or_centering}"
-            )
+            raise ValueError(f"Could not interpret space group: {sg_name_or_centering}")
 
     return sg
 

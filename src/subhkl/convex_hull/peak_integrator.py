@@ -27,23 +27,15 @@ class PeakIntegrator:
             "distance_threshold": integration_params.pop(
                 "region_growth_distance_threshold"
             ),
-            "min_intensity": integration_params.pop(
-                "region_growth_minimum_intensity"
-            ),
-            "max_size": integration_params.pop(
-                "region_growth_maximum_pixel_radius"
-            ),
+            "min_intensity": integration_params.pop("region_growth_minimum_intensity"),
+            "max_size": integration_params.pop("region_growth_maximum_pixel_radius"),
         }
         other_params = {
             "box_size": integration_params["peak_center_box_size"],
-            "smoothing_window_size": integration_params[
-                "peak_smoothing_window_size"
-            ],
+            "smoothing_window_size": integration_params["peak_smoothing_window_size"],
             "min_peak_pixels": integration_params["peak_minimum_pixels"],
             "min_peak_snr": integration_params["peak_minimum_signal_to_noise"],
-            "outlier_threshold": integration_params[
-                "peak_pixel_outlier_threshold"
-            ],
+            "outlier_threshold": integration_params["peak_pixel_outlier_threshold"],
         }
         integrator = PeakIntegrator(
             RegionGrower(**region_growth_params), **other_params
@@ -355,16 +347,12 @@ class PeakIntegrator:
 
             # Move center to local maximum *in the smoothed image*
             try:
-                adjusted_center = self._local_max(
-                    smoothed_intensity, estimated_center
-                )
+                adjusted_center = self._local_max(smoothed_intensity, estimated_center)
             except ValueError:
                 adjusted_center = None
 
             adjusted_centers.append(
-                adjusted_center
-                if adjusted_center is not None
-                else estimated_center
+                adjusted_center if adjusted_center is not None else estimated_center
             )
 
             # Make sure center starts from a non-zero point *in the original
@@ -400,9 +388,7 @@ class PeakIntegrator:
             )
 
             # Build masks and hulls
-            masks, hulls = self._make_peak_hulls_and_masks(
-                core_points, im_shape
-            )
+            masks, hulls = self._make_peak_hulls_and_masks(core_points, im_shape)
 
             # Check for failure (degenerate hulls)
             if masks is None:
@@ -434,9 +420,7 @@ class PeakIntegrator:
 
         for bg_mask in bg_masks:
             if bg_mask is not None:
-                bg_mask &= (
-                    not_any_inner_mask  # keep points not in any inner region
-                )
+                bg_mask &= not_any_inner_mask  # keep points not in any inner region
 
         return (
             is_peak,
@@ -538,9 +522,7 @@ class PeakIntegrator:
                     [sigma_x * sigma_y * rho, sigma_y**2],
                 ]
             )
-            u = np.einsum(
-                "...i,ij,...j->...", xy, np.linalg.inv(covariance), xy
-            )
+            u = np.einsum("...i,ij,...j->...", xy, np.linalg.inv(covariance), xy)
             model = background + amplitude * np.exp(-u / 2)
             return model
 
@@ -657,9 +639,7 @@ class PeakIntegrator:
                     / (1 - rho**2) ** 0.5
                 ) ** 2
 
-                peak_integral_error = np.sqrt(
-                    term_A + term_sy + term_sx + term_rho
-                )
+                peak_integral_error = np.sqrt(term_A + term_sy + term_sx + term_rho)
 
             except Exception:
                 # Fallback if Hessian inversion fails

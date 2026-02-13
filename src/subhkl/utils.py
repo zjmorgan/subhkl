@@ -104,9 +104,7 @@ def cartesian_matrix_metric_tensor(a, b, c, alpha, beta, gamma):
     return B, Gstar
 
 
-def generate_reflections(
-    a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2.0
-):
+def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2.0):
     """
     Generates unique HKL indices for a given unit cell and resolution cutoff.
     """
@@ -310,9 +308,7 @@ def predict_reflections_on_panel(
     else:
         s_lab = sample_offset
 
-    mask_panel, row, col = detector.reflections_mask(
-        x, y, z, sample_offset=s_lab
-    )
+    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=s_lab)
 
     return (
         row[mask_panel],

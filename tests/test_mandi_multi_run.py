@@ -12,15 +12,24 @@ SPACE_GROUP = "F d d 2"
 WAVELENGTH = [2.0, 4.5]
 
 FINDER_PARAMS = [
-    "--finder-algorithm", "thresholding",
-    "--thresholding-noise-cutoff-quantile", "0.99",
-    "--region-growth-minimum-intensity", "3.0",
-    "--region-growth-maximum-pixel-radius", "12.0",
-    "--peak-center-box-size", "3",
-    "--peak-smoothing-window-size", "5",
-    "--peak-minimum-pixels", "40",
-    "--peak-minimum-signal-to-noise", "0.0",
-    "--peak-pixel-outlier-threshold", "4.0",
+    "--finder-algorithm",
+    "thresholding",
+    "--thresholding-noise-cutoff-quantile",
+    "0.99",
+    "--region-growth-minimum-intensity",
+    "3.0",
+    "--region-growth-maximum-pixel-radius",
+    "12.0",
+    "--peak-center-box-size",
+    "3",
+    "--peak-smoothing-window-size",
+    "5",
+    "--peak-minimum-pixels",
+    "40",
+    "--peak-minimum-signal-to-noise",
+    "0.0",
+    "--peak-pixel-outlier-threshold",
+    "4.0",
 ]
 
 
@@ -29,18 +38,20 @@ def random_mesolite_pair(test_data_dir):
     """Pick two random MANDI files with significantly different goniometer settings."""
     path = Path(test_data_dir) / "MANDI" / "mesolite"
     available_files = sorted(list(path.glob("MANDI_*.nxs.h5")))
-    
+
     if len(available_files) < 2:
-        pytest.skip(f"Not enough data files found in {path} (found {len(available_files)})")
-    
+        pytest.skip(
+            f"Not enough data files found in {path} (found {len(available_files)})"
+        )
+
     rng = random.Random(42)  # Seeded for CI stability
-    
+
     def get_angles(f):
-        with h5py.File(f, 'r') as h:
+        with h5py.File(f, "r") as h:
             try:
-                omega = h['entry/DASlogs/BL11B:Mot:omega/value'][0]
-                chi = h['entry/DASlogs/BL11B:Mot:chi/value'][0]
-                phi = h['entry/DASlogs/BL11B:Mot:phi/value'][0]
+                omega = h["entry/DASlogs/BL11B:Mot:omega/value"][0]
+                chi = h["entry/DASlogs/BL11B:Mot:chi/value"][0]
+                phi = h["entry/DASlogs/BL11B:Mot:phi/value"][0]
                 return np.array([omega, chi, phi])
             except KeyError:
                 return None
@@ -51,7 +62,7 @@ def random_mesolite_pair(test_data_dir):
         pair = rng.sample(available_files, 2)
         a1 = get_angles(pair[0])
         a2 = get_angles(pair[1])
-        
+
         if a1 is not None and a2 is not None:
             diff = np.abs(a1 - a2)
             if np.any(diff >= 20.0):
@@ -62,23 +73,40 @@ def random_mesolite_pair(test_data_dir):
                 return pair
 
     # Fallback to any two if diversity condition not met within timeout
-    print("\n[Test] WARNING: Could not find pair with >20 deg difference. Falling back to random pair.")
+    print(
+        "\n[Test] WARNING: Could not find pair with >20 deg difference. Falling back to random pair."
+    )
     pair = rng.sample(available_files, 2)
     return pair
 
 
 def run_indexing_pipeline(input_h5, tmp_path, label):
     """Common logic for multi-stage indexing and verification."""
-    
+
     # 1. Stage 1: Coarse multi-run indexing (0.5 deg)
     stage1_h5 = tmp_path / f"stage1_{label}.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "indexer",
-            str(input_h5), str(stage1_h5),
-            *map(str, LATTICE_PARAMS), SPACE_GROUP,
-            "--n-runs", "20", "--popsize", "500", "--gens", "200",
-            "--strategy", "de", "--hkl-search-range", "35", "--tolerance-deg", "0.5",
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "indexer",
+            str(input_h5),
+            str(stage1_h5),
+            *map(str, LATTICE_PARAMS),
+            SPACE_GROUP,
+            "--n-runs",
+            "20",
+            "--popsize",
+            "500",
+            "--gens",
+            "200",
+            "--strategy",
+            "de",
+            "--hkl-search-range",
+            "35",
+            "--tolerance-deg",
+            "0.5",
         ],
         check=True,
     )
@@ -87,13 +115,30 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
     stage2_h5 = tmp_path / f"stage2_{label}.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "indexer",
-            str(input_h5), str(stage2_h5),
-            *map(str, LATTICE_PARAMS), SPACE_GROUP,
-            "--bootstrap", str(stage1_h5),
-            "--n-runs", "5", "--popsize", "500", "--gens", "200",
-            "--strategy", "de", "--hkl-search-range", "35", "--tolerance-deg", "0.1",
-            "--loss-method", "gaussian",
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "indexer",
+            str(input_h5),
+            str(stage2_h5),
+            *map(str, LATTICE_PARAMS),
+            SPACE_GROUP,
+            "--bootstrap",
+            str(stage1_h5),
+            "--n-runs",
+            "5",
+            "--popsize",
+            "500",
+            "--gens",
+            "200",
+            "--strategy",
+            "de",
+            "--hkl-search-range",
+            "35",
+            "--tolerance-deg",
+            "0.1",
+            "--loss-method",
+            "gaussian",
         ],
         check=True,
     )
@@ -102,13 +147,31 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
     indexed_h5 = tmp_path / f"indexed_{label}.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "indexer",
-            str(input_h5), str(indexed_h5),
-            *map(str, LATTICE_PARAMS), SPACE_GROUP,
-            "--bootstrap", str(stage2_h5),
-            "--n-runs", "1", "--popsize", "200", "--gens", "100",
-            "--strategy", "cma_es", "--hkl-search-range", "35", "--tolerance-deg", "0.05",
-            "--loss-method", "gaussian", "--refine-goniometer",
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "indexer",
+            str(input_h5),
+            str(indexed_h5),
+            *map(str, LATTICE_PARAMS),
+            SPACE_GROUP,
+            "--bootstrap",
+            str(stage2_h5),
+            "--n-runs",
+            "1",
+            "--popsize",
+            "200",
+            "--gens",
+            "100",
+            "--strategy",
+            "cma_es",
+            "--hkl-search-range",
+            "35",
+            "--tolerance-deg",
+            "0.05",
+            "--loss-method",
+            "gaussian",
+            "--refine-goniometer",
         ],
         check=True,
     )
@@ -121,6 +184,7 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
         print(f"[{label}] Indexed peaks: {indexed_count} / {len(h)}")
 
         from subhkl.metrics import compute_metrics
+
         m = compute_metrics(str(indexed_h5))
         ang_err = m["median_ang_err"]
         print(f"[{label}] Median angular error: {ang_err}")
@@ -131,7 +195,7 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
         assert indexed_count > 10
         assert indexed_ratio >= 0.75
         assert ang_err < 0.2
-    
+
     return indexed_h5
 
 
@@ -143,9 +207,14 @@ def test_mandi_multi_run_finder_merger(random_mesolite_pair, tmp_path):
         output_file = tmp_path / f"{input_file.name}.finder.h5"
         subprocess.run(
             [
-                "python", "-m", "subhkl.io.parser", "finder",
-                str(input_file), INSTRUMENT,
-                "--output-filename", str(output_file),
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "finder",
+                str(input_file),
+                INSTRUMENT,
+                "--output-filename",
+                str(output_file),
                 *FINDER_PARAMS,
             ],
             check=True,
@@ -160,9 +229,16 @@ def test_mandi_multi_run_finder_merger(random_mesolite_pair, tmp_path):
     merged_h5 = tmp_path / "merged_finder.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "finder-merger",
-            str(finder_list_file), str(merged_h5),
-            *map(str, LATTICE_PARAMS), str(WAVELENGTH[0]), str(WAVELENGTH[1]), SPACE_GROUP,
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "finder-merger",
+            str(finder_list_file),
+            str(merged_h5),
+            *map(str, LATTICE_PARAMS),
+            str(WAVELENGTH[0]),
+            str(WAVELENGTH[1]),
+            SPACE_GROUP,
         ],
         check=True,
     )
@@ -178,8 +254,13 @@ def test_mandi_multi_run_image_merger(random_mesolite_pair, tmp_path):
         reduced_file = tmp_path / f"{input_file.name}.reduced.h5"
         subprocess.run(
             [
-                "python", "-m", "subhkl.io.parser", "reduce",
-                str(input_file), str(reduced_file), INSTRUMENT,
+                "python",
+                "-m",
+                "subhkl.io.parser",
+                "reduce",
+                str(input_file),
+                str(reduced_file),
+                INSTRUMENT,
             ],
             check=True,
         )
@@ -188,8 +269,12 @@ def test_mandi_multi_run_image_merger(random_mesolite_pair, tmp_path):
     scan_master_h5 = tmp_path / "scan_master.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "merge-images",
-            " ".join(reduced_files), str(scan_master_h5),
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "merge-images",
+            " ".join(reduced_files),
+            str(scan_master_h5),
         ],
         check=True,
     )
@@ -197,9 +282,14 @@ def test_mandi_multi_run_image_merger(random_mesolite_pair, tmp_path):
     merged_h5 = tmp_path / "merged_images.h5"
     subprocess.run(
         [
-            "python", "-m", "subhkl.io.parser", "finder",
-            str(scan_master_h5), INSTRUMENT,
-            "--output-filename", str(merged_h5),
+            "python",
+            "-m",
+            "subhkl.io.parser",
+            "finder",
+            str(scan_master_h5),
+            INSTRUMENT,
+            "--output-filename",
+            str(merged_h5),
             *FINDER_PARAMS,
         ],
         check=True,

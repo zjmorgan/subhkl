@@ -36,7 +36,9 @@ def download_mesolite_data():
     needed_files = [f for f in files_to_download if f not in existing_files]
 
     if not needed_files:
-        print(f"All {len(files_to_download)} requested mesolite test files already exist at {DATA_DIR}")
+        print(
+            f"All {len(files_to_download)} requested mesolite test files already exist at {DATA_DIR}"
+        )
         return
 
     print(

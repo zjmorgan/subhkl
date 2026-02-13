@@ -33,9 +33,7 @@ def test_integration_bank_alignment_crash(tmp_path):
 
     try:
         # Parallel integration will fail when trying to get det_config for bank 999
-        peaks.get_detector_peaks(
-            harvest_kwargs, integration_params, max_workers=1
-        )
+        peaks.get_detector_peaks(harvest_kwargs, integration_params, max_workers=1)
     except KeyError as e:
         if "'999'" in str(e):
             pytest.fail(
@@ -45,7 +43,5 @@ def test_integration_bank_alignment_crash(tmp_path):
     except Exception as e:
         # Worker might fail with a different message
         if "999" in str(e):
-            pytest.fail(
-                f"Bug Reproduced: Worker failed due to bank ID 999! {e}"
-            )
+            pytest.fail(f"Bug Reproduced: Worker failed due to bank ID 999! {e}")
         raise e
