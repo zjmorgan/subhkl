@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 from subhkl.spacegroup import is_systematically_absent, get_centering
 
@@ -14,12 +13,12 @@ def test_centering_mapping_vulnerability():
 
     # Check if 'F' correctly triggers face-centering absences
     absent = is_systematically_absent(h, k, l, "F")
-    assert absent[0] == True, "Centring 'F' should make (1,0,0) absent!"
+    assert absent[0], "Centring 'F' should make (1,0,0) absent!"
 
     # Check if 'I' correctly triggers body-centering absences (h+k+l must be even)
     # (1,0,0) -> 1+0+0 = 1 (odd) -> should be absent
     absent_i = is_systematically_absent(h, k, l, "I")
-    assert absent_i[0] == True, "Centring 'I' should make (1,0,0) absent!"
+    assert absent_i[0], "Centring 'I' should make (1,0,0) absent!"
 
 
 def test_centering_type_resolution():

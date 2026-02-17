@@ -1,6 +1,4 @@
-import numpy as np
 import pytest
-from subhkl.utils import calculate_angular_error
 
 
 def test_generate_reflections_none_sg_crash():

@@ -1,7 +1,5 @@
 import numpy as np
 import h5py
-import pytest
-from pathlib import Path
 from subhkl.io.parser import indexer
 from subhkl.metrics import compute_metrics
 
@@ -37,9 +35,9 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
         ]
     )
     num_hkls = len(hkls)
-    hkl_stack = np.tile(hkls, (4, 1))
+    np.tile(hkls, (4, 1))
 
-    R_expanded = np.repeat(R_stack, num_hkls, axis=0)
+    np.repeat(R_stack, num_hkls, axis=0)
 
     B = np.eye(3) * (1.0 / 10.0)
 
@@ -80,9 +78,9 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     with h5py.File(peaks_h5, "w") as f:
         f["sample/a"], f["sample/b"], f["sample/c"] = a, b, c
         f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = (
-            90.0,
-            90.0,
-            90.0,
+            alpha,
+            beta,
+            gamma,
         )
         f["sample/space_group"] = "P 1"
         f["instrument/wavelength"] = [0.1, 10.0]
@@ -103,9 +101,9 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
         a=a,
         b=b,
         c=c,
-        alpha=90,
-        beta=90,
-        gamma=90,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
         space_group="P 1",
         strategy_name="DE",
         population_size=1000,

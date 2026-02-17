@@ -1,7 +1,5 @@
 import numpy as np
 import h5py
-import os
-import pytest
 from subhkl.io.parser import finder
 
 
@@ -69,7 +67,6 @@ def test_finder_output_determinism(tmp_path):
 
 if __name__ == "__main__":
     # For manual testing
-    import sys
     from pathlib import Path
 
     tmp = Path("temp_test")

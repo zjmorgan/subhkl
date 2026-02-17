@@ -1,8 +1,5 @@
 import numpy as np
 import h5py
-import os
-import pytest
-from subhkl.export import FinderConcatenateMerger
 from subhkl.optimization import FindUB
 
 
@@ -99,7 +96,6 @@ def test_correctness_compromised_by_merger_order(tmp_path):
 
 
 if __name__ == "__main__":
-    import sys
     from pathlib import Path
 
     tmp = Path("temp_correctness_test")

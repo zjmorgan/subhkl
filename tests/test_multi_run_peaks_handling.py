@@ -1,7 +1,6 @@
 import numpy as np
 import h5py
 import os
-import pytest
 from subhkl.integration import Peaks
 
 

@@ -14,7 +14,7 @@ def test_cosine_indexer_negative_score_repro():
     """
     # 1. Setup minimal objective
     # 1 peak, identity orientation
-    kf_ki = np.array([[[1.0, 0.0, 0.0]]])  # (1, 3, 1) - scaled by k?
+    # kf_ki = np.array([[[1.0, 0.0, 0.0]]])  # (1, 3, 1) - scaled by k?
     # The code expects kf_ki_sample to be kf-ki.
     # Let's just make dummy vectors.
 

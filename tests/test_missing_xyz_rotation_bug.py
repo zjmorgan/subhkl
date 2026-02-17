@@ -1,6 +1,5 @@
 import numpy as np
 import h5py
-import pytest
 from subhkl.io.parser import indexer
 from subhkl.metrics import compute_metrics
 

@@ -1,7 +1,6 @@
 import os
 import h5py
 import numpy as np
-import pytest
 from scipy.spatial.transform import Rotation
 from subhkl.io.parser import index, metrics
 

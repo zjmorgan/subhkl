@@ -1,9 +1,7 @@
 import numpy as np
 import h5py
-import os
 import pytest
 from subhkl.io.parser import indexer
-from subhkl.metrics import compute_metrics
 
 
 def test_multi_run_geometry_mismatch_vulnerability(tmp_path):
@@ -20,7 +18,6 @@ def test_multi_run_geometry_mismatch_vulnerability(tmp_path):
     # Define 2 runs with 2 peaks each
     # Run 0: peaks 0, 1. Run 1: peaks 2, 3.
     # Total 4 peaks.
-    num_peaks = 4
     run_indices = np.array([0, 0, 1, 1], dtype=np.int32)
 
     # 2 unique rotations (per run)
@@ -91,7 +88,6 @@ def test_multi_run_geometry_mismatch_vulnerability(tmp_path):
 
 
 if __name__ == "__main__":
-    import sys
     from pathlib import Path
 
     tmp = Path("temp_idx_bug")

@@ -83,7 +83,6 @@ def test_indexer_angles_stack_shape_crash(tmp_path):
 
 
 if __name__ == "__main__":
-    import sys
     from pathlib import Path
 
     test_indexer_angles_stack_shape_crash(Path("."))

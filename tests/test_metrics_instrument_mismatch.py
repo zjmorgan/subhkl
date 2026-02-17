@@ -1,7 +1,4 @@
-import numpy as np
 import pytest
-import h5py
-from subhkl.metrics import compute_metrics
 
 
 def test_mtz_exporter_sg_mismatch():

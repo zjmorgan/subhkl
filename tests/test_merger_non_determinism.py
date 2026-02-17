@@ -1,7 +1,5 @@
 import numpy as np
 import h5py
-import os
-import pytest
 from subhkl.export import FinderConcatenateMerger
 
 
@@ -77,7 +75,6 @@ def test_merger_input_order_dependency(tmp_path):
 
 
 if __name__ == "__main__":
-    import sys
     from pathlib import Path
 
     tmp = Path("temp_merger_test")

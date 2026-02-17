@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.convex_hull.region_grower import RegionGrower
 from subhkl.integration import _integrate_single_bank
