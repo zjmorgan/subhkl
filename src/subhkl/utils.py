@@ -42,7 +42,7 @@ except Exception:
         def vmap(f, **kwargs):
             """Fallback vmap: returns the function unchanged."""
             return f
-    
+
         lax = None
 
     jax = _JaxShim()
@@ -60,6 +60,7 @@ except Exception:
     jit = jax.jit
     lax = jax.lax
     vmap = jax.vmap
+
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
