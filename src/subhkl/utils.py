@@ -39,10 +39,6 @@ except Exception:
                 return lambda fn: fn
             return f
 
-        jax = _JaxShim()
-        jnp = np
-        jit = jax.jit
-
         @staticmethod
         def vmap(f, **kwargs):
             """Fallback vmap: returns the function unchanged."""
@@ -59,6 +55,9 @@ except Exception:
         HAS_JAX = False
         OPTIMIZATION_BACKEND = "numpy"
 
+    jax = _JaxShim()
+    jnp = np
+    jit = jax.jit
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
