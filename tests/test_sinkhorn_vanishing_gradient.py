@@ -4,7 +4,7 @@ import numpy as np
 
 from subhkl.optimization import VectorizedObjective
 
-
+@pytest.mark.xfail(reason="Check for JAX import for JAX dependent tests. Expected to fail in numpy only environment.")
 @pytest.mark.dependency()
 def test_jax_import():
 
