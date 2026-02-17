@@ -47,6 +47,7 @@ except Exception:
         """Fallback vmap: returns the function unchanged."""
         return f
 
+    vmap = vmap()
     lax = None
     DifferentialEvolution = None
     PSO = None
