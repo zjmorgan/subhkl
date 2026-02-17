@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
@@ -22,10 +21,10 @@ def test_cosine_indexer_negative_score_repro():
     B = np.eye(3)
 
     # 1 obs
-    kf_ki_sample = jnp.array([[[1.0, 0.0, 0.0]]])
+    kf_ki_sample = np.array([[[1.0, 0.0, 0.0]]])
 
     # Weights
-    weights = jnp.array([1.0])
+    weights = np.array([1.0])
 
     # Create instance
     # We only need the method, but we need 'self' parameters.
@@ -43,12 +42,12 @@ def test_cosine_indexer_negative_score_repro():
     )
 
     # 2. Mock Internal State for Indexing
-    UB = jnp.eye(3)[None, :, :]  # Batch size 1
+    UB = np.eye(3)[None, :, :]  # Batch size 1
 
     # We call the method directly
     # kf_ki_sample: (Batch, 3, N_obs)
     # k_sq_override: (Batch, N_obs)
-    k_sq = jnp.array([[1.0]])
+    k_sq = np.array([[1.0]])
 
     # 3. Run Indexer
     score, probs, best_hkl, best_lamb = obj.indexer_dynamic_cosine_aniso_jax(
@@ -74,8 +73,8 @@ def test_cosine_indexer_negative_score_repro():
     # Log Score: -log(0.5) = +0.69
 
     # Check if score is roughly -log(probs)
-    expected_log_score = -jnp.sum(weights * jnp.log(probs + 1e-12))
-    expected_linear_score = -jnp.sum(weights * probs)
+    expected_log_score = -np.sum(weights * np.log(probs + 1e-12))
+    expected_linear_score = -np.sum(weights * probs)
 
     print(f"Expected Log Score: {expected_log_score}")
     print(f"Expected Linear Score: {expected_linear_score}")
@@ -84,7 +83,7 @@ def test_cosine_indexer_negative_score_repro():
     # instead of linear sum (score = -sum(probs)).
 
     # We expect the code to be FIXED now.
-    assert jnp.isclose(score, expected_linear_score, atol=1e-3), (
+    assert np.isclose(score, expected_linear_score, atol=1e-3), (
         f"Score {score} does not match linear count {expected_linear_score}! Fix failed?"
     )
 

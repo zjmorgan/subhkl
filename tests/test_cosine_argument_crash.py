@@ -1,4 +1,4 @@
-import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from subhkl.optimization import VectorizedObjective
@@ -10,24 +10,24 @@ def test_cosine_argument_compatibility():
     This mimics the call structure in VectorizedObjective.get_results/loss call stack.
     """
     # Mock data
-    B = jnp.eye(3)
-    kf_ki_dir = jnp.array([[1.0, 0.0, 0.0]])
-    peak_xyz = jnp.array([[1.0, 0.0, 0.0]])
+    B = np.eye(3)
+    kf_ki_dir = np.array([[1.0, 0.0, 0.0]])
+    peak_xyz = np.array([[1.0, 0.0, 0.0]])
 
     obj = VectorizedObjective(
         B=B,
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=peak_xyz,
-        wavelength=jnp.array([2.0, 4.0]),
-        angle_cdf=jnp.array([0.0, 1.0]),
-        angle_t=jnp.array([0.0, 1.0]),
+        wavelength=np.array([2.0, 4.0]),
+        angle_cdf=np.array([0.0, 1.0]),
+        angle_t=np.array([0.0, 1.0]),
         loss_method="cosine",
     )
 
     # Mock inputs for the indexer
-    UB = jnp.eye(3)
-    kf_ki_sample = jnp.array([[[1.0, 0.0, 0.0]]])  # (Batch, N, 3)
-    k_sq_dyn = jnp.array([[1.0]])  # (Batch, N)
+    UB = np.eye(3)
+    kf_ki_sample = np.array([[[1.0, 0.0, 0.0]]])  # (Batch, N, 3)
+    k_sq_dyn = np.array([[1.0]])  # (Batch, N)
 
     try:
         # This call mimics line 1287 in optimization.py

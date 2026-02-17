@@ -1,11 +1,15 @@
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
 
+@pytest.mark.dependency()
+def test_jax_import():
+    import jax
 
+@pytest.mark.dependency(depends=["test_jax_import"])
 def test_sinkhorn_vanishing_gradient():
+    import jax
+    
     # Large unit cell
     B = np.eye(3) * (1.0 / 60.0)  # 60A cell
 
@@ -33,7 +37,7 @@ def test_sinkhorn_vanishing_gradient():
     R_off = Rotation.from_euler("y", 1.5, degrees=True).as_matrix()
 
     # Tolerance 0.1 degrees (Stage 2 setting)
-    tol_rad = jnp.deg2rad(0.1)
+    tol_rad = np.deg2rad(0.1)
 
     # Calc score and gradient
     def get_score(orient):
@@ -41,9 +45,9 @@ def test_sinkhorn_vanishing_gradient():
         from subhkl.optimization import rotation_matrix_from_rodrigues_jax
 
         U = rotation_matrix_from_rodrigues_jax(orient)
-        UB = U @ jnp.array(B)
+        UB = U @ np.array(B)
         score, _, _, _ = obj.indexer_sinkhorn_jax(
-            UB[None], jnp.array(kf_ki_dir)[None], tolerance_rad=tol_rad
+            UB[None], np.array(kf_ki_dir)[None], tolerance_rad=tol_rad
         )
         return score[0]
 

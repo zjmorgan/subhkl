@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -128,15 +127,15 @@ def test_clipping_logic_direct():
         space_group="P 1 21 1",
         hkl_search_range=2,
     )
-    h = jnp.array([0, 0, 0, 0])
-    k = jnp.array([1, 2, 3, 4])
-    l = jnp.array([0, 0, 0, 0])
+    h = np.array([0, 0, 0, 0])
+    k = np.array([1, 2, 3, 4])
+    l = np.array([0, 0, 0, 0])
     r = obj.mask_range
-    idx_h = jnp.clip(h + r, 0, 2 * r).astype(jnp.int32)
-    idx_k = jnp.clip(k + r, 0, 2 * r).astype(jnp.int32)
-    idx_l = jnp.clip(l + r, 0, 2 * r).astype(jnp.int32)
+    idx_h = np.clip(h + r, 0, 2 * r).astype(np.int32)
+    idx_k = np.clip(k + r, 0, 2 * r).astype(np.int32)
+    idx_l = np.clip(l + r, 0, 2 * r).astype(np.int32)
     in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-    is_allowed = jnp.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
+    is_allowed = np.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
     from subhkl.spacegroup import is_systematically_absent
 
     expected_absent = is_systematically_absent(h[:2], k[:2], l[:2], "P 1 21 1")
@@ -256,7 +255,7 @@ def test_ghost_indexing_vulnerability():
         space_group="I 2 2 2",
         hkl_search_range=2,
     )
-    h_out, k_out, l_out = jnp.array([21]), jnp.array([0]), jnp.array([0])
+    h_out, k_out, l_out = np.array([21]), np.array([0]), np.array([0])
     r = obj.mask_range
     in_bounds = (
         (h_out >= -r)
@@ -266,7 +265,7 @@ def test_ghost_indexing_vulnerability():
         & (l_out >= -r)
         & (l_out <= r)
     )
-    is_allowed_out = jnp.where(in_bounds, obj.valid_hkl_mask[0, 0, 0], False)
+    is_allowed_out = np.where(in_bounds, obj.valid_hkl_mask[0, 0, 0], False)
     assert not bool(is_allowed_out[0]), (
         "VULNERABILITY: Forbidden reflection allowed outside mask range!"
     )

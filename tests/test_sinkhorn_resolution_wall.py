@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
@@ -32,11 +31,11 @@ def test_sinkhorn_resolution_wall():
     )
 
     # Run sinkhorn indexer
-    UB = jnp.eye(3)[None]
-    kf_ki_sample = jnp.array(kf_ki_dir)[None]
+    UB = np.eye(3)[None]
+    kf_ki_sample = np.array(kf_ki_dir)[None]
 
     # We need to simulate k_sq_dyn to match the scale
-    k_sq_dyn = jnp.sum(kf_ki_sample**2, axis=1)  # 100
+    k_sq_dyn = np.sum(kf_ki_sample**2, axis=1)  # 100
 
     score, probs, best_hkl, best_lamb = obj.indexer_sinkhorn_jax(
         UB, kf_ki_sample, k_sq_override=k_sq_dyn, tolerance_rad=0.01

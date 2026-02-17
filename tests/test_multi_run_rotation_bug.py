@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
@@ -52,7 +51,7 @@ def test_multi_run_rotation_assignment():
 
     # The logic in get_results (or __call__) is:
     # R_curr = self.static_R  # (10, 3, 3)
-    # R_per_peak = jnp.take(R_curr, self.peak_run_indices, axis=0)
+    # R_per_peak = np.take(R_curr, self.peak_run_indices, axis=0)
 
     # If self.peak_run_indices is [0,0,0,0,0, 1,1,1,1,1]
     # R_per_peak will be [R_curr[0], R_curr[0], R_curr[0], R_curr[0], R_curr[0],
@@ -69,7 +68,7 @@ def test_multi_run_rotation_assignment():
         if R_curr.shape[0] == num_peaks_actual:
             R_per_peak = R_curr
         else:
-            R_per_peak = jnp.take(R_curr, obj.peak_run_indices, axis=0)
+            R_per_peak = np.take(R_curr, obj.peak_run_indices, axis=0)
 
     print("Peak 5 expected rotation:")
     print(R1)

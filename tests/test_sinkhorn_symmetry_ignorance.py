@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
@@ -32,8 +31,8 @@ def test_sinkhorn_ignores_symmetry():
     )
 
     # Run sinkhorn indexer simulation
-    UB = jnp.eye(3)[None]  # Identity orientation
-    kf_ki_sample = jnp.array(kf_ki_dir)[None]
+    UB = np.eye(3)[None]  # Identity orientation
+    kf_ki_sample = np.array(kf_ki_dir)[None]
 
     # Call indexer_sinkhorn_jax
     score, probs, best_hkl, best_lamb = obj.indexer_sinkhorn_jax(

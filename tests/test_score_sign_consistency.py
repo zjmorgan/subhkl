@@ -1,4 +1,4 @@
-import jax.numpy as jnp
+import numpy as np
 
 from subhkl.optimization import VectorizedObjective
 
@@ -11,12 +11,12 @@ def test_score_sign_consistency():
     This breaks the progress bar display which expects -fitness to be a peak count.
     """
     # Mock data
-    B = jnp.eye(3)
-    kf_ki_dir = jnp.array([[1.0, 0.0, 0.0]])
-    peak_xyz = jnp.array([[1.0, 0.0, 0.0]])
-    wavelength = jnp.array([2.0, 4.0])
-    angle_cdf = jnp.array([0.0, 1.0])
-    angle_t = jnp.array([0.0, 1.0])
+    B = np.eye(3)
+    kf_ki_dir = np.array([[1.0, 0.0, 0.0]])
+    peak_xyz = np.array([[1.0, 0.0, 0.0]])
+    wavelength = np.array([2.0, 4.0])
+    angle_cdf = np.array([0.0, 1.0])
+    angle_t = np.array([0.0, 1.0])
 
     # 1. Test Gaussian Loss
     obj_gauss = VectorizedObjective(
@@ -41,7 +41,7 @@ def test_score_sign_consistency():
     )
 
     # Simple identity orientation
-    x = jnp.zeros((1, 3))  # Rodrigues vector [0,0,0]
+    x = np.zeros((1, 3))  # Rodrigues vector [0,0,0]
 
     score_gauss = obj_gauss(x)[0]
     score_cosine = obj_cosine(x)[0]

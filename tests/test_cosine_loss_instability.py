@@ -1,4 +1,3 @@
-import jax.numpy as jnp
 import numpy as np
 from subhkl.optimization import VectorizedObjective
 
@@ -36,11 +35,11 @@ def test_cosine_loss_instability_at_high_index():
     )
 
     # 2. Evaluate Loss at True Orientation (U=Identity)
-    UB_true = jnp.eye(3) @ jnp.array(B)
-    kf_ki_sample = jnp.array(q_lab)[None, ...]  # (1, 3, 1)
+    UB_true = np.eye(3) @ np.array(B)
+    kf_ki_sample = np.array(q_lab)[None, ...]  # (1, 3, 1)
 
     score_true, probs_true, _, _ = obj.indexer_dynamic_cosine_aniso_jax(
-        UB_true[None, ...], kf_ki_sample, tolerance_rad=jnp.deg2rad(0.1)
+        UB_true[None, ...], kf_ki_sample, tolerance_rad=np.deg2rad(0.1)
     )
 
     print(f"Score at True orientation: {score_true[0]}")
@@ -53,9 +52,9 @@ def test_cosine_loss_instability_at_high_index():
     UB_off = R_off @ B
 
     score_off, probs_off, _, _ = obj.indexer_dynamic_cosine_aniso_jax(
-        jnp.array(UB_off)[None, ...],
+        np.array(UB_off)[None, ...],
         kf_ki_sample,
-        tolerance_rad=jnp.deg2rad(0.1),
+        tolerance_rad=np.deg2rad(0.1),
     )
 
     print(f"Score at 0.01 deg offset: {score_off[0]}")
