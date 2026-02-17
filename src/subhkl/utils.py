@@ -20,7 +20,6 @@ try:
     import jax.scipy.optimize
     import jax.scipy.signal
     from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
-    from jax import jit, lax, vmap
     from jax.sharding import Mesh, NamedSharding
     from jax.sharding import PartitionSpec as P
 
@@ -45,19 +44,19 @@ except Exception:
             return f
     
         lax = None
-        DifferentialEvolution = None
-        PSO = None
-        CMA_ES = None
-        jscipy_linalg = scipy.linalg
-        Mesh = None
-        NamedSharding = None
-        P = None
-        HAS_JAX = False
-        OPTIMIZATION_BACKEND = "numpy"
 
     jax = _JaxShim()
     jnp = np
     jit = jax.jit
+    jscipy_linalg = scipy.linalg
+    DifferentialEvolution = None
+    PSO = None
+    CMA_ES = None
+    Mesh = None
+    NamedSharding = None
+    P = None
+    HAS_JAX = False
+    OPTIMIZATION_BACKEND = "numpy"
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
