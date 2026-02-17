@@ -1,15 +1,22 @@
+import importlib.util
+import pytest
 import numpy as np
 
 from subhkl.optimization import VectorizedObjective
 
+
 @pytest.mark.dependency()
 def test_jax_import():
-    import jax
+
+    # Try to import jax and assert that it worked
+    spec = importlib.util.find_spec("jax")
+    assert spec
+
 
 @pytest.mark.dependency(depends=["test_jax_import"])
 def test_sinkhorn_vanishing_gradient():
     import jax
-    
+
     # Large unit cell
     B = np.eye(3) * (1.0 / 60.0)  # 60A cell
 
