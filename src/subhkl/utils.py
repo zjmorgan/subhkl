@@ -39,25 +39,25 @@ except Exception:
                 return lambda fn: fn
             return f
 
-    jax = _JaxShim()
-    jnp = np
-    jit = jax.jit
+        jax = _JaxShim()
+        jnp = np
+        jit = jax.jit
 
-    def vmap(f, **kwargs):
-        """Fallback vmap: returns the function unchanged."""
-        return f
-
-    vmap = vmap()
-    lax = None
-    DifferentialEvolution = None
-    PSO = None
-    CMA_ES = None
-    jscipy_linalg = scipy.linalg
-    Mesh = None
-    NamedSharding = None
-    P = None
-    HAS_JAX = False
-    OPTIMIZATION_BACKEND = "numpy"
+        @staticmethod
+        def vmap(f, **kwargs):
+            """Fallback vmap: returns the function unchanged."""
+            return f
+    
+        lax = None
+        DifferentialEvolution = None
+        PSO = None
+        CMA_ES = None
+        jscipy_linalg = scipy.linalg
+        Mesh = None
+        NamedSharding = None
+        P = None
+        HAS_JAX = False
+        OPTIMIZATION_BACKEND = "numpy"
 
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
