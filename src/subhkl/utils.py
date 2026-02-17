@@ -57,6 +57,9 @@ except Exception:
     P = None
     HAS_JAX = False
     OPTIMIZATION_BACKEND = "numpy"
+    jit = jax.jit
+    lax = jax.lax
+    vmap = jax.vmap
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
