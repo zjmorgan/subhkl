@@ -167,6 +167,8 @@ cython_debug/
 .pdm-python
 *.h5
 
+.nfs*
+
 # Large test data stored on Zenodo
 tests/data/MANDI/mesolite/
 
