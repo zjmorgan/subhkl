@@ -199,9 +199,31 @@ except Exception:
             signal = _SignalShim()
             optimize = _OptimizeShim()
 
+        class _TreeShim:
+            @staticmethod
+            def map(f, *trees):
+                """A basic pure-Python/NumPy shim for jax.tree.map."""
+                if not trees:
+                    return None
+
+                first = trees[0]
+                if isinstance(first, (list, tuple)):
+                    return type(first)(
+                        jax.tree.map(f, *[t[i] for t in trees])
+                        for i in range(len(first))
+                    )
+                elif isinstance(first, dict):
+                    return {
+                        k: jax.tree.map(f, *[t[k] for t in trees])
+                        for k in first.keys()
+                    }
+                else:
+                    return f(*trees)
+
         lax = _LaxShim()
         nn = _NnShim()
         scipy = _ScipyShim()
+        tree = _TreeShim()
 
     jax = _JaxShim()
     jnp = np
