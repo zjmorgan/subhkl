@@ -488,7 +488,12 @@ class VectorizedObjective:
                 self.free_params_init = self.cell_init
 
         if goniometer_axes is not None:
-            self.gonio_axes = jnp.array(goniometer_axes)
+            axes = jnp.array(goniometer_axes)
+            if axes.ndim == 2 and axes.shape[1] == 3:
+                # Fallback for 3-component axes: add 1.0 orientation (CCW)
+                axes = jnp.concatenate([axes, jnp.ones((axes.shape[0], 1))], axis=1)
+            self.gonio_axes = axes
+
             angles = jnp.array(goniometer_angles)
             if angles.ndim == 2:
                 # Expecting (num_axes, num_runs). If (num_runs, num_axes), transpose.
