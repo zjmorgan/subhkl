@@ -272,7 +272,7 @@ def compute_metrics(
         # Convert to numpy arrays
         h = np.array(matched_h)
         k = np.array(matched_k)
-        l = np.array(matched_l)
+        l = np.array(matched_l)  # noqa: E741
         lam = np.array(matched_lam)
         xyz_det = np.array(matched_xyz)
         R_all = np.array(matched_R)
@@ -290,7 +290,7 @@ def compute_metrics(
                 "num_peaks": 0,
             }
 
-        h, k, l = h[mask], k[mask], l[mask]
+        h, k, l = h[mask], k[mask], l[mask]  # noqa: E741
         lam = lam[mask]
         xyz_det = xyz_det[mask]
         R_all = R_all[mask]
@@ -307,7 +307,7 @@ def compute_metrics(
             d_mask = d_vals >= d_min
             if np.sum(d_mask) == 0:
                 return {"error_message": f"No peaks found with d >= {d_min} A."}
-            h, k, l = h[d_mask], k[d_mask], l[d_mask]
+            h, k, l = h[d_mask], k[d_mask], l[d_mask]  # noqa: E741
             lam = lam[d_mask]
             xyz_det = xyz_det[d_mask]
             R_all = R_all[d_mask]

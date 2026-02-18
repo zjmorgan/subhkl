@@ -1006,13 +1006,13 @@ def peak_predictor(
 
         # Save Peaks
         # Structure: banks/{img_key}/...
-        for img_key, (i, j, h, k, miller_l, wl) in results_map.items():
+        for img_key, (i, j, h, k, l, wl) in results_map.items():  # noqa: E741
             grp = f.create_group(f"banks/{img_key}")
             grp.create_dataset("i", data=i)
             grp.create_dataset("j", data=j)
             grp.create_dataset("h", data=h)
             grp.create_dataset("k", data=k)
-            grp.create_dataset("l", data=miller_l)
+            grp.create_dataset("l", data=l)
             grp.create_dataset("wavelength", data=wl)
 
 

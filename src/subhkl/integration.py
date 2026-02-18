@@ -331,7 +331,7 @@ def _predict_single_bank(
     """
     # 1. Generate Reflections locally
     a, b, c, alpha, beta, gamma, space_group, d_min = unit_cell_params
-    h, k, miller_l = generate_reflections(
+    h, k, l = generate_reflections(  # noqa: E741
         a, b, c, alpha, beta, gamma, space_group, d_min
     )
 
@@ -340,7 +340,7 @@ def _predict_single_bank(
         detector=det,
         h=h,
         k=k,
-        l=miller_l,
+        l=l,
         RUB=RUB,
         wavelength_min=wavelength_min,
         wavelength_max=wavelength_max,
@@ -1133,7 +1133,7 @@ class Peaks:
         found_peaks_file=None,
         max_workers=None,
     ):
-        h, k, miller_l = [], [], []
+        h, k, l = [], [], []  # noqa: E741
         intensity, sigma = [], []
         tt, az = [], []
         wavelength = []
@@ -1324,7 +1324,7 @@ class Peaks:
                 if res:
                     h.extend(res["h"])
                     k.extend(res["k"])
-                    miller_l.extend(res["l"])
+                    l.extend(res["l"])
                     intensity.extend(res["intensity"])
                     sigma.extend(res["sigma"])
                     tt.extend(res["tt"])
@@ -1339,7 +1339,7 @@ class Peaks:
         return IntegrationResult(
             h,
             k,
-            miller_l,
+            l,
             intensity,
             sigma,
             tt,

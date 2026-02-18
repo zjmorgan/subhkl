@@ -608,9 +608,9 @@ class VectorizedObjective:
         r_h = jnp.arange(-h_max, h_max + 1)
         r_k = jnp.arange(-k_max, k_max + 1)
         r_l = jnp.arange(-l_max, l_max + 1)
-        miller_h, miller_k, miller_l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")
+        h, k, l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")  # noqa: E741
         hkl_pool = jnp.stack(
-            [miller_h.flatten(), miller_k.flatten(), miller_l.flatten()], axis=0
+            [h.flatten(), k.flatten(), l.flatten()], axis=0
         )
 
         # Apply Symmetry Mask to Pool
@@ -867,12 +867,12 @@ class VectorizedObjective:
             d_pred = 1.0 / jnp.sqrt(q_sq_pred + 1e-9)
             valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
 
-            miller_h, miller_k, miller_l = (
+            h, k, l = (  # noqa: E741
                 hkl_int[:, 0, :],
                 hkl_int[:, 1, :],
                 hkl_int[:, 2, :],
             )
-            is_allowed = self.is_allowed_jax(miller_h, miller_k, miller_l)
+            is_allowed = self.is_allowed_jax(h, k, l)
 
             # Combine masks
             final_mask = is_allowed & valid_res
@@ -967,12 +967,12 @@ class VectorizedObjective:
             valid_res = (d_est >= self.d_min) & (d_est <= self.d_max)
 
             # Symmetry Mask
-            miller_h, miller_k, miller_l = (
+            h, k, l = (  # noqa: E741
                 hkl_int[:, 0, :],
                 hkl_int[:, 1, :],
                 hkl_int[:, 2, :],
             )
-            is_allowed = self.is_allowed_jax(miller_h, miller_k, miller_l)
+            is_allowed = self.is_allowed_jax(h, k, l)
 
             # Combine all masks
             final_mask = is_allowed & valid_res
@@ -1048,12 +1048,12 @@ class VectorizedObjective:
             q_sq = jnp.sum(q_pred**2, axis=3)
             d_spacings = 1.0 / jnp.sqrt(q_sq + 1e-9)  # crystallographic convention
             valid_res = (d_spacings >= self.d_min) & (d_spacings <= self.d_max)
-            miller_h, miller_k, miller_l = (
+            h, k, l = (  # noqa: E741
                 hkl_cands[..., 0],
                 hkl_cands[..., 1],
                 hkl_cands[..., 2],
             )
-            valid_sym = self.is_allowed_jax(miller_h, miller_k, miller_l)
+            valid_sym = self.is_allowed_jax(h, k, l)
             valid_mask = valid_lamb & valid_res & valid_sym
             q_obs_opt = k_obs / jnp.where(lambda_opt == 0, 1.0, lambda_opt)[..., None]
             diff = q_obs_opt - q_pred
@@ -1293,7 +1293,7 @@ class VectorizedObjective:
 
         return score, jnp.exp(log_prob_any), best_hkl, best_lamb
 
-    def is_allowed_jax(self, h, k, miller_l):
+    def is_allowed_jax(self, h, k, l):  # noqa: E741
         """
         Robust symmetry check in JAX. Uses pre-computed mask for speed,
         and falls back to centring parity checks for out-of-bounds HKLs.
@@ -1301,40 +1301,40 @@ class VectorizedObjective:
         rh, rk, rl = self.mask_range_h, self.mask_range_k, self.mask_range_l
         idx_h = jnp.clip(h + rh, 0, 2 * rh).astype(jnp.int32)
         idx_k = jnp.clip(k + rk, 0, 2 * rk).astype(jnp.int32)
-        idx_l = jnp.clip(miller_l + rl, 0, 2 * rl).astype(jnp.int32)
+        idx_l = jnp.clip(l + rl, 0, 2 * rl).astype(jnp.int32)
 
         in_bounds = (
             (h >= -rh)
             & (h <= rh)
             & (k >= -rk)
             & (k <= rk)
-            & (miller_l >= -rl)
-            & (miller_l <= rl)
+            & (l >= -rl)
+            & (l <= rl)
         )
 
         # Parity checks for centring
         h_even = h % 2 == 0
         k_even = k % 2 == 0
-        l_even = miller_l % 2 == 0
+        l_even = l % 2 == 0
 
         if self.centering == "F":
             # All odd or all even
             allowed_out = (h_even == k_even) & (k_even == l_even)
         elif self.centering == "I":
             # h+k+l is even
-            allowed_out = (h + k + miller_l) % 2 == 0
+            allowed_out = (h + k + l) % 2 == 0
         elif self.centering == "A":
             # k+l is even
-            allowed_out = (k + miller_l) % 2 == 0
+            allowed_out = (k + l) % 2 == 0
         elif self.centering == "B":
             # h+l is even
-            allowed_out = (h + miller_l) % 2 == 0
+            allowed_out = (h + l) % 2 == 0
         elif self.centering == "C":
             # h+k is even
             allowed_out = (h + k) % 2 == 0
         elif self.centering == "R":
             # -h+k+l is divisible by 3
-            allowed_out = (-h + k + miller_l) % 3 == 0
+            allowed_out = (-h + k + l) % 3 == 0
         else:
             # P or other: Assume allowed unless we have a specific reason to reject
             allowed_out = True
