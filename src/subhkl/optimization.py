@@ -800,7 +800,7 @@ class VectorizedObjective:
         deg2rad = jnp.pi / 180.0
         for i in range(self.num_gonio_axes):
             axis_spec = self.gonio_axes[i]
-            direction = axis_spec[:3]
+            direction = axis_spec[0:3]
             sign = axis_spec[3]
             theta = sign * angles_deg[:, i, :] * deg2rad
             Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
