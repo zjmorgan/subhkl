@@ -21,7 +21,7 @@ def test_cosine_indexer_negative_score_repro():
     B = np.eye(3)
 
     # 1 obs
-    kf_ki_sample = np.array([[[1.0, 0.0, 0.0]]])
+    kf_ki_sample = np.array([[[1.0], [0.0], [0.0]]])
 
     # Weights
     weights = np.array([1.0])
