@@ -27,12 +27,23 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
 
     # Use 10 peaks per rotation for a strong signal
     # Use l=-2 or l=-3 to ensure wavelengths are in the 2-6 A range for this cell
-    hkls = np.array([
-        [1, 0, -2], [0, 1, -2], [1, 1, -2], [2, 0, -2], [0, 2, -2],
-        [1, 0, -3], [0, 1, -3], [1, 1, -3], [2, 1, -3], [1, 2, -3]
-    ])
-    
+    hkls = np.array(
+        [
+            [1, 0, -2],
+            [0, 1, -2],
+            [1, 1, -2],
+            [2, 0, -2],
+            [0, 2, -2],
+            [1, 0, -3],
+            [0, 1, -3],
+            [1, 1, -3],
+            [2, 1, -3],
+            [1, 2, -3],
+        ]
+    )
+
     from subhkl.optimization import FindUB
+
     fu_helper = FindUB()
     fu_helper.a, fu_helper.b, fu_helper.c = a, b, c
     fu_helper.alpha, fu_helper.beta, fu_helper.gamma = alpha, beta, gamma
@@ -48,22 +59,24 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
         for hkl in hkls:
             # Reciprocal lattice vector in lab frame (units 1/A, no 2pi)
             q_lab = R @ B @ hkl
-            
+
             # Use explicit 2pi logic for Q
             Q = 2.0 * np.pi * q_lab
             Q_sq = np.sum(Q**2)
-            
+
             # Generalized Laue condition: lambda = -4pi * (ki_hat . Q) / Q^2
             # (Matches |ki + Q| = |ki| with |ki| = 2pi/lambda)
             lamb_val = -4.0 * np.pi * np.dot(ki_hat, Q) / (Q_sq + 1e-9)
-            
+
             # Scattered beam unit vector: kf_hat = (Q + ki) / |ki|
             # kf_hat = (lambda / 2pi) * Q + ki_hat
             kf_hat = (lamb_val / (2.0 * np.pi)) * Q + ki_hat
-            
+
             xyz.append(kf_hat)
             run_indices.append(0 if i < 2 else 1)
-            thetas_expanded.append(lamb_val) # Misleading name, but we just need a list of same len
+            thetas_expanded.append(
+                lamb_val
+            )  # Misleading name, but we just need a list of same len
 
     xyz = np.array(xyz)
     run_indices = np.array(run_indices)
