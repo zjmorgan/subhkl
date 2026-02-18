@@ -684,10 +684,12 @@ class VectorizedObjective:
             cell_params_norm = x[:, idx : idx + n_lat]
             B = self.compute_B_jax(cell_params_norm)
             idx += n_lat
-            UB = jnp.einsum("sij,sjk->sik", U, B)
+            # Broadcase UB calculation: (S, 3, 3) @ (S, 3, 3) -> (S, 3, 3)
+            UB = jnp.matmul(U, B)
         else:
             B = self.B
-            UB = jnp.einsum("sij,jk->sik", U, B)
+            # (S, 3, 3) @ (3, 3) -> (S, 3, 3)
+            UB = jnp.matmul(U, B[None, ...])
 
         if self.refine_sample:
             s_norm = x[:, idx : idx + 3]
@@ -811,7 +813,8 @@ class VectorizedObjective:
             Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
             # Mantid SetGoniometer: R = R0 @ R1 @ R2
             # Each Ri should be multiplied on the RIGHT of the current accumulated matrix.
-            R = jnp.einsum("smij,smjk->smik", R, Ri)
+            # Batched matmul: (S, M, 3, 3) @ (S, M, 3, 3) -> (S, M, 3, 3)
+            R = jnp.matmul(R, Ri)
         return R
 
     def orientation_U_jax(self, param):
@@ -822,7 +825,8 @@ class VectorizedObjective:
         self, ub_mat, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002
     ):
         ub_inv = jnp.linalg.inv(ub_mat)
-        v = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
+        # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+        v = jnp.matmul(ub_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
@@ -844,7 +848,8 @@ class VectorizedObjective:
             lamda_cand = max_v_val / n_safe
             hkl_float = v / lamda_cand[:, None, :]
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            q_int = jnp.einsum("sij,sjm->sim", ub_mat, hkl_int)
+            # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+            q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
@@ -905,7 +910,8 @@ class VectorizedObjective:
         self, ub_mat, kf_ki_sample, *, k_sq_override=None, tolerance_rad=0.002
     ):
         ub_inv = jnp.linalg.inv(ub_mat)
-        v = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
+        # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+        v = jnp.matmul(ub_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
@@ -931,7 +937,8 @@ class VectorizedObjective:
             # Instead of just using lamda_cand, we find the lambda that best
             # satisfies the Laue condition for the nearest integer HKL.
             hkl_int = jnp.round(v / lamda_cand[:, None, :]).astype(jnp.int32)
-            q_int = jnp.einsum("sij,sjm->sim", ub_mat, hkl_int)
+            # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+            q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             k_sq = self.k_sq_init[None, :]
@@ -1020,8 +1027,10 @@ class VectorizedObjective:
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
         k_norm = jnp.sqrt(k_sq)
         ub_inv = jnp.linalg.inv(ub_mat)
-        hkl_float = jnp.einsum("sij,sjm->sim", ub_inv, kf_ki_sample)
-        hkl_cart_approx = jnp.einsum("ij,sjm->sim", self.B, hkl_float)
+        # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+        hkl_float = jnp.matmul(ub_inv, kf_ki_sample)
+        # Broadcasted matmul: (3, 3) @ (S, 3, N) -> (S, 3, N)
+        hkl_cart_approx = jnp.matmul(self.B[None, ...], hkl_float)
         phi_obs = jnp.arctan2(hkl_cart_approx[:, 1, :], hkl_cart_approx[:, 0, :])
         idx_centers = jnp.searchsorted(self.pool_phi_sorted, phi_obs)
         half_win = self.search_window_size // 2
@@ -1043,7 +1052,9 @@ class VectorizedObjective:
             gather_idx = idx_centers[..., None] + batch_offsets[None, None, :]
             pool_T = self.pool_hkl_sorted.T
             hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode="wrap")
-            q_pred = jnp.einsum("sij,smwj->smwi", ub_mat, hkl_cands)
+            # Broadcasted matmul: (S, 3, 3) @ (S, M, W, 3, 1) -> (S, M, W, 3, 1)
+            # hkl_cands is (S, M, W, 3)
+            q_pred = jnp.matmul(ub_mat[:, None, None, ...], hkl_cands[..., None]).squeeze(-1)
             k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
             k_dot_q = jnp.sum(k_obs * q_pred, axis=3)
             lambda_opt = k_sq[..., None] / jnp.where(
@@ -1119,7 +1130,8 @@ class VectorizedObjective:
 
         # Re-project Unit Obs into Crystal Frame: (Batch, 3, N_obs) @ (Batch, 3, 3) -> (Batch, 3, N_obs)
         # We need r_obs_unit_crystal = U^T @ r_obs_unit_lab
-        r_obs_proj_unit = jnp.einsum("sji,sjn->sin", ub_mat, r_obs_unit)
+        # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
+        r_obs_proj_unit = jnp.matmul(ub_mat.transpose(0, 2, 1), r_obs_unit)
 
         k_sq_obs = (
             k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
@@ -1155,7 +1167,8 @@ class VectorizedObjective:
             # dot_raw = (r_obs @ U) . h
             # r_obs_proj_unit is (Batch, 3, N_obs), hkl_chunk is (3, Chunk)
             # Result (Batch, N_obs, Chunk)
-            dot_raw = jnp.einsum("sin,ik->snk", r_obs_proj_unit, hkl_chunk)
+            # (S, 3, N).T @ (3, C) -> (S, N, C)
+            dot_raw = jnp.matmul(r_obs_proj_unit.transpose(0, 2, 1), hkl_chunk)
 
             # cosine = dot_raw / |UB h|
 
@@ -1215,7 +1228,9 @@ class VectorizedObjective:
         # 3. Log-Kernel with Soft Penalties
         # Gather HKL vectors and re-calculate full geometry for top-k
         hkl_selected = jnp.take(hkl_pool_padded.T, top_idxs, axis=0)
-        q_selected = jnp.einsum("sij,snkj->snki", ub_mat, hkl_selected)
+        # ub_mat: (S, 3, 3), hkl_selected: (S, N, K, 3)
+        # We want (S, N, K, 3)
+        q_selected = jnp.matmul(ub_mat[:, None, None, ...], hkl_selected[..., None]).squeeze(-1)
         q_sq_selected = jnp.sum(q_selected**2, axis=3)
         norm_q_selected = jnp.sqrt(q_sq_selected + 1e-9)
 
@@ -1358,7 +1373,15 @@ class VectorizedObjective:
     @partial(jax.jit, static_argnames="self")
     def get_results(self, x):
         """Full physical model and indexing pipeline for a batch of solutions x."""
-        UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x)
+        # --- WORKAROUND for JAX/ROCm S=1 bug ---
+        # On some AMD backends (e.g. MI200), JITted functions with lax.scan
+        # can produce incorrect results when the leading batch dimension is exactly 1.
+        # We force a minimum batch size of 2 by duplicating the input if necessary.
+        original_S = x.shape[0]
+        pad_size = max(0, 2 - original_S)
+        x_pad = jnp.pad(x, ((0, pad_size), (0, 0)), mode="edge")
+
+        UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x_pad)
 
         # Determine current rotations (Lab -> Sample)
         R_curr = R  # (S, N_runs, 3, 3) or None
@@ -1386,17 +1409,18 @@ class VectorizedObjective:
             # depends on the goniometer rotation R and the refined sample offset.
             if R_per_peak is not None:
                 if R_per_peak.ndim == 4:
-                    # (S, N, 3, 3) @ (S, 3) -> (S, N, 3)
-                    # s_lab = R * s_sample
-                    s_lab = jnp.einsum("snij,sj->sni", R_per_peak, sample_total)
+                    # (S, N, 3, 3) @ (S, 3, 1) -> (S, N, 3, 1)
+                    s_lab = jnp.matmul(R_per_peak, sample_total[:, None, :, None]).squeeze(-1)
                     s = s_lab.transpose(0, 2, 1)  # (S, 3, N)
                 elif R_per_peak.ndim == 3:
-                    # (N, 3, 3) @ (S, 3) -> (S, N, 3)
-                    s_lab = jnp.einsum("nij,sj->sni", R_per_peak, sample_total)
+                    # Broadcasted Matmul: (1, N, 3, 3) @ (S, 1, 3, 1) -> (S, N, 3, 1)
+                    s_lab = jnp.matmul(
+                        R_per_peak[None, ...], sample_total[:, None, :, None]
+                    ).squeeze(-1)
                     s = s_lab.transpose(0, 2, 1)
                 else:
-                    # (3, 3) @ (S, 3) -> (S, 3)
-                    s_lab = jnp.einsum("ij,sj->si", R_per_peak, sample_total)
+                    # (3, 3) @ (S, 3, 1) -> (S, 3, 1)
+                    s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, :, None]).squeeze(-1)
                     s = s_lab[:, :, None]
             else:
                 s = sample_total[:, :, None]
@@ -1417,40 +1441,42 @@ class VectorizedObjective:
         # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
         # ONLY if input is NOT already rotated.
         if R_per_peak is not None and not self.input_is_rotated:
-            # q_lab is (S, 3, N). We want (S, N, 3) for matrix multiplication
-            q_lab_T = q_lab.transpose(0, 2, 1)
+            # q_lab is (S, 3, N). We want (S, N, 3, 1) for matmul
+            q_lab_vec = q_lab.transpose(0, 2, 1)[..., None]
             if R_per_peak.ndim == 4:
-                # (S, N, 3, 3) and (S, N, 3)
-                # q_sample_i = R_ji * q_lab_j (Contracts row 'j' of R with lab vector)
-                # This is equivalent to q_sample = R.T @ q_lab
-                kf_ki_vec_T = jnp.einsum("snji,snj->sni", R_per_peak, q_lab_T)
+                # (S, N, 3, 3) and (S, N, 3, 1)
+                # q_sample = R.T @ q_lab
+                RT = R_per_peak.transpose(0, 1, 3, 2)
+                kf_ki_vec_T = jnp.matmul(RT, q_lab_vec).squeeze(-1)
             elif R_per_peak.ndim == 3:
-                # (N, 3, 3) and (S, N, 3)
-                kf_ki_vec_T = jnp.einsum("nji,snj->sni", R_per_peak, q_lab_T)
+                # (1, N, 3, 3) and (S, N, 3, 1)
+                RT = R_per_peak.transpose(0, 2, 1)[None, ...]
+                kf_ki_vec_T = jnp.matmul(RT, q_lab_vec).squeeze(-1)
             else:
-                # (3, 3) and (S, N, 3)
-                kf_ki_vec_T = jnp.einsum("ji,snj->sni", R_per_peak, q_lab_T)
+                # (1, 3, 3) and (S, N, 3, 1)
+                RT = R_per_peak.T[None, None, ...]
+                kf_ki_vec_T = jnp.matmul(RT, q_lab_vec).squeeze(-1)
             kf_ki_vec = kf_ki_vec_T.transpose(0, 2, 1)
         else:
             kf_ki_vec = q_lab
 
         if self.loss_method == "forward":
-            return self.indexer_dynamic_binary_jax(
+            res = self.indexer_dynamic_binary_jax(
                 UB,
                 kf_ki_vec,
                 k_sq_override=k_sq_dyn,
                 tolerance_rad=self.tolerance_rad,
                 window_batch_size=self.window_batch_size,
             )
-        if self.loss_method == "cosine":
-            return self.indexer_dynamic_cosine_aniso_jax(
+        elif self.loss_method == "cosine":
+            res = self.indexer_dynamic_cosine_aniso_jax(
                 UB,
                 kf_ki_vec,
                 k_sq_override=k_sq_dyn,
                 tolerance_rad=self.tolerance_rad,
             )
-        if self.loss_method == "sinkhorn":
-            return self.indexer_sinkhorn_jax(
+        elif self.loss_method == "sinkhorn":
+            res = self.indexer_sinkhorn_jax(
                 UB,
                 kf_ki_vec,
                 k_sq_override=k_sq_dyn,
@@ -1459,12 +1485,16 @@ class VectorizedObjective:
                 num_iters=self.num_iters,
                 top_k=self.top_k,
             )
-        return self.indexer_dynamic_soft_jax(
-            UB,
-            kf_ki_vec,
-            k_sq_override=k_sq_dyn,
-            tolerance_rad=self.tolerance_rad,
-        )
+        else:
+            res = self.indexer_dynamic_soft_jax(
+                UB,
+                kf_ki_vec,
+                k_sq_override=k_sq_dyn,
+                tolerance_rad=self.tolerance_rad,
+            )
+
+        # Slice results back to original batch size (Workaround cleanup)
+        return jax.tree.map(lambda arr: arr[:original_S] if hasattr(arr, "shape") and arr.ndim > 0 else arr, res)
 
     @partial(jax.jit, static_argnames="self")
     def __call__(self, x):
