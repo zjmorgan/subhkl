@@ -33,6 +33,9 @@ from subhkl.utils import (
     jscipy_linalg,
 )
 
+if HAS_JAX:
+    jax.config.update("jax_enable_x64", True)
+
 __all__ = ["OPTIMIZATION_BACKEND"]
 
 try:
@@ -906,13 +909,14 @@ class VectorizedObjective:
     def indexer_dynamic_cosine_aniso_jax(
         self, ub_mat, kf_ki_sample, *, k_sq_override=None, tolerance_rad=0.002
     ):
-        ub_inv = jnp.linalg.inv(ub_mat)
-        # Batched matmul: (S, 3, 3) @ (S, 3, N) -> (S, 3, N)
-        v = jnp.matmul(ub_inv, kf_ki_sample)
+        # Use solve for better precision than inv + matmul
+        v = jnp.linalg.solve(ub_mat, kf_ki_sample)
         abs_v = jnp.abs(v)
         max_v_val = jnp.max(abs_v, axis=1)
         n_start = max_v_val / self.wl_max_val
         start_int = jnp.ceil(n_start)
+
+        k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
 
         # kappa for von Mises-Fisher-like concentration in HKL space
         # Uniform angular tolerance: sigma_h approx tolerance_rad * h.
@@ -938,7 +942,6 @@ class VectorizedObjective:
             q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            k_sq = self.k_sq_init[None, :]
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
 
             # Recalculate HKL float at the optimal wavelength for the cosine kernel
@@ -949,24 +952,22 @@ class VectorizedObjective:
             # to represent a uniform angular tolerance (sigma_h approx tolerance_rad * |h|).
             # This prevents the 'delta function' behavior for components near zero.
             hkl_mag_sq = jnp.sum(hkl_float**2, axis=1, keepdims=True)
-            hkl_mag_sq = jnp.maximum(hkl_mag_sq, 1e-6)
-
-            hkl_mag_sq_safe = jnp.maximum(hkl_mag_sq, 1e-6)
+            # Use 1.0 as floor to ensure low-order reflections don't have infinite precision
+            hkl_mag_sq_safe = jnp.maximum(hkl_mag_sq, 1.0)
 
             kappa_scaled = 1.0 / (
                 hkl_mag_sq_safe * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
             )
-            cos_diff = jnp.cos(2 * jnp.pi * hkl_float) - 1.0
-            log_p_narrow = jnp.sum(kappa_scaled * cos_diff, axis=1)
+            # Use stable sin^2 form: cos(2pi x) - 1 = -2 sin^2(pi x)
+            cos_diff_stable = -2.0 * jnp.sin(jnp.pi * hkl_float)**2
+            log_p_narrow = jnp.sum(kappa_scaled * cos_diff_stable, axis=1)
 
             kappa_wide_scaled = 1.0 / (
                 hkl_mag_sq_safe * jnp.deg2rad(5.0) ** 2 * 4 * jnp.pi**2
             )
-            log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff, axis=1)
+            log_p_wide = jnp.sum(kappa_wide_scaled * cos_diff_stable, axis=1)
 
             # Combine via LogSumExp with 1% weight on wide kernel
-            # This prevents double-counting and ensures the wide kernel
-            # doesn't drown out the high-precision narrow kernel.
             log_prob = jax.nn.logsumexp(
                 jnp.stack([log_p_narrow, log_p_wide - 4.605]), axis=0
             )
@@ -1004,7 +1005,9 @@ class VectorizedObjective:
         final_carry, _ = lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
-        _, log_prob_max, best_hkl, best_lamb = final_carry
+        accum_probs, log_prob_max, best_hkl, best_lamb = final_carry
+        # score = -jnp.sum(self.weights * jnp.exp(accum_probs), axis=1)
+        # Use max probability per peak for the score
         score = -jnp.sum(self.weights * jnp.exp(log_prob_max), axis=1)
         return (
             score,
@@ -1771,6 +1774,7 @@ class FindUB:
         self,
         population_size: int = 1000,
         num_generations: int = 100,
+        n_runs: int = 1,
         seed: int = 0,
         tolerance_deg: float = 0.1,
         softness: float = 0.01,
@@ -1921,7 +1925,7 @@ class FindUB:
                 x0 = x0[:num_dims]
 
         # 4. Run Optimization
-        print("\n--- Starting SciPy Differential Evolution ---")
+        print(f"\n--- Starting SciPy Differential Evolution ({n_runs} runs) ---")
         print(f"Population: {population_size}, Generations: {num_generations}")
 
         def objective_scipy(x):
@@ -1931,20 +1935,32 @@ class FindUB:
             # SciPy's vectorized mode passes (dims, members)
             return np.array(objective_v(x.T))
 
-        result = differential_evolution(
-            objective_scipy,
-            bounds,
-            maxiter=num_generations,
-            popsize=max(1, population_size // num_dims),
-            seed=seed,
-            x0=x0,
-            vectorized=True,
-            atol=0,
-            tol=0.01,
-        )
+        best_overall_fun = np.inf
+        best_overall_x = None
+
+        for i_run in range(n_runs):
+            curr_seed = seed + i_run
+            if n_runs > 1:
+                print(f"Run {i_run + 1}/{n_runs} (Seed: {curr_seed})...")
+
+            result = differential_evolution(
+                objective_scipy,
+                bounds,
+                maxiter=num_generations,
+                popsize=max(1, population_size // num_dims),
+                seed=curr_seed,
+                x0=x0 if i_run == 0 else None,
+                vectorized=True,
+                atol=0,
+                tol=0.01,
+            )
+
+            if result.fun < best_overall_fun:
+                best_overall_fun = result.fun
+                best_overall_x = result.x
 
         print("\n--- Optimization Complete ---")
-        print(f"Best DE score: {-result.fun:.2f}")
+        print(f"Best DE score: {-best_overall_fun:.2f}")
 
         # --- Local Refinement (BFGS) ---
         print("Polishing solution with BFGS refinement...")
@@ -1952,18 +1968,25 @@ class FindUB:
 
         res_ref = scipy_minimize(
             objective_scipy,
-            result.x,
+            best_overall_x,
             method="L-BFGS-B",
             bounds=bounds,
             options={"maxiter": 50},
         )
 
         if res_ref.success:
-            print(f"Refinement successful. Final score: {-res_ref.fun:.2f}")
-            self.x = res_ref.x
+            if res_ref.fun < best_overall_fun:
+                print(f"Refinement successful. Final score: {-res_ref.fun:.2f}")
+                self.x = res_ref.x
+            else:
+                print(
+                    f"Refinement increased cost from {best_overall_fun:.4f} to {res_ref.fun:.4f}. "
+                    "Reverting to best DE solution."
+                )
+                self.x = best_overall_x
         else:
-            print(f"Refinement did not converge: {res_ref.message}")
-            self.x = result.x
+            print(f"Refinement did not converge: {res_ref.message}. Keeping best DE solution.")
+            self.x = best_overall_x
 
         # 5. Store Results
         best_member = self.x[None, :]
@@ -2191,6 +2214,7 @@ class FindUB:
             return self._minimize_scipy(
                 population_size=population_size,
                 num_generations=num_generations,
+                n_runs=n_runs,
                 seed=seed,
                 tolerance_deg=tolerance_deg,
                 softness=softness,
@@ -2584,10 +2608,17 @@ class FindUB:
         )
 
         if res_ref.success:
-            print(f"Refinement successful. Final cost: {res_ref.fun:.4f}")
-            best_overall_member = res_ref.x
+            if res_ref.fun < best_overall_fitness:
+                print(f"Refinement successful. Final cost: {res_ref.fun:.4f}")
+                best_overall_member = res_ref.x
+                best_overall_fitness = res_ref.fun
+            else:
+                print(
+                    f"Refinement increased cost from {best_overall_fitness:.4f} to {res_ref.fun:.4f}. "
+                    "Reverting to best DE solution."
+                )
         else:
-            print(f"Refinement did not converge: {res_ref.message}")
+            print(f"Refinement did not converge: {res_ref.message}. Keeping best DE solution.")
 
         print("\n--- Optimization Complete ---")
         if loss_method == "sinkhorn":
