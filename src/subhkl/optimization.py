@@ -609,9 +609,7 @@ class VectorizedObjective:
         r_k = jnp.arange(-k_max, k_max + 1)
         r_l = jnp.arange(-l_max, l_max + 1)
         h, k, l = jnp.meshgrid(r_h, r_k, r_l, indexing="ij")  # noqa: E741
-        hkl_pool = jnp.stack(
-            [h.flatten(), k.flatten(), l.flatten()], axis=0
-        )
+        hkl_pool = jnp.stack([h.flatten(), k.flatten(), l.flatten()], axis=0)
 
         # Apply Symmetry Mask to Pool
         mask_cpu = generate_hkl_mask(h_max, k_max, l_max, self.space_group)
@@ -1304,12 +1302,7 @@ class VectorizedObjective:
         idx_l = jnp.clip(l + rl, 0, 2 * rl).astype(jnp.int32)
 
         in_bounds = (
-            (h >= -rh)
-            & (h <= rh)
-            & (k >= -rk)
-            & (k <= rk)
-            & (l >= -rl)
-            & (l <= rl)
+            (h >= -rh) & (h <= rh) & (k >= -rk) & (k <= rk) & (l >= -rl) & (l <= rl)
         )
 
         # Parity checks for centring
