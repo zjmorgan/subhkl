@@ -959,7 +959,7 @@ class VectorizedObjective:
                 hkl_mag_sq_safe * (tolerance_rad + 1e-9) ** 2 * 4 * jnp.pi**2
             )
             # Use stable sin^2 form: cos(2pi x) - 1 = -2 sin^2(pi x)
-            cos_diff_stable = -2.0 * jnp.sin(jnp.pi * hkl_float)**2
+            cos_diff_stable = -2.0 * jnp.sin(jnp.pi * hkl_float) ** 2
             log_p_narrow = jnp.sum(kappa_scaled * cos_diff_stable, axis=1)
 
             kappa_wide_scaled = 1.0 / (
@@ -1985,7 +1985,9 @@ class FindUB:
                 )
                 self.x = best_overall_x
         else:
-            print(f"Refinement did not converge: {res_ref.message}. Keeping best DE solution.")
+            print(
+                f"Refinement did not converge: {res_ref.message}. Keeping best DE solution."
+            )
             self.x = best_overall_x
 
         # 5. Store Results
@@ -2618,7 +2620,9 @@ class FindUB:
                     "Reverting to best DE solution."
                 )
         else:
-            print(f"Refinement did not converge: {res_ref.message}. Keeping best DE solution.")
+            print(
+                f"Refinement did not converge: {res_ref.message}. Keeping best DE solution."
+            )
 
         print("\n--- Optimization Complete ---")
         if loss_method == "sinkhorn":
