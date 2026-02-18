@@ -1,12 +1,12 @@
 import sys
-import numpy as np
-import h5py
 
 import gemmi
+import h5py
+import numpy as np
 
 
 class BaseConcatenateMerger:
-    def __init__(self, h5_files, copy_keys, merge_keys):
+    def __init__(self, h5_files, copy_keys, merge_keys, per_file_keys=None):
         """
         Merges datasets by concatenation
 
@@ -18,10 +18,13 @@ class BaseConcatenateMerger:
             List of keys in .h5 files to copy once
         merge_keys : list[str]
             List of keys in .h5 files to merge by concatenation
+        per_file_keys : list[str]
+            List of keys that are per-run/per-file (shape [N_runs, ...])
         """
-        self.h5_files = h5_files
+        self.h5_files = sorted(list(set(h5_files)))
         self.copy_keys = copy_keys
         self.merge_keys = merge_keys
+        self.per_file_keys = per_file_keys if per_file_keys is not None else []
 
     def merge(self, output_filename):
         """
@@ -34,6 +37,7 @@ class BaseConcatenateMerger:
         """
 
         total_peaks = 0
+        total_runs = 0
         # Determine total peaks AND find a valid template file
         typical_file_path = self.h5_files[0]
         found_valid_template = False
@@ -42,6 +46,20 @@ class BaseConcatenateMerger:
             with h5py.File(file, "r") as f_in:
                 num = len(f_in[self.merge_keys[0]])
                 total_peaks += num
+
+                num_runs_in_file = 0
+                if self.per_file_keys:
+                    # Assume each file is ONE run for now, OR check length of first per_file_key
+                    if self.per_file_keys[0] in f_in:
+                        num_runs_in_file = len(f_in[self.per_file_keys[0]])
+
+                if num_runs_in_file == 0:
+                    if "peaks/run_index" in f_in and len(f_in["peaks/run_index"]) > 0:
+                        num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                    else:
+                        num_runs_in_file = 1
+
+                total_runs += num_runs_in_file
 
                 # Use the first file with data as the template to ensure
                 # multidimensional shapes (like 3x3 matrices) are preserved.
@@ -62,23 +80,64 @@ class BaseConcatenateMerger:
                     dtype = f_typical[merge_key].dtype
                     f_out.create_dataset(merge_key, shape, dtype)
 
+                for per_file_key in self.per_file_keys:
+                    if per_file_key in f_typical:
+                        shape = (total_runs,) + f_typical[per_file_key].shape[1:]
+                        dtype = f_typical[per_file_key].dtype
+                        f_out.create_dataset(per_file_key, shape, dtype)
+
             offset = 0
+            run_offset = 0
             f_out["files"] = np.array(
                 list(map(lambda s: s.encode("utf-8"), self.h5_files))
             )
             f_out.create_dataset("file_offsets", (len(self.h5_files),), dtype=np.int64)
+
             for i_file, indexed_file in enumerate(self.h5_files):
                 with h5py.File(indexed_file, "r") as f_in:
                     num_items = len(f_in[self.merge_keys[0]])
                     peak_range = slice(offset, offset + num_items)
                     f_out["file_offsets"][i_file] = offset
+
+                    # 1. Merge per-peak keys
                     for merge_key in self.merge_keys:
                         if merge_key in f_in:
                             # Only copy if there is data to avoid shape mismatch on empty files
                             if num_items > 0:
-                                f_out[merge_key][peak_range] = np.array(f_in[merge_key])
+                                data = np.array(f_in[merge_key])
+                                # Increment run_index or image_index if it's per-file local
+                                if (
+                                    merge_key == "peaks/run_index"
+                                    or merge_key == "peaks/image_index"
+                                ):
+                                    # We assign a global run index based on the running offset.
+                                    # This ensures indices from multiple files do not collide.
+                                    data += run_offset
+
+                                f_out[merge_key][peak_range] = data
+                        elif num_items > 0 and merge_key == "peaks/run_index":
+                            # Fallback: if no run_index exists in input, we assign global run offset
+                            f_out["peaks/run_index"][peak_range] = run_offset
+
+                    # 2. Merge per-file/run keys
+                    num_runs_in_file = 0
+                    if self.per_file_keys:
+                        for per_file_key in self.per_file_keys:
+                            if per_file_key in f_in:
+                                data = np.array(f_in[per_file_key])
+                                n_r = len(data)
+                                num_runs_in_file = max(num_runs_in_file, n_r)
+                                run_range = slice(run_offset, run_offset + n_r)
+                                f_out[per_file_key][run_range] = data
+
+                    if num_runs_in_file == 0 and num_items > 0:
+                        if "peaks/run_index" in f_in:
+                            num_runs_in_file = int(np.max(f_in["peaks/run_index"]) + 1)
+                        else:
+                            num_runs_in_file = 1
 
                     offset += num_items
+                    run_offset += num_runs_in_file
 
 
 class FinderConcatenateMerger(BaseConcatenateMerger):
@@ -86,8 +145,6 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
         merge_keys = [
             "wavelength_mins",
             "wavelength_maxes",
-            "goniometer/R",
-            "goniometer/angles",
             "peaks/two_theta",
             "peaks/azimuthal",
             "peaks/intensity",
@@ -95,10 +152,14 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
             "peaks/radius",  # Added radius to merge keys
             "peaks/xyz",
             "bank",
+            "peaks/image_index",
             "peaks/run_index",
+            "goniometer/R",
+            "goniometer/angles",
         ]
+        per_file_keys = []
         copy_keys = ["goniometer/axes", "goniometer/names"]
-        super().__init__(h5_files, copy_keys, merge_keys)
+        super().__init__(h5_files, copy_keys, merge_keys, per_file_keys=per_file_keys)
 
 
 class MTZExporter:
@@ -139,7 +200,10 @@ class MTZExporter:
         mtz = gemmi.Mtz(with_base=True)
         mtz.set_logging(sys.stdout)
 
-        mtz.spacegroup = gemmi.find_spacegroup_by_name(self.space_group)
+        sg = gemmi.find_spacegroup_by_name(self.space_group)
+        if sg is None:
+            raise ValueError(f"Could not find space group: {self.space_group}")
+        mtz.spacegroup = sg
 
         unit_cell = gemmi.UnitCell(
             self.a, self.b, self.c, self.alpha, self.beta, self.gamma
@@ -182,7 +246,19 @@ class MTZExporter:
 
             if self.f is not None:
                 f, f_sigma = self.f[i], self.f_sigma[i]
-                row = [h, k, l, intensity, sigma, f, f_sigma, wl, theta, phi, run]
+                row = [
+                    h,
+                    k,
+                    l,
+                    intensity,
+                    sigma,
+                    f,
+                    f_sigma,
+                    wl,
+                    theta,
+                    phi,
+                    run,
+                ]
             else:
                 row = [h, k, l, intensity, sigma, wl, theta, phi, run]
 

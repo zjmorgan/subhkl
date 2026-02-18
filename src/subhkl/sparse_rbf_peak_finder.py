@@ -1,10 +1,20 @@
-import numpy as np
 from functools import partial
+
+import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
 # Import JAX with fallback from utils (centralized)
-from subhkl.utils import jax, jnp, jit, vmap, lax, HAS_JAX
+from subhkl.utils import (
+    HAS_JAX,
+    jax,
+    jit,
+    jnp,
+    jnp_update_add,
+    jnp_update_set,
+    lax,
+    vmap,
+)
 
 if HAS_JAX:
     import jax.scipy.optimize
@@ -165,7 +175,7 @@ class SparseRBFPeakFinder:
             is_strong = best_score > self.alpha
             new_peak = jnp.where(is_strong, new_peak, jnp.zeros(4))
 
-            params = params.at[idx].set(new_peak)
+            params = jnp_update_set(params, idx, new_peak)
 
             def run_opt(p):
                 p_raw = self._to_unconstrained(p, *bounds)
@@ -200,8 +210,12 @@ class SparseRBFPeakFinder:
         self, window_with_halo, seeds, Win_H, Win_W, Halo_P, Refine_P
     ):
         seeds_halo_shifted = seeds.copy()
-        seeds_halo_shifted = seeds_halo_shifted.at[:, 1].add(Halo_P)
-        seeds_halo_shifted = seeds_halo_shifted.at[:, 2].add(Halo_P)
+        seeds_halo_shifted = jnp_update_add(
+            seeds_halo_shifted, (slice(None), 1), Halo_P
+        )
+        seeds_halo_shifted = jnp_update_add(
+            seeds_halo_shifted, (slice(None), 2), Halo_P
+        )
 
         half_p = Refine_P // 2
 
@@ -221,8 +235,8 @@ class SparseRBFPeakFinder:
             shift_r = (r_c - half_p) - Halo_P
             shift_c = (c_c - half_p) - Halo_P
 
-            res = res.at[:, 1].add(shift_r)
-            res = res.at[:, 2].add(shift_c)
+            res = jnp_update_add(res, (slice(None), 1), shift_r)
+            res = jnp_update_add(res, (slice(None), 2), shift_c)
 
             # Filter invalid results (weak or diverged)
             # We use the intensity check here; full Besov check happens in Merge
@@ -254,7 +268,8 @@ class SparseRBFPeakFinder:
 
         PAD_GLOBAL = 32
         img_jax_padded = jnp.pad(
-            img_jax, ((0, 0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL))
+            img_jax,
+            ((0, 0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)),
         )
 
         current_peaks = [np.zeros((0, 4)) for _ in range(B)]
@@ -324,7 +339,9 @@ class SparseRBFPeakFinder:
                     for i in range(0, total_wins_all, chunk_size):
                         chunk_coords = window_coords_arr[i : i + chunk_size]
                         c_win = extract_chunk_exact(
-                            chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2]
+                            chunk_coords[:, 0],
+                            chunk_coords[:, 1],
+                            chunk_coords[:, 2],
                         )
 
                         res = solver(c_win)
@@ -390,7 +407,9 @@ class SparseRBFPeakFinder:
                                 chunk_seeds[k, : len(seeds_local), :] = seeds_local
 
                         c_win_halo = extract_chunk_with_halo(
-                            chunk_coords[:, 0], chunk_coords[:, 1], chunk_coords[:, 2]
+                            chunk_coords[:, 0],
+                            chunk_coords[:, 1],
+                            chunk_coords[:, 2],
                         )
                         res = solver(c_win_halo, jnp.array(chunk_seeds))
                         res.block_until_ready()  # Ensure accurate ETA

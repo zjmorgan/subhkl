@@ -1,7 +1,9 @@
+import typing
+
 import numpy as np
 import numpy.typing as npt
-import typing
 import scipy.linalg
+
 from subhkl.spacegroup import is_systematically_absent
 
 if typing.TYPE_CHECKING:
@@ -15,11 +17,14 @@ try:
     import jax
     import jax.numpy as jnp
     import jax.scipy.linalg as jscipy_linalg
-    from evosax.algorithms import DifferentialEvolution, PSO, CMA_ES
-    from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-    from jax import jit, vmap, lax
     import jax.scipy.optimize
     import jax.scipy.signal
+    from jax import jit as jit
+    from jax import vmap as vmap
+    from jax import lax as lax
+    from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
+    from jax.sharding import Mesh, NamedSharding
+    from jax.sharding import PartitionSpec as P
 
     HAS_JAX = True
     OPTIMIZATION_BACKEND = "jax"
@@ -36,24 +41,251 @@ except Exception:
                 return lambda fn: fn
             return f
 
+        @staticmethod
+        def vmap(fun, in_axes=0, out_axes=0):
+            """A basic pure-Python/NumPy shim for jax.vmap."""
+
+            def batched_fun(*args):
+                # Normalize in_axes to a tuple so it pairs with args
+                axes = (
+                    in_axes
+                    if isinstance(in_axes, (tuple, list))
+                    else (in_axes,) * len(args)
+                )
+
+                # Determine the batch size by looking at the first mapped argument
+                batch_size = None
+                for arg, axis in zip(args, axes):
+                    if axis is not None:
+                        batch_size = arg.shape[axis]
+                        break
+
+                # If no axes are mapped, just return the standard function
+                if batch_size is None:
+                    return fun(*args)
+
+                # Run the function in a loop over the batch size
+                results = []
+                for i in range(batch_size):
+                    unbatched_args = []
+                    for arg, axis in zip(args, axes):
+                        if axis is not None:
+                            # Extract the slice for this specific batch index
+                            unbatched_args.append(np.take(arg, i, axis=axis))
+                        else:
+                            # Pass the argument as-is (e.g., for broadcasting)
+                            unbatched_args.append(arg)
+
+                    # Apply the core function to the single slice
+                    results.append(fun(*unbatched_args))
+
+                # Stack the collected results back together along the requested out_axes
+                return np.stack(results, axis=out_axes)
+
+            return batched_fun
+
+        class _LaxShim:
+            @staticmethod
+            def scan(f, init, xs, length=None):
+                if xs is None:
+                    xs = [None] * length
+                carry = init
+                ys = []
+                for x in xs:
+                    carry, y = f(carry, x)
+                    ys.append(y)
+                return carry, np.stack(ys)
+
+            @staticmethod
+            def dynamic_slice(operand, start_indices, slice_sizes):
+                """A NumPy shim for jax.lax.dynamic_slice."""
+                operand = np.asarray(operand)
+
+                if (
+                    len(start_indices) != operand.ndim
+                    or len(slice_sizes) != operand.ndim
+                ):
+                    raise ValueError(
+                        "start_indices and slice_sizes must match the rank of the operand."
+                    )
+
+                slices = []
+                for start, size, dim_size in zip(
+                    start_indices, slice_sizes, operand.shape
+                ):
+                    # JAX clamps the start index so the requested slice size always fits
+                    max_valid_start = max(0, dim_size - size)
+                    clamped_start = min(max(0, start), max_valid_start)
+
+                    # Build the slice object for this dimension
+                    slices.append(slice(clamped_start, clamped_start + size))
+
+                return operand[tuple(slices)]
+
+            @staticmethod
+            def top_k(operand, k):
+                """A NumPy shim for jax.lax.top_k."""
+                operand = np.asarray(operand)
+
+                # Sort indices along the last axis.
+                # np.argsort sorts ascending, so the largest values are at the end.
+                sorted_indices = np.argsort(operand, axis=-1)
+
+                # Slice the last k indices, then reverse the step ([::-1]) to make it descending
+                top_indices = sorted_indices[..., -k:][..., ::-1]
+
+                # Use the indices to gather the actual values from the original array
+                top_values = np.take_along_axis(operand, top_indices, axis=-1)
+
+                return top_values, top_indices
+
+        class _NnShim:
+            @staticmethod
+            def logsumexp(a, axis=None, b=None, keepdims=False, return_sign=False):
+                from scipy.special import logsumexp
+
+                return logsumexp(
+                    a, axis=axis, b=b, keepdims=keepdims, return_sign=return_sign
+                )
+
+        class _ScipyShim:
+            class _SpecialShim:
+                @staticmethod
+                def logit(x):
+                    from scipy.special import logit
+
+                    return logit(x)
+
+            class _SignalShim:
+                @staticmethod
+                def correlate2d(in1, in2, mode="same", boundary="fill", fillvalue=0):
+                    from scipy.signal import correlate2d
+
+                    return correlate2d(
+                        in1,
+                        in2,
+                        mode=mode,
+                        boundary=boundary,
+                        fillvalue=fillvalue,
+                    )
+
+                @staticmethod
+                def convolve2d(in1, in2, mode="same", boundary="fill", fillvalue=0):
+                    from scipy.signal import convolve2d
+
+                    return convolve2d(
+                        in1,
+                        in2,
+                        mode=mode,
+                        boundary=boundary,
+                        fillvalue=fillvalue,
+                    )
+
+            class _OptimizeShim:
+                @staticmethod
+                def minimize(fun, x0, args=(), method=None, tol=None, options=None):
+                    from scipy.optimize import minimize
+
+                    return minimize(
+                        fun,
+                        x0,
+                        args=args,
+                        method=method,
+                        tol=tol,
+                        options=options,
+                    )
+
+            special = _SpecialShim()
+            signal = _SignalShim()
+            optimize = _OptimizeShim()
+
+        class _TreeShim:
+            @staticmethod
+            def map(f, *trees):
+                """A basic pure-Python/NumPy shim for jax.tree.map."""
+                if not trees:
+                    return None
+
+                first = trees[0]
+                if isinstance(first, (list, tuple)):
+                    return type(first)(
+                        jax.tree.map(f, *[t[i] for t in trees])
+                        for i in range(len(first))
+                    )
+                elif isinstance(first, dict):
+                    return {
+                        k: jax.tree.map(f, *[t[k] for t in trees]) for k in first.keys()
+                    }
+                else:
+                    return f(*trees)
+
+        lax = _LaxShim()
+        nn = _NnShim()
+        scipy = _ScipyShim()
+        tree = _TreeShim()
+
     jax = _JaxShim()
     jnp = np
     jit = jax.jit
 
-    def vmap(f, **kwargs):
-        """Fallback vmap: returns the function unchanged."""
-        return f
+    class _JscipyLinalgShim:
+        @staticmethod
+        def cholesky(a, lower=False, overwrite_a=False, check_finite=True):
+            import scipy.linalg
 
-    lax = None
+            # Handle batching manually if needed, or use np.vectorize
+            if a.ndim > 2:
+                # We can use our vmap shim!
+                def single_cholesky(matrix):
+                    return scipy.linalg.cholesky(
+                        matrix,
+                        lower=lower,
+                        overwrite_a=overwrite_a,
+                        check_finite=check_finite,
+                    )
+
+                return jax.vmap(single_cholesky)(a)
+            return scipy.linalg.cholesky(
+                a,
+                lower=lower,
+                overwrite_a=overwrite_a,
+                check_finite=check_finite,
+            )
+
+    jscipy_linalg = _JscipyLinalgShim()
     DifferentialEvolution = None
     PSO = None
     CMA_ES = None
-    jscipy_linalg = scipy.linalg
     Mesh = None
     NamedSharding = None
     P = None
     HAS_JAX = False
     OPTIMIZATION_BACKEND = "numpy"
+    jit = jax.jit
+    lax = jax.lax
+    vmap = jax.vmap
+    nn = jax.nn
+    jax_scipy = jax.scipy
+
+
+def jnp_update_add(arr, idx, val):
+    """Immutable update: arr[idx] += val"""
+    if HAS_JAX:
+        return arr.at[idx].add(val)
+    else:
+        res = arr.copy()
+        res[idx] += val
+        return res
+
+
+def jnp_update_set(arr, idx, val):
+    """Immutable update: arr[idx] = val"""
+    if HAS_JAX:
+        return arr.at[idx].set(val)
+    else:
+        res = arr.copy()
+        res[idx] = val
+        return res
 
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
@@ -105,6 +337,8 @@ def generate_reflections(a, b, c, alpha, beta, gamma, space_group="P 1", d_min=2
     """
     Generates unique HKL indices for a given unit cell and resolution cutoff.
     """
+    if space_group is None:
+        space_group = "P 1"
     constants = a, b, c, *np.deg2rad([alpha, beta, gamma])
     B, Gstar = cartesian_matrix_metric_tensor(*constants)
 
@@ -172,7 +406,8 @@ def calculate_angular_error(
     RUB: npt.NDArray,
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
-):  # noqa: E741
+    R_all: npt.NDArray = None,
+):
     """
     Calculate D-spacing and Angular errors for observed peaks vs predicted geometry.
     Uses the RUB matrix (R @ U @ B) for all coordinate transformations.
@@ -188,7 +423,15 @@ def calculate_angular_error(
 
     # 2. Calculate Q_obs (Lab Frame) from Detector Pixel Position
     # v = Pixel_Position - Sample_Position
-    v = xyz_det - sample_offset
+    if R_all is not None:
+        if R_all.ndim == 3:
+            s_lab = np.einsum("nij,j->ni", R_all, sample_offset)
+        else:
+            s_lab = R_all @ sample_offset
+        v = xyz_det - s_lab
+    else:
+        v = xyz_det - sample_offset
+
     dist = np.linalg.norm(v, axis=1, keepdims=True)
     kf_dir = v / dist  # Unit vector pointing from sample to pixel
 
@@ -201,11 +444,15 @@ def calculate_angular_error(
     # Q_obs direction
     with np.errstate(divide="ignore", invalid="ignore"):
         q_obs_norm = delta_k / two_sin_theta[:, None]
+        # Handle 0-degree scattering where direction is undefined
+        q_obs_norm = np.nan_to_num(q_obs_norm, nan=0.0)
 
     # 3. Angular Error (Angle between Q_calc direction and Q_obs direction)
     dot = np.sum(q_obs_norm * q_calc_norm, axis=1)
     dot = np.clip(dot, -1.0, 1.0)
     ang_err = np.rad2deg(np.arccos(dot))
+    # If q_obs_norm was zeroed out (0-degree scattering), arccos(0) = 90 deg.
+    # This is a reasonable penalty for a 0-degree observation matching a finite Q prediction.
 
     # 4. D-Spacing Error
     # d_obs = lambda / 2sin(theta)
@@ -235,7 +482,8 @@ def predict_reflections_on_panel(
     wavelength_max: float,
     sample_offset: npt.NDArray = None,
     ki_vec: npt.NDArray = None,
-):  # noqa: E741
+    R_all: npt.NDArray = None,
+):
     """
     Predicts which HKLs fall on a specific detector panel using the RUB matrix.
     Returns: (row, col, h, k, l, wavelength)
@@ -284,9 +532,16 @@ def predict_reflections_on_panel(
     x, y, z = kf_dirs[0], kf_dirs[1], kf_dirs[2]
 
     # 5. Ray Trace intersection with Panel
-    mask_panel, row, col = detector.reflections_mask(
-        x, y, z, sample_offset=sample_offset
-    )
+    # CORRECTED: Rotate sample offset to Lab frame
+    if R_all is not None and sample_offset is not None:
+        if R_all.ndim == 3:
+            s_lab = np.einsum("nij,j->ni", R_all, sample_offset)
+        else:
+            s_lab = R_all @ sample_offset
+    else:
+        s_lab = sample_offset
+
+    mask_panel, row, col = detector.reflections_mask(x, y, z, sample_offset=s_lab)
 
     return (
         row[mask_panel],

@@ -1,21 +1,18 @@
 import os
 
+import h5py
 import numpy as np
 import scipy.spatial
-
-import h5py
-
+from mantid import config
 from mantid.simpleapi import (
-    LoadEmptyInstrument,
-    LoadCIF,
-    SetUB,
-    SetGoniometer,
-    PredictPeaks,
     CreatePeaksWorkspace,
+    LoadCIF,
+    LoadEmptyInstrument,
+    PredictPeaks,
+    SetGoniometer,
+    SetUB,
     mtd,
 )
-
-from mantid import config
 
 directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,7 +45,9 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     uc = cs.getUnitCell()
 
     CreatePeaksWorkspace(
-        NumberOfPeaks=0, OutputType="LeanElasticPeak", OutputWorkspace="reference"
+        NumberOfPeaks=0,
+        OutputType="LeanElasticPeak",
+        OutputWorkspace="reference",
     )
 
     SetUB(
@@ -69,7 +68,10 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
     SetUB(Workspace="instrument", UB=UB)
 
     SetGoniometer(
-        Workspace="instrument", Axis0="0,0,1,0,1", Axis1="0,0,0,1,1", Axis2="0,0,1,0,1"
+        Workspace="instrument",
+        Axis0="0,0,1,0,1",
+        Axis1="0,0,0,1,1",
+        Axis2="0,0,1,0,1",
     )
 
     mtd["instrument"].run().getGoniometer().setR(R)
@@ -110,7 +112,7 @@ def generate_peaks(instrument, cif_file, wavelength_band=[2, 4], min_d=1):
         l.append(peak.getL())
         lamda.append(peak.getWavelength())
 
-    peaks_file = cif_file.replace(".cif", "_{}.h5".format(instrument)).lower()
+    peaks_file = cif_file.replace(".cif", f"_{instrument}.h5").lower()
 
     with h5py.File(os.path.join(directory, peaks_file), "w") as f:
         f["sample/a"] = uc.a()

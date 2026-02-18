@@ -1,56 +1,57 @@
-import typing
+import glob
+
 import h5py
 import numpy as np
 import typer
-import glob
 
-from subhkl.export import FinderConcatenateMerger, MTZExporter
-from subhkl.export import ImageStackMerger
-from subhkl.integration import Peaks
-from subhkl.optimization import FindUB
 from subhkl.config.goniometer import (
-    get_rotation_data_from_nexus,
     calc_goniometer_rotation_matrix,
+    get_rotation_data_from_nexus,
 )
-from subhkl.utils import calculate_angular_error
+from subhkl.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
+from subhkl.integration import Peaks
+from subhkl.metrics import compute_metrics
+from subhkl.optimization import FindUB
 
 app = typer.Typer()
 
 
 def index(
-    hdf5_peaks_filename: str = None,  # Made optional
-    output_peaks_filename: str = None,
+    hdf5_peaks_filename: str | None = None,  # Made optional
+    output_peaks_filename: str | None = None,
     strategy_name: str = "DE",
     population_size: int = 1000,
     gens: int = 100,
     n_runs: int = 1,
     seed: int = 0,
     tolerance_deg: float = 0.1,
-    sigma_init: float = None,
+    sigma_init: float | None = None,
     refine_lattice: bool = False,
     lattice_bound_frac: float = 0.05,
-    bootstrap_filename: str = None,
+    bootstrap_filename: str | None = None,
     refine_goniometer: bool = False,
-    refine_goniometer_axes: list = None,
+    refine_goniometer_axes: list | None = None,
     goniometer_bound_deg: float = 5.0,
     refine_sample: bool = False,
     sample_bound_meters: float = 0.002,
     refine_beam: bool = False,
     beam_bound_deg: float = 1.0,
-    nexus_filename: str = None,
-    instrument_name: str = None,
+    nexus_filename: str | None = None,
+    instrument_name: str | None = None,
     loss_method: str = "cosine",
     hkl_search_range: int = 20,
-    d_min: float = None,
-    d_max: float = None,
+    d_min: float | None = None,
+    d_max: float | None = None,
     search_window_size: int = 512,
-    batch_size: int = None,
+    batch_size: int | None = None,
     window_batch_size: int = 32,
     chunk_size: int = 256,
     num_iters: int = 20,
     top_k: int = 32,
-    B_sharpen: float = None,
-    input_data: dict = None,
+    B_sharpen: float | None = None,
+    input_data: dict | None = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
 ):
     """
     Index the given peak file and save it using the evosax optimizer.
@@ -61,6 +62,9 @@ def index(
         opt = FindUB(data=input_data)
     else:
         opt = FindUB(filename=hdf5_peaks_filename)
+
+    if wavelength_min is not None and wavelength_max is not None:
+        opt.wavelength = [wavelength_min, wavelength_max]
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
@@ -75,21 +79,32 @@ def index(
     goniometer_names = None
     if refine_goniometer:
         if nexus_filename and instrument_name:
-            print(f"Refining goniometer angles with {goniometer_bound_deg} deg bounds.")
+            print(
+                f"Refining goniometer angles from Nexus with "
+                f"{goniometer_bound_deg} deg bounds."
+            )
             axes, angles, names = get_rotation_data_from_nexus(
                 nexus_filename, instrument_name
             )
             opt.goniometer_axes = np.array(axes)
-            num_peaks = len(opt.two_theta)
-            opt.goniometer_angles = np.array(angles)[np.newaxis, :].repeat(
-                num_peaks, axis=0
-            )
+
+            # If multi-run, we need to provide angles for each run (num_axes, num_runs)
+            if opt.run_indices is not None:
+                num_runs = np.max(opt.run_indices) + 1
+                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(
+                    num_runs, axis=1
+                )
+            else:
+                num_peaks = len(opt.two_theta)
+                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(
+                    num_peaks, axis=1
+                )
             goniometer_names = names
         elif opt.goniometer_axes is not None:
             print(
                 f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
             )
-            pass
+            # opt.goniometer_angles is already loaded in FindUB.__init__
         else:
             print(
                 "WARNING: refine_goniometer requested but goniometer data not found. Skipping goniometer refinement."
@@ -146,6 +161,8 @@ def index(
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
 
+    opt.reciprocal_lattice_B()
+
     copy_keys = [
         "sample/space_group",
         "instrument/wavelength",
@@ -181,6 +198,10 @@ def index(
 
     print(f"Saving indexed peaks to {output_peaks_filename}...")
     with h5py.File(output_peaks_filename, "w") as f:
+        if instrument_name:
+            f.attrs["instrument"] = instrument_name
+        elif "instrument" in input_data:
+            f.attrs["instrument"] = input_data["instrument"]
         for key, value in copied_data.items():
             f[key] = value
 
@@ -211,6 +232,10 @@ def index(
         safe_write(f, "sample/B", B_mat)
         f["sample/U"] = U
 
+        # Use updated run_indices if available
+        if opt.run_indices is not None:
+            safe_write(f, "peaks/run_index", opt.run_indices)
+
         # hkl is (3, N) or (N, 3)? optimize output is (N, 3) usually or we construct lists
         # opt.minimize returns hkl (3, N).
         f["peaks/h"] = hkl[:, 0]
@@ -235,14 +260,14 @@ def finder(
     peak_local_max_normalization: bool = False,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
-    thresholding_mask_file: typing.Optional[str] = None,
+    thresholding_mask_file: str | None = None,
     thresholding_mask_rel_erosion_radius: float = 0.05,
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
-    wavelength_min: typing.Optional[float] = None,
-    wavelength_max: typing.Optional[float] = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
     region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_sigma: typing.Optional[float] = None,
+    region_growth_minimum_sigma: float | None = None,
     region_growth_minimum_intensity: float = 4500.0,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
@@ -341,6 +366,7 @@ def finder(
         xyz=detector_peaks.xyz,  # Store XYZ
         bank=detector_peaks.bank,
         image_index=detector_peaks.image_index,
+        run_id=detector_peaks.run_id,
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
         gonio_names=detector_peaks.gonio_names,
@@ -390,19 +416,24 @@ def indexer(
     beta: float,
     gamma: float,
     space_group: str,
-    wavelength_min: float = None,
-    wavelength_max: float = None,
-    goniometer_csv_filename: typing.Optional[str] = None,
-    original_nexus_filename: typing.Optional[str] = None,
-    instrument_name: typing.Optional[str] = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+    goniometer_csv_filename: str | None = None,
+    original_nexus_filename: str | None = None,
+    instrument_name: str | None = None,
     strategy_name: str = typer.Option(
-        "DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."
+        "DE",
+        "--strategy",
+        help="Optimization strategy to use (e.g., 'DE' or 'PSO').",
     ),
     sigma_init: float = typer.Option(
         None, "--sigma-init", help="Parameter exploration range."
     ),
     n_runs: int = typer.Option(
-        1, "--n-runs", "-n", help="Number of optimization runs with different seeds."
+        1,
+        "--n-runs",
+        "-n",
+        help="Number of optimization runs with different seeds.",
     ),
     population_size: int = typer.Option(
         1000,
@@ -444,7 +475,9 @@ def indexer(
         False, "--refine-sample", help="Refine sample position offset."
     ),
     sample_bound_meters: float = typer.Option(
-        2.0, "--sample-bound-meters", help="Bound for sample offset in meters."
+        0.005,
+        "--sample-bound-meters",
+        help="Bound for sample offset in meters.",
     ),
     refine_beam: bool = typer.Option(
         False, "--refine-beam", help="Refine beam direction. Default (0,0,1)."
@@ -452,7 +485,7 @@ def indexer(
     beam_bound_deg: float = typer.Option(
         1.0, "--beam-bound-deg", help="Bound for beam direction in degrees."
     ),
-    bootstrap_filename: typing.Optional[str] = typer.Option(
+    bootstrap_filename: str | None = typer.Option(
         None, "--bootstrap", help="Previous HDF5 solution to refine"
     ),
     loss_method: str = typer.Option(
@@ -476,21 +509,35 @@ def indexer(
     # Logic to resolve SG
     sg_to_use = "P 1"
     if space_group:
-        sg_to_use = space_group
+        from subhkl.spacegroup import get_space_group_object
+
+        try:
+            get_space_group_object(space_group)
+            sg_to_use = space_group
+        except ValueError as e:
+            print(f"ERROR: Invalid space group '{space_group}': {e}")
+            raise typer.Exit(code=1)
 
     print(f"Loading peaks from: {peaks_h5_filename}")
     input_data = {}
+
+    # Handle OptionInfo objects if called directly as a function
+    def _val(x):
+        return x.default if hasattr(x, "default") else x
+
     with h5py.File(peaks_h5_filename, "r") as f:
         # Load auto-detected wavelength if not provided
-        if wavelength_min is None or wavelength_max is None:
+        w_min_val = _val(wavelength_min)
+        w_max_val = _val(wavelength_max)
+        if w_min_val is None or w_max_val is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
-                if wavelength_min is None:
+                if w_min_val is None:
                     wavelength_min = float(wl[0])
-                if wavelength_max is None:
+                if w_max_val is None:
                     wavelength_max = float(wl[1])
                 print(
-                    f"Auto-detected wavelength: {wavelength_min:.2f} - {wavelength_max:.2f} A"
+                    f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A"
                 )
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
@@ -510,7 +557,9 @@ def indexer(
             "files",
             "file_offsets",
             "peaks/run_index",
+            "peaks/image_index",
             "bank",
+            "bank_ids",
             "sample/offset",
             "beam/ki_vec",
         ]
@@ -519,6 +568,100 @@ def indexer(
             if k in f:
                 input_data[k] = f[k][()]
 
+    # --- FIX: Refine run_index to prevent Geometry Compression ---
+    # We must ensure that every unique rotation matrix or angle set has its own
+    # run_index during optimization, otherwise the indexer picks only the first one per run.
+    R_stack = input_data.get("goniometer/R")
+    angles_stack = input_data.get("goniometer/angles")
+    old_run_indices = input_data.get("peaks/run_index")
+    num_peaks = len(old_run_indices) if old_run_indices is not None else 0
+
+    if old_run_indices is not None:
+        combined_keys = [old_run_indices[:, None].astype(float)]
+
+        # Add R to uniqueness check (broadcast if per-run)
+        if R_stack is not None and R_stack.ndim == 3:
+            if R_stack.shape[0] == num_peaks:
+                R_flat = R_stack.reshape(num_peaks, -1)
+            else:
+                # Broadcast per-run R to per-peak for uniqueness check
+                R_flat = R_stack[old_run_indices].reshape(num_peaks, -1)
+            combined_keys.append(R_flat)
+
+        # Add angles to uniqueness check (broadcast if per-run)
+        if angles_stack is not None and angles_stack.ndim == 2:
+            # Determine if angles are per-peak or per-run, and which axis is which
+            # Standard is (num_axes, num_entries). But user reported (num_entries, num_axes).
+            if angles_stack.shape[1] == num_peaks:
+                combined_keys.append(angles_stack.T)
+            elif angles_stack.shape[0] == num_peaks:
+                combined_keys.append(angles_stack)
+            else:
+                # Per-run. We must broadcast to per-peak for the uniqueness check.
+                # Try to guess which axis is the number of axes
+                num_axes = len(input_data.get("goniometer/axes", []))
+                if num_axes == 0:
+                    num_axes = 3  # Fallback
+
+                if angles_stack.shape[0] == num_axes:
+                    # Shape is (num_axes, num_runs)
+                    combined_keys.append(angles_stack[:, old_run_indices].T)
+                else:
+                    # Shape is (num_runs, num_axes)
+                    combined_keys.append(angles_stack[old_run_indices])
+
+        if len(combined_keys) > 1:
+            print("Refining run_index based on unique geometries...")
+            combined = np.hstack(combined_keys)
+
+            # Use rounding to handle floating point jitter in uniqueness check.
+            # We scale and cast to integer to ensure robust comparison in np.unique.
+            # Scaling by 1e6 handles 1e-7 tolerance (sub-pixel/sub-arcsec).
+            combined_int = np.round(combined * 1e6).astype(np.int64)
+            _, unique_mapping = np.unique(combined_int, axis=0, return_inverse=True)
+            input_data["peaks/run_index"] = unique_mapping
+
+            # Update R and angles to match the new unique mapping
+            num_unique_runs = np.max(unique_mapping) + 1
+            unique_indices = np.zeros(num_unique_runs, dtype=int)
+            for i in range(num_unique_runs):
+                unique_indices[i] = np.where(unique_mapping == i)[0][0]
+
+            if R_stack is not None and R_stack.ndim == 3:
+                if R_stack.shape[0] == num_peaks:
+                    input_data["goniometer/R"] = R_stack[unique_indices]
+                else:
+                    # Expand per-run R to the new unique runs
+                    input_data["goniometer/R"] = R_stack[
+                        old_run_indices[unique_indices]
+                    ]
+
+            if angles_stack is not None and angles_stack.ndim == 2:
+                # Use same robust logic for final expansion
+                if angles_stack.shape[1] == num_peaks:
+                    input_data["goniometer/angles"] = angles_stack[:, unique_indices]
+                elif angles_stack.shape[0] == num_peaks:
+                    input_data["goniometer/angles"] = angles_stack[unique_indices].T
+                else:
+                    # Per-run
+                    num_axes = len(input_data.get("goniometer/axes", []))
+                    if num_axes == 0:
+                        num_axes = 3
+
+                    if angles_stack.shape[0] == num_axes:
+                        # (num_axes, num_runs)
+                        expanded = angles_stack[:, old_run_indices]
+                        input_data["goniometer/angles"] = expanded[:, unique_indices]
+                    else:
+                        # (num_runs, num_axes)
+                        expanded = angles_stack[old_run_indices]
+                        input_data["goniometer/angles"] = expanded[unique_indices].T
+
+            print(
+                f"  > Expanded runs from {np.max(old_run_indices) + 1} to "
+                f"{np.max(unique_mapping) + 1} unique geometries."
+            )
+
     input_data["sample/a"] = a
     input_data["sample/b"] = b
     input_data["sample/c"] = c
@@ -526,55 +669,67 @@ def indexer(
     input_data["sample/beta"] = beta
     input_data["sample/gamma"] = gamma
     input_data["sample/space_group"] = sg_to_use
-    input_data["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
+    # Handle OptionInfo objects if called directly as a function
+    def _val(x):
+        return x.default if hasattr(x, "default") else x
+
+    input_data["instrument/wavelength"] = [
+        float(_val(wavelength_min)),
+        float(_val(wavelength_max)),
+    ]
 
     # --- NEW: Check d_max for sanity ---
     cell_max = max(a, b, c)
-    if d_max is not None and d_max < cell_max:
+    d_max_val = _val(d_max)
+    if d_max_val is not None and d_max_val < cell_max:
         print(
-            f"WARNING: --d-max ({d_max}) is smaller than largest unit cell dimension ({cell_max:.2f})."
+            f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f})."
         )
         print(
             "         This will exclude low-order reflections which are critical for orientation."
         )
 
     gonio_axes_list = None
-    if refine_goniometer_axes:
-        gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(",")]
+    refine_goniometer_axes_val = _val(refine_goniometer_axes)
+    if refine_goniometer_axes_val:
+        gonio_axes_list = [x.strip() for x in refine_goniometer_axes_val.split(",")]
 
     index(
         input_data=input_data,
         output_peaks_filename=output_peaks_filename,
-        strategy_name=strategy_name,
-        population_size=population_size,
-        gens=gens,
-        sigma_init=sigma_init,
-        n_runs=n_runs,
-        seed=seed,
+        strategy_name=_val(strategy_name),
+        population_size=_val(population_size),
+        gens=_val(gens),
+        sigma_init=_val(sigma_init),
+        n_runs=_val(n_runs),
+        seed=_val(seed),
         tolerance_deg=tolerance_deg,
-        refine_lattice=refine_lattice,
-        lattice_bound_frac=lattice_bound_frac,
-        bootstrap_filename=bootstrap_filename,
-        refine_goniometer=refine_goniometer,
+        refine_lattice=_val(refine_lattice),
+        lattice_bound_frac=_val(lattice_bound_frac),
+        bootstrap_filename=_val(bootstrap_filename),
+        refine_goniometer=_val(refine_goniometer),
         refine_goniometer_axes=gonio_axes_list,
-        goniometer_bound_deg=goniometer_bound_deg,
-        refine_sample=refine_sample,
-        sample_bound_meters=sample_bound_meters,
-        refine_beam=refine_beam,
-        beam_bound_deg=beam_bound_deg,
+        goniometer_bound_deg=_val(goniometer_bound_deg),
+        refine_sample=_val(refine_sample),
+        sample_bound_meters=_val(sample_bound_meters),
+        refine_beam=_val(refine_beam),
+        beam_bound_deg=_val(beam_bound_deg),
         nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,
-        loss_method=loss_method,
-        hkl_search_range=hkl_search_range,
-        d_min=d_min,
-        d_max=d_max,
-        search_window_size=search_window_size,
-        batch_size=batch_size,
-        window_batch_size=window_batch_size,
-        chunk_size=chunk_size,
-        num_iters=num_iters,
-        top_k=top_k,
-        B_sharpen=B_sharpen,
+        loss_method=_val(loss_method),
+        hkl_search_range=_val(hkl_search_range),
+        d_min=_val(d_min),
+        d_max=d_max_val,
+        search_window_size=_val(search_window_size),
+        batch_size=_val(batch_size),
+        window_batch_size=_val(window_batch_size),
+        chunk_size=_val(chunk_size),
+        num_iters=_val(num_iters),
+        top_k=_val(top_k),
+        B_sharpen=_val(B_sharpen),
+        wavelength_min=input_data["instrument/wavelength"][0],
+        wavelength_max=input_data["instrument/wavelength"][1],
     )
 
 
@@ -582,8 +737,8 @@ def indexer(
 def indexer_using_file(
     hdf5_peaks_filename: str,
     output_peaks_filename: str,
-    original_nexus_filename: typing.Optional[str] = None,
-    instrument_name: typing.Optional[str] = None,
+    original_nexus_filename: str | None = None,
+    instrument_name: str | None = None,
     strategy_name: str = typer.Option("DE", "--strategy"),
     n_runs: int = typer.Option(1, "--n-runs"),
     population_size: int = typer.Option(1000, "--population-size"),
@@ -616,149 +771,74 @@ def indexer_using_file(
 @app.command()
 def metrics(
     filename: str,
+    found_peaks_file: str | None = typer.Option(
+        None,
+        "--found-peaks",
+        help="Optional file with found peaks to compare against (e.g. finder.h5).",
+    ),
+    instrument: str | None = typer.Option(
+        None,
+        "--instrument",
+        help="Instrument name (required if matching peaks).",
+    ),
     d_min: float = typer.Option(
         None,
         "--d-min",
         help="Optional minimum d-spacing filter for metrics calculation.",
     ),
     per_run: bool = typer.Option(
-        False, "--per-run", help="Calculate and display metrics for each run/image."
+        False,
+        "--per-run",
+        help="Calculate and display metrics for each run/image.",
     ),
 ):
-    try:
-        with h5py.File(filename, "r") as f:
-            if "peaks/xyz" not in f:
-                print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
-                return
+    """
+    CLI command to compute and display indexing quality metrics.
 
-            xyz_det = f["peaks/xyz"][()]
-            h = f["peaks/h"][()]
-            k = f["peaks/k"][()]
-            l = f["peaks/l"][()]  # noqa: E741
-            lam = f["peaks/lambda"][()]
-            run_index = f["peaks/run_index"][()] if "peaks/run_index" in f else None
-            if run_index is None and "peaks/bank" in f:
-                run_index = f["peaks/bank"][()]
-            if run_index is None and "bank" in f:
-                run_index = f["bank"][()]
+    Calls compute_metrics from subhkl.metrics and formats output for display.
+    """
+    # Typer API might pass OptionInfo objects if called directly (e.g. in tests)
+    if hasattr(found_peaks_file, "default"):
+        found_peaks_file = found_peaks_file.default
+    if hasattr(instrument, "default"):
+        instrument = instrument.default
+    if hasattr(d_min, "default"):
+        d_min = d_min.default
+    if hasattr(per_run, "default"):
+        per_run = per_run.default
 
-            ub_helper = FindUB()
-            ub_helper.a = f["sample/a"][()]
-            ub_helper.b = f["sample/b"][()]
-            ub_helper.c = f["sample/c"][()]
-            ub_helper.alpha = f["sample/alpha"][()]
-            ub_helper.beta = f["sample/beta"][()]
-            ub_helper.gamma = f["sample/gamma"][()]
+    # Call the metrics computation function
+    result = compute_metrics(
+        filename=filename,
+        found_peaks_file=found_peaks_file,
+        instrument=instrument,
+        d_min=d_min,
+        per_run=per_run,
+    )
 
-            if "beam/ki_vec" in f:
-                ki_vec = f["beam/ki_vec"][()]
-            else:
-                ki_vec = np.array([0.0, 0.0, 1.0])
+    # Handle errors
+    if "error_message" in result:
+        print(result["error_message"])
+        if result["error_message"].startswith("Exception"):
+            print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+        return
 
-            if "goniometer/R" in f:
-                R_all = f["goniometer/R"][()]
-            else:
-                R_all = np.eye(3)[None, ...].repeat(len(h), axis=0)
+    # Print filter message if present
+    if "filter_message" in result:
+        print(f"METRICS: {result['filter_message']}")
 
-            if "sample/U" in f:
-                U = f["sample/U"][()]
-            else:
-                U = np.eye(3)
+    # Print main metrics
+    print(
+        f"METRICS: {result['median_d_err']:.5f} {result['mean_d_err']:.5f} {result['max_d_err']:.5f} "
+        f"{result['median_ang_err']:.5f} {result['mean_ang_err']:.5f} {result['max_ang_err']:.5f}"
+    )
 
-            if "sample/offset" in f:
-                sample_offset = f["sample/offset"][()]
-            else:
-                sample_offset = np.zeros(3)
-
-        mask = (h != 0) | (k != 0) | (l != 0)  # noqa: E741
-        if np.sum(mask) == 0:
-            print("METRICS: 0.00000 0.00000 0.00000 0.00000 0.00000 0.00000")
-            return
-
-        h, k, l = h[mask], k[mask], l[mask]  # noqa: E741
-        lam = lam[mask]
-        xyz_det = xyz_det[mask]
-        R_all = R_all[mask]
-
-        B_mat = ub_helper.reciprocal_lattice_B()
-
-        # --- NEW: Filter by d_min if provided ---
-        if d_min is not None:
-            # Calculate d = 1 / |B * hkl|
-            # Note: |B*h| is 1/d in subhkl units (standard crystallographic definition)
-            # hkl shape (N, 3)
-            hkl_vecs = np.stack([h, k, l], axis=1)  # noqa: E741
-            q_cryst = hkl_vecs @ B_mat.T
-            q_mag = np.linalg.norm(q_cryst, axis=1)
-
-            with np.errstate(divide="ignore"):
-                d_vals = 1.0 / q_mag
-
-            # Keep peaks where d >= d_min
-            d_mask = d_vals >= d_min
-
-            if np.sum(d_mask) == 0:
-                print(f"METRICS: No peaks found with d >= {d_min} A.")
-                return
-
-            h, k, l = h[d_mask], k[d_mask], l[d_mask]  # noqa: E741
-            lam = lam[d_mask]
-            xyz_det = xyz_det[d_mask]
-            R_all = R_all[d_mask]
-            print(f"METRICS: Filtered to {len(h)} peaks with d >= {d_min} A.")
-
-        UB = U @ B_mat
-
-        if R_all.ndim == 3:
-            RUB = np.matmul(R_all, UB)
-        else:
-            RUB = R_all @ UB
-
-        d_err, ang_err = calculate_angular_error(
-            xyz_det, h, k, l, lam, RUB, sample_offset, ki_vec
-        )
-
-        print(
-            f"METRICS: {np.median(d_err):.5f} {np.mean(d_err):.5f} {np.max(d_err):.5f} "
-            f"{np.median(ang_err):.5f} {np.mean(ang_err):.5f} {np.max(ang_err):.5f}"
-        )
-
-        if per_run:
-            if run_index is not None:
-                # Re-mask run_index to match filtered peaks
-                run_index_filtered = run_index[mask]
-                if d_min is not None:
-                    run_index_filtered = run_index_filtered[d_mask]
-
-                unique_runs = sorted(np.unique(run_index_filtered))
-                run_errors = []
-                for r in unique_runs:
-                    r_mask = run_index_filtered == r
-                    if np.sum(r_mask) > 0:
-                        run_errors.append(
-                            (int(r), np.median(ang_err[r_mask]), np.sum(r_mask))
-                        )
-
-                # Sort by median error descending
-                run_errors.sort(key=lambda x: x[1], reverse=True)
-
-                print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
-                for r, err, count in run_errors:
-                    status = "BAD" if err > 1.0 else "OK"
-                    print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
-
-                bad_runs = [r for r, err, _ in run_errors if err > 1.0]
-                if bad_runs:
-                    print(
-                        f"\nWARNING: Found {len(bad_runs)} outlier runs with >1.0 deg error."
-                    )
-                    print(f"Consider excluding these runs: {bad_runs}")
-            else:
-                print("\nWARNING: --per-run requested but no run information found.")
-
-    except Exception:
-        # print(e)
-        print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+    # Print per-run metrics if requested
+    if per_run and "per_run_errors" in result:
+        print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
+        for r, err, count in result["per_run_errors"]:
+            status = "BAD" if err > 1.0 else "OK"
+            print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
 
 
 @app.command()
@@ -769,9 +849,9 @@ def peak_predictor(
     integration_peaks_filename: str,
     d_min: float = 1.0,
     create_visualizations: bool = False,
-    space_group: str = None,
-    wavel_min: float = None,
-    wavel_max: float = None,
+    space_group: str | None = None,
+    wavel_min: float | None = None,
+    wavel_max: float | None = None,
     max_workers: int = 16,
 ):
     """
@@ -819,7 +899,10 @@ def peak_predictor(
 
     # 2. Initialize Data Handler
     peaks = Peaks(
-        filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1]
+        filename,
+        instrument,
+        wavelength_min=wavelength[0],
+        wavelength_max=wavelength[1],
     )
 
     print(
@@ -881,17 +964,24 @@ def peak_predictor(
         sample_offset=sample_offset,
         ki_vec=ki_vec,
         max_workers=max_workers,
+        R_all=all_R,
     )
 
     # 5. Save Predictions
     print(f"Saving predictions to {integration_peaks_filename}")
     with h5py.File(integration_peaks_filename, "w") as f:
+        f.attrs["instrument"] = instrument
         # Save Global Physics
         f["sample/a"] = a
         f["sample/b"] = b
         f["sample/c"] = c
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
+        sorted_keys = sorted(peaks.ims.keys())
+        bank_ids = np.array(
+            [peaks.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
+        )
+        f.create_dataset("bank_ids", data=bank_ids)
         f["sample/gamma"] = gamma
         f["sample/space_group"] = space_group
         f["sample/U"] = U
@@ -934,11 +1024,11 @@ def integrator(
     integration_peaks_filename: str,
     output_filename: str,
     integration_method: str = "free_fit",
-    integration_mask_file: typing.Optional[str] = None,
-    integration_mask_rel_erosion_radius: typing.Optional[float] = 0.05,
+    integration_mask_file: str | None = None,
+    integration_mask_rel_erosion_radius: float | None = 0.05,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 50.0,  # Adjusted default
-    region_growth_minimum_sigma: typing.Optional[float] = None,
+    region_growth_minimum_sigma: float | None = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
     peak_smoothing_window_size: int = 15,
@@ -1072,7 +1162,7 @@ def integrator(
         f["peaks/two_theta"] = result.tt
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
-        f["peaks/run_index"] = result.bank  # Crucial for metrics --per-run
+        f["peaks/run_index"] = result.run_id  # Fix: Use correct run_id field
         f["peaks/xyz"] = result.xyz
 
         # Save per-peak goniometer data (standard finder format)
@@ -1170,7 +1260,9 @@ def reduce(
         if peaks_handler.goniometer_names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
-                "goniometer/names", data=peaks_handler.goniometer_names_raw, dtype=dt
+                "goniometer/names",
+                data=peaks_handler.goniometer_names_raw,
+                dtype=dt,
             )
 
         # Save Wavelength (Min/Max)

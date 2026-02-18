@@ -18,7 +18,6 @@ directory = os.path.dirname(os.path.abspath(__file__))
 def test_mesolite():
     # FIXME
     # Ignoring this test until we get a version of the mesolite input file constructed from the image files to test with
-    pass
 
     directory = "tests/data"
 
@@ -105,7 +104,13 @@ def test_mesolite():
         lamda = -4 * np.pi * Qz / Q**2
         mask = np.logical_and(lamda > wl_min, lamda < wl_max)
 
-        Qx, Qy, Qz, Q, lamda = Qx[mask], Qy[mask], Qz[mask], Q[mask], lamda[mask]
+        Qx, Qy, Qz, Q, lamda = (
+            Qx[mask],
+            Qy[mask],
+            Qz[mask],
+            Q[mask],
+            lamda[mask],
+        )
 
         tt = -2 * np.arcsin(Qz / Q)
         az = np.arctan2(Qy, Qx)

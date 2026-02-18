@@ -1,5 +1,5 @@
-import numpy as np
 import gemmi
+import numpy as np
 
 
 def get_space_group_object(sg_name_or_centering):
@@ -14,13 +14,13 @@ def get_space_group_object(sg_name_or_centering):
     # This maintains backward compatibility with 'P', 'F', 'I', etc.
     centering_map = {
         "P": "P 1",
-        "A": "A 1",  # gemmi handles non-standard settings if provided correctly, or use P1 + centering op
-        "B": "B 1",
-        "C": "C 1",
+        "A": "C 2",  # A-centering usually seen in C2 or similar
+        "B": "C 2",
+        "C": "C 2",
         "I": "I 1",
         "F": "F 1",
-        "R": "R 3",  # R lattice usually implies R3 or R3m basis
-        "H": "H 1",  # Hexagonal centering? usually just P for Hex
+        "R": "R 3",
+        "H": "P 3",  # Hexagonal centering -> P3
     }
 
     if name.upper() in centering_map:
@@ -39,6 +39,11 @@ def get_space_group_object(sg_name_or_centering):
 
 
 def get_centering(space_group_name):
+    # Handle single-letter centering codes directly
+    name = str(space_group_name).strip().upper()
+    if name in ["P", "A", "B", "C", "I", "F", "R", "H"]:
+        return name
+
     sg = get_space_group_object(space_group_name)
     return sg.centring_type()
 
@@ -51,7 +56,7 @@ def is_systematically_absent(h, k, l, space_group_name):  # noqa: E741
     ops = sg.operations()  # <--- FIXED: Get operations object
 
     result = []
-    for hi, ki, li in zip(h, k, l):  # noqa: E741
+    for hi, ki, li in zip(h, k, l):
         if hi == 0 and ki == 0 and li == 0:
             result.append(True)  # 000 is physically absent
             continue
@@ -75,9 +80,9 @@ def generate_hkl_mask(h_max, k_max, l_max, space_group_name):
 
     h_range = np.arange(-h_max, h_max + 1)
     k_range = np.arange(-k_max, k_max + 1)
-    l_range = np.arange(-l_max, l_max + 1)  # noqa: E741
+    l_range = np.arange(-l_max, l_max + 1)
 
-    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")  # noqa: E741
+    H, K, L = np.meshgrid(h_range, k_range, l_range, indexing="ij")
 
     mask = np.ones(H.shape, dtype=bool)
 

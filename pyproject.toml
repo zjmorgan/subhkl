@@ -28,6 +28,7 @@ lint = ["ruff>=0.2.0"]
 test = [
   "pytest>=8.0.2,<8.1.0",
   "pytest-cov>=4.1.0,<4.2.0",
+  "pytest-dependency>=0.6.1"
 ]
 # JAX CPU-only (default JAX installation)
 jax = [
@@ -91,3 +92,6 @@ markers = [
 
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+ignore = ["E741"]

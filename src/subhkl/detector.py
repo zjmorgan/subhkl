@@ -1,4 +1,5 @@
 from enum import Enum
+
 import numpy as np
 import numpy.typing as npt
 
@@ -23,13 +24,14 @@ def scattering_vector_from_angles(
     kz = np.cos(tt)
 
     # ki direction is (0, 0, 1)
-    return np.array([kx, ky, kz - 1])
+    return np.stack([kx, ky, kz - 1], axis=0)
 
 
 def angles_from_kf(kf_vectors):
     """
     Converts outgoing wavevectors (kf) to Lab Frame detector angles.
     """
+    kf_vectors = np.atleast_2d(kf_vectors)
     norms = np.linalg.norm(kf_vectors, axis=1, keepdims=True)
     kf_dir = kf_vectors / norms
     two_theta = np.arccos(kf_dir[:, 2])
@@ -104,7 +106,7 @@ class Detector:
             du = dr + dvr
 
         xyz = self.center + du + dv
-        return xyz.T if xyz.ndim > 1 else xyz
+        return xyz
 
     def lab_to_pixel(
         self, x: float, y: float, z: float, clip: bool = False
@@ -118,8 +120,8 @@ class Detector:
         """
         p = np.array([x, y, z])
 
-        dw = self.width / (self.m - 1)  # Width / Cols (n)
-        dh = self.height / (self.n - 1)  # Height / Rows (m)
+        dw = self.width / (self.m - 1)  # Width / Cols (m)
+        dh = self.height / (self.n - 1)  # Height / Rows (n)
 
         vec = p.T - self.center
 
@@ -170,17 +172,20 @@ class Detector:
         return row_f, col_f
 
     def pixel_to_angles(
-        self, row: npt.ArrayLike, col: npt.ArrayLike
+        self,
+        row: npt.ArrayLike,
+        col: npt.ArrayLike,
+        sample_offset: npt.ArrayLike = None,
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
         Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
         """
-        xyz = self.pixel_to_lab(row, col)
-        X, Y, Z = xyz[0], xyz[1], xyz[2]
+        xyz = self.pixel_to_lab(row, col)  # Returns (N, 3) or (3,)
+        v = xyz - (sample_offset if sample_offset is not None else 0)
 
-        R = np.sqrt(X**2 + Y**2 + Z**2)
-        # Avoid division by zero
-        two_theta = np.rad2deg(np.arccos(np.clip(Z / R, -1.0, 1.0)))
+        X, Y, Z = v.T
+        R_mag = np.sqrt(X**2 + Y**2 + Z**2)
+        two_theta = np.rad2deg(np.arccos(np.clip(Z / R_mag, -1.0, 1.0)))
         az_phi = np.rad2deg(np.arctan2(Y, X))
 
         return two_theta, az_phi
@@ -219,8 +224,8 @@ class Detector:
             D_vec = np.cross(dir_vec.T, v).T
 
             QA = np.sum(D_vec**2, axis=0)
-            QB = 2 * np.dot(B_vec, D_vec)
-            QC = np.dot(B_vec, B_vec) - self.radius**2
+            QB = 2 * np.sum(B_vec * D_vec.T, axis=1)  # FIX: handle stack
+            QC = np.sum(B_vec**2, axis=1) - self.radius**2
 
             delta = QB**2 - 4 * QA * QC
 
@@ -231,11 +236,16 @@ class Detector:
                 t = np.where((t2 > 0), t2, t1)
                 t = np.where(delta < 0, -1.0, t)
 
-        X = s[0] + t * dir_vec[0]
-        Y = s[1] + t * dir_vec[1]
-        Z = s[2] + t * dir_vec[2]
+        if s.ndim == 2:
+            X = s[:, 0] + t * dir_vec[0]
+            Y = s[:, 1] + t * dir_vec[1]
+            Z = s[:, 2] + t * dir_vec[2]
+        else:
+            X = s[0] + t * dir_vec[0]
+            Y = s[1] + t * dir_vec[1]
+            Z = s[2] + t * dir_vec[2]
 
         row, col = self.lab_to_pixel(X, Y, Z)
-        mask = (row > 0) & (col > 0) & (row < self.n - 1) & (col < self.m - 1) & (t > 0)
+        mask = (row >= 0) & (col >= 0) & (row < self.n) & (col < self.m) & (t > 0)
 
         return mask, row, col
