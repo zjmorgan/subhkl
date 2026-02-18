@@ -25,8 +25,8 @@ def test_cosine_argument_compatibility():
     )
 
     # Mock inputs for the indexer
-    UB = np.eye(3)
-    kf_ki_sample = np.array([[[1.0, 0.0, 0.0]]])  # (Batch, N, 3)
+    UB = np.eye(3)[None, ...]  # (Batch, 3, 3)
+    kf_ki_sample = np.array([[[1.0], [0.0], [0.0]]])  # (Batch, 3, N)
     k_sq_dyn = np.array([[1.0]])  # (Batch, N)
 
     try:
