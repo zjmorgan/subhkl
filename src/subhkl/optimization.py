@@ -1204,7 +1204,7 @@ class VectorizedObjective:
                 norm_q_chunk_pinned[None, None, :] < 1e-6, -1e9, selection_metric
             )
 
-            global_idxs = jnp.arange(chunk_size) + idx_start
+            global_idxs = (jnp.arange(chunk_size) + idx_start).astype(jnp.int32)
             combined_vals = jnp.concatenate([curr_vals, selection_metric], axis=2)
             combined_idxs = jnp.concatenate(
                 [
@@ -1250,7 +1250,8 @@ class VectorizedObjective:
         lambda_sparse = k_sq_obs[:, :, None] / (k_dot_q + 1e-9)
 
         # Soft Lambda Penalty (Gaussian penalty for being outside bandwidth)
-        # Using a broader width (10% of bandwidth) to prevent numerical drowning of angular signal
+        # Using a broader width (10% of bandwidth) to prevent numerical
+        # drowning of angular signal
         bw_width = self.wl_max_val - self.wl_min_val
         dist_wl = jnp.maximum(0.0, self.wl_min_val - lambda_sparse) + jnp.maximum(
             0.0, lambda_sparse - self.wl_max_val
@@ -1980,8 +1981,8 @@ class FindUB:
                 self.x = res_ref.x
             else:
                 print(
-                    f"Refinement increased cost from {best_overall_fun:.4f} to {res_ref.fun:.4f}. "
-                    "Reverting to best DE solution."
+                    f"Refinement increased cost from {best_overall_fun:.4f} "
+                    f"to {res_ref.fun:.4f}. Reverting to best DE solution."
                 )
                 self.x = best_overall_x
         else:
@@ -2616,8 +2617,8 @@ class FindUB:
                 best_overall_fitness = res_ref.fun
             else:
                 print(
-                    f"Refinement increased cost from {best_overall_fitness:.4f} to {res_ref.fun:.4f}. "
-                    "Reverting to best DE solution."
+                    f"Refinement increased cost from {best_overall_fitness:.4f} "
+                    f"to {res_ref.fun:.4f}. Reverting to best DE solution."
                 )
         else:
             print(
@@ -2697,7 +2698,8 @@ class FindUB:
 
         num_peaks_soft = float(np.sum(accum_probs[0]))
         print(
-            f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} peaks (unweighted count)."
+            f"Final Solution indexed {num_peaks_soft:.2f}/{num_obs} "
+            "peaks (unweighted count)."
         )
 
         return num_peaks_soft, np.array(hkl[0]), np.array(lamb[0]), np.array(U)
