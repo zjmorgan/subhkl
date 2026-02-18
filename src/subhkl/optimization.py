@@ -28,6 +28,8 @@ from subhkl.utils import (
     jax,
     lax,
     jnp,
+    jnp_update_add,
+    jnp_update_set,
     jscipy_linalg,
 )
 
@@ -696,8 +698,8 @@ class VectorizedObjective:
             ty = _forward_map_param(x[:, idx + 1], bound_rad)
             idx += 2
             ki_vec = jnp.tile(self.beam_nominal[None, :], (x.shape[0], 1))
-            ki_vec = ki_vec.at[:, 0].add(tx)
-            ki_vec = ki_vec.at[:, 1].add(ty)
+            ki_vec = jnp_update_add(ki_vec, (slice(None), 0), tx)
+            ki_vec = jnp_update_add(ki_vec, (slice(None), 1), ty)
             ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
         else:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
@@ -705,8 +707,10 @@ class VectorizedObjective:
         if self.refine_goniometer:
             gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
             if self.num_active_gonio > 0:
-                gonio_norm = gonio_norm.at[:, self.gonio_mask].set(
-                    x[:, idx : idx + self.num_active_gonio]
+                gonio_norm = jnp_update_set(
+                    gonio_norm,
+                    (slice(None), self.gonio_mask),
+                    x[:, idx : idx + self.num_active_gonio],
                 )
                 idx += self.num_active_gonio
 

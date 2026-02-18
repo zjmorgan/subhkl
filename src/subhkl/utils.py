@@ -247,6 +247,26 @@ except Exception:
     jax_scipy = jax.scipy
 
 
+def jnp_update_add(arr, idx, val):
+    """Immutable update: arr[idx] += val"""
+    if HAS_JAX:
+        return arr.at[idx].add(val)
+    else:
+        res = arr.copy()
+        res[idx] += val
+        return res
+
+
+def jnp_update_set(arr, idx, val):
+    """Immutable update: arr[idx] = val"""
+    if HAS_JAX:
+        return arr.at[idx].set(val)
+    else:
+        res = arr.copy()
+        res[idx] = val
+        return res
+
+
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
     Scale pixel coordinates to physical coordinates.
