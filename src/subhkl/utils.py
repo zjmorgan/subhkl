@@ -19,6 +19,7 @@ try:
     import jax.scipy.linalg as jscipy_linalg
     import jax.scipy.optimize
     import jax.scipy.signal
+    import jax.jit as jit
     from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
     from jax.sharding import Mesh, NamedSharding
     from jax.sharding import PartitionSpec as P
