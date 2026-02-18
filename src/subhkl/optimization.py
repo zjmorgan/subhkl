@@ -26,6 +26,7 @@ from subhkl.utils import (
     NamedSharding,
     P,
     jax,
+    lax,
     jnp,
     jscipy_linalg,
 )
@@ -885,7 +886,7 @@ class VectorizedObjective:
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
-        final_carry, _ = jax.lax.scan(
+        final_carry, _ = lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
         accum_probs, prob_max, best_hkl, best_lamb = final_carry
@@ -989,7 +990,7 @@ class VectorizedObjective:
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
             return (new_sum, new_max, new_best_hkl, new_best_lamb), None
 
-        final_carry, _ = jax.lax.scan(
+        final_carry, _ = lax.scan(
             scan_body, initial_carry, jnp.arange(self.num_candidates)
         )
         _, log_prob_max, best_hkl, best_lamb = final_carry
@@ -1074,7 +1075,7 @@ class VectorizedObjective:
             new_best_lamb = jnp.where(improve_mask, batch_best_lamb, curr_best_lamb)
             return (new_min_dist, new_best_hkl, new_best_lamb), None
 
-        final_carry, _ = jax.lax.scan(scan_body, init_carry, offset_batches)
+        final_carry, _ = lax.scan(scan_body, init_carry, offset_batches)
         best_dist_sq, best_hkl, best_lamb = final_carry
 
         # Use dynamic lambda for accurate physical tolerance scaling
@@ -1193,7 +1194,7 @@ class VectorizedObjective:
             idxs = jnp.take_along_axis(combined_idxs, top_k_indices, axis=2)
             return (vals, idxs), None
 
-        (top_vals, top_idxs), _ = jax.lax.scan(
+        (top_vals, top_idxs), _ = lax.scan(
             scan_topk,
             (
                 jnp.full((batch_size, n_obs, top_k), -1e9),

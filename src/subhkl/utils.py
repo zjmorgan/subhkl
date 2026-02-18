@@ -19,7 +19,9 @@ try:
     import jax.scipy.linalg as jscipy_linalg
     import jax.scipy.optimize
     import jax.scipy.signal
-    import jax.jit as jit
+    from jax import jit as jit
+    from jax import vmap as vmap
+    from jax import lax as lax
     from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
     from jax.sharding import Mesh, NamedSharding
     from jax.sharding import PartitionSpec as P
@@ -40,11 +42,93 @@ except Exception:
             return f
 
         @staticmethod
-        def vmap(f, **kwargs):
-            """Fallback vmap: returns the function unchanged."""
-            return f
+        def vmap(fun, in_axes=0, out_axes=0):
+            """A basic pure-Python/NumPy shim for jax.vmap."""
 
-        lax = None
+            def batched_fun(*args):
+                # Normalize in_axes to a tuple so it pairs with args
+                axes = in_axes if isinstance(in_axes, (tuple, list)) else (in_axes,) * len(args)
+
+                # Determine the batch size by looking at the first mapped argument
+                batch_size = None
+                for arg, axis in zip(args, axes):
+                    if axis is not None:
+                        batch_size = arg.shape[axis]
+                        break
+
+                # If no axes are mapped, just return the standard function
+                if batch_size is None:
+                    return fun(*args)
+
+                # Run the function in a loop over the batch size
+                results = []
+                for i in range(batch_size):
+                    unbatched_args = []
+                    for arg, axis in zip(args, axes):
+                        if axis is not None:
+                            # Extract the slice for this specific batch index
+                            unbatched_args.append(np.take(arg, i, axis=axis))
+                        else:
+                            # Pass the argument as-is (e.g., for broadcasting)
+                            unbatched_args.append(arg)
+
+                    # Apply the core function to the single slice
+                    results.append(fun(*unbatched_args))
+
+                # Stack the collected results back together along the requested out_axes
+                return np.stack(results, axis=out_axes)
+
+            return batched_fun
+
+        class _LaxShim:
+            @staticmethod
+            def scan(f, init, xs, length=None):
+                if xs is None:
+                    xs = [None] * length
+                carry = init
+                ys = []
+                for x in xs:
+                    carry, y = f(carry, x)
+                    ys.append(y)
+                return carry, np.stack(ys)
+
+            @staticmethod
+            def dynamic_slice(operand, start_indices, slice_sizes):
+                """A NumPy shim for jax.lax.dynamic_slice."""
+                operand = np.asarray(operand)
+
+                if len(start_indices) != operand.ndim or len(slice_sizes) != operand.ndim:
+                    raise ValueError("start_indices and slice_sizes must match the rank of the operand.")
+
+                slices = []
+                for start, size, dim_size in zip(start_indices, slice_sizes, operand.shape):
+                    # JAX clamps the start index so the requested slice size always fits
+                    max_valid_start = max(0, dim_size - size)
+                    clamped_start = min(max(0, start), max_valid_start)
+
+                    # Build the slice object for this dimension
+                    slices.append(slice(clamped_start, clamped_start + size))
+
+                return operand[tuple(slices)]
+
+            @staticmethod
+            def top_k(operand, k):
+                """A NumPy shim for jax.lax.top_k."""
+                operand = np.asarray(operand)
+
+                # Sort indices along the last axis.
+                # np.argsort sorts ascending, so the largest values are at the end.
+                sorted_indices = np.argsort(operand, axis=-1)
+
+                # Slice the last k indices, then reverse the step ([::-1]) to make it descending
+                top_indices = sorted_indices[..., -k:][..., ::-1]
+
+                # Use the indices to gather the actual values from the original array
+                top_values = np.take_along_axis(operand, top_indices, axis=-1)
+
+                return top_values, top_indices
+
+        lax = _LaxShim()
 
     jax = _JaxShim()
     jnp = np
