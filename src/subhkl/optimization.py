@@ -1128,6 +1128,12 @@ class VectorizedObjective:
         batch_size, _, n_obs = kf_ki_sample.shape
         _, n_hkl = hkl_pool.shape
 
+        # Bandwidth and Resolution Constants for Penalties
+        wl_mid = 0.5 * (self.wl_min_val + self.wl_max_val)
+        wl_half_width = 0.5 * (self.wl_max_val - self.wl_min_val)
+        res_mid = 0.5 * (self.d_min + self.d_max)
+        res_half_width = 0.5 * (self.d_max - self.d_min)
+
         # Pad pool for chunking
         pad_len = (chunk_size - (n_hkl % chunk_size)) % chunk_size
         hkl_pool_padded = (
@@ -1168,14 +1174,10 @@ class VectorizedObjective:
                 norm_obs.transpose(0, 2, 1) * safe_dot + 1e-9
             )
 
-            wl_mid = 0.5 * (self.wl_min_val + self.wl_max_val)
-            wl_half_width = 0.5 * (self.wl_max_val - self.wl_min_val)
             wl_penalty = -jnp.abs(est_lambda - wl_mid) / (wl_half_width + 1e-9)
 
             # norm_q_chunk_pinned is (chunk,)
             d_chunk = 1.0 / (norm_q_chunk_pinned + 1e-9)
-            res_mid = 0.5 * (self.d_min + self.d_max)
-            res_half_width = 0.5 * (self.d_max - self.d_min)
             res_penalty = -jnp.abs(d_chunk - res_mid) / (res_half_width + 1e-9)
 
             selection_metric = (
@@ -1263,6 +1265,14 @@ class VectorizedObjective:
 
         # Combine into robust log-likelihood
         log_K_robust = log_K + log_P_wl + log_P_res
+
+        # --- TIE-BREAKER PENALTIES ---
+        # If multiple HKLs have identical orientation error (cosines),
+        # prefer the one that matches the expected wavelength and resolution center.
+        # This breaks ties caused by the regularizer (1e-9) favoring larger vectors.
+        log_P_wl_tie = -1e-4 * jnp.abs(lambda_sparse - wl_mid) / (wl_half_width + 1e-9)
+        log_P_res_tie = -1e-4 * jnp.abs(d_sparse - res_mid) / (res_half_width + 1e-9)
+        log_K_robust += log_P_wl_tie + log_P_res_tie
 
         # 5. Dustbin & Softmax
         # Dustbin represents the "null" HKL match
