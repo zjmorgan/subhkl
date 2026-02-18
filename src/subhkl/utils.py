@@ -214,8 +214,7 @@ except Exception:
                     )
                 elif isinstance(first, dict):
                     return {
-                        k: jax.tree.map(f, *[t[k] for t in trees])
-                        for k in first.keys()
+                        k: jax.tree.map(f, *[t[k] for t in trees]) for k in first.keys()
                     }
                 else:
                     return f(*trees)
