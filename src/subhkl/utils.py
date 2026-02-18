@@ -139,12 +139,101 @@ except Exception:
 
                 return top_values, top_indices
 
+        class _NnShim:
+            @staticmethod
+            def logsumexp(a, axis=None, b=None, keepdims=False, return_sign=False):
+                from scipy.special import logsumexp
+
+                return logsumexp(
+                    a, axis=axis, b=b, keepdims=keepdims, return_sign=return_sign
+                )
+
+        class _ScipyShim:
+            class _SpecialShim:
+                @staticmethod
+                def logit(x):
+                    from scipy.special import logit
+
+                    return logit(x)
+
+            class _SignalShim:
+                @staticmethod
+                def correlate2d(in1, in2, mode="same", boundary="fill", fillvalue=0):
+                    from scipy.signal import correlate2d
+
+                    return correlate2d(
+                        in1,
+                        in2,
+                        mode=mode,
+                        boundary=boundary,
+                        fillvalue=fillvalue,
+                    )
+
+                @staticmethod
+                def convolve2d(in1, in2, mode="same", boundary="fill", fillvalue=0):
+                    from scipy.signal import convolve2d
+
+                    return convolve2d(
+                        in1,
+                        in2,
+                        mode=mode,
+                        boundary=boundary,
+                        fillvalue=fillvalue,
+                    )
+
+            class _OptimizeShim:
+                @staticmethod
+                def minimize(
+                    fun, x0, args=(), method=None, tol=None, options=None
+                ):
+                    from scipy.optimize import minimize
+
+                    return minimize(
+                        fun,
+                        x0,
+                        args=args,
+                        method=method,
+                        tol=tol,
+                        options=options,
+                    )
+
+            special = _SpecialShim()
+            signal = _SignalShim()
+            optimize = _OptimizeShim()
+
         lax = _LaxShim()
+        nn = _NnShim()
+        scipy = _ScipyShim()
 
     jax = _JaxShim()
     jnp = np
     jit = jax.jit
-    jscipy_linalg = scipy.linalg
+
+    class _JscipyLinalgShim:
+        @staticmethod
+        def cholesky(a, lower=False, overwrite_a=False, check_finite=True):
+            import scipy.linalg
+
+            # Handle batching manually if needed, or use np.vectorize
+            if a.ndim > 2:
+                # We can use our vmap shim!
+                def single_cholesky(matrix):
+                    return scipy.linalg.cholesky(
+                        matrix,
+                        lower=lower,
+                        overwrite_a=overwrite_a,
+                        check_finite=check_finite,
+                    )
+
+                return jax.vmap(single_cholesky)(a)
+            return scipy.linalg.cholesky(
+                a,
+                lower=lower,
+                overwrite_a=overwrite_a,
+                check_finite=check_finite,
+            )
+
+    jscipy_linalg = _JscipyLinalgShim()
     DifferentialEvolution = None
     PSO = None
     CMA_ES = None
@@ -156,6 +245,8 @@ except Exception:
     jit = jax.jit
     lax = jax.lax
     vmap = jax.vmap
+    nn = jax.nn
+    jax_scipy = jax.scipy
 
 
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
