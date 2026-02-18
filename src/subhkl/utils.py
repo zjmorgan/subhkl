@@ -183,9 +183,7 @@ except Exception:
 
             class _OptimizeShim:
                 @staticmethod
-                def minimize(
-                    fun, x0, args=(), method=None, tol=None, options=None
-                ):
+                def minimize(fun, x0, args=(), method=None, tol=None, options=None):
                     from scipy.optimize import minimize
 
                     return minimize(

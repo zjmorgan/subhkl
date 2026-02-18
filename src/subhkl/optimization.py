@@ -1937,9 +1937,7 @@ class FindUB:
             self.R = np.array(R_batch[0])
 
         # 6. Final Result Generation
-        _, accum_probs, hkl_final, lamda_final = objective_v.get_results(
-            best_member
-        )
+        _, accum_probs, hkl_final, lamda_final = objective_v.get_results(best_member)
 
         # Squeeze batch dim and convert to array
         hkl_final = np.array(hkl_final[0])
