@@ -417,7 +417,6 @@ class VectorizedObjective:
             dist = jnp.linalg.norm(v, axis=0)
             self.kf_lab_fixed = v / jnp.where(dist == 0, 1.0, dist[None, :])
             # Input is in LAB frame, so it is NOT yet rotated to Sample frame.
-            self.input_is_rotated = False
 
         if kf_lab_fixed_vectors is not None and self.kf_lab_fixed is None:
             # Input was Lab Frame. Q_lab = kf_lab - ki_lab.
@@ -428,7 +427,6 @@ class VectorizedObjective:
             self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(
                 self.kf_lab_fixed, axis=0
             )
-            self.input_is_rotated = False
 
         if self.kf_lab_fixed is None:
             # Fallback
@@ -440,9 +438,8 @@ class VectorizedObjective:
                 self.kf_lab_fixed, axis=0
             )
             # FIX: Lab angles (two_theta, azimuthal) are ALWAYS in Lab frame.
-            # We must set input_is_rotated to False to ensure the optimizer
+            # We must ensure the optimizer
             # applies the Lab -> Sample rotation (R^T) during objective evaluation.
-            self.input_is_rotated = False
 
         self.tolerance_deg = tolerance_deg
         self.loss_method = loss_method
@@ -1447,8 +1444,8 @@ class VectorizedObjective:
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
         # Rotate to SAMPLE FRAME: q_sample = R^T * q_lab
-        # ONLY if input is NOT already rotated.
-        if R_per_peak is not None and not self.input_is_rotated:
+        # (Inputs are always in Lab frame and require rotation)
+        if R_per_peak is not None:
             # q_lab is (S, 3, N). We want (S, N, 3, 1) for matmul
             q_lab_vec = q_lab.transpose(0, 2, 1)[..., None]
             if R_per_peak.ndim == 4:

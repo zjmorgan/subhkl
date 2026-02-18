@@ -203,7 +203,6 @@ def test_stage1_multirun_rotation_bypass():
         refine_goniometer=False,
         static_R=static_R,
     )
-    assert not obj.input_is_rotated
 
 
 def test_predictor_multirun_sample_rotation():
