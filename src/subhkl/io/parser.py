@@ -614,10 +614,11 @@ def indexer(
             print("Refining run_index based on unique geometries...")
             combined = np.hstack(combined_keys)
 
-            # Use rounding to handle floating point jitter in uniqueness check
-            # Rounding to 6 decimal places handles 1e-7 tolerance (sub-pixel/sub-arcsec)
-            combined_rounded = np.round(combined, 6)
-            _, unique_mapping = np.unique(combined_rounded, axis=0, return_inverse=True)
+            # Use rounding to handle floating point jitter in uniqueness check.
+            # We scale and cast to integer to ensure robust comparison in np.unique.
+            # Scaling by 1e6 handles 1e-7 tolerance (sub-pixel/sub-arcsec).
+            combined_int = np.round(combined * 1e6).astype(np.int64)
+            _, unique_mapping = np.unique(combined_int, axis=0, return_inverse=True)
             input_data["peaks/run_index"] = unique_mapping
 
             # Update R and angles to match the new unique mapping

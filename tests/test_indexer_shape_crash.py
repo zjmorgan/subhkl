@@ -55,23 +55,20 @@ def test_indexer_angles_stack_shape_crash(tmp_path):
         del f["peaks/run_index"]
         f["peaks/run_index"] = old_run_indices
 
-    try:
-        indexer(
-            peaks_h5_filename=str(peaks_h5),
-            output_peaks_filename=str(output_h5),
-            a=10,
-            b=10,
-            c=10,
-            alpha=90,
-            beta=90,
-            gamma=90,
-            space_group="P 1",
-            gens=1,
-            n_runs=1,
-        )
-        print("SUCCESS: Indexer completed without crash!")
-    except Exception as e:
-        pytest.fail(f"Indexer CRASHED despite fix! Error: {e}")
+    indexer(
+        peaks_h5_filename=str(peaks_h5),
+        output_peaks_filename=str(output_h5),
+        a=10,
+        b=10,
+        c=10,
+        alpha=90,
+        beta=90,
+        gamma=90,
+        space_group="P 1",
+        gens=1,
+        n_runs=1,
+    )
+    print("SUCCESS: Indexer completed without crash!")
 
     # Verify output run_index expansion
     with h5py.File(output_h5, "r") as f:
