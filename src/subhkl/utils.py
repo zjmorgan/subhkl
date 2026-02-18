@@ -47,7 +47,11 @@ except Exception:
 
             def batched_fun(*args):
                 # Normalize in_axes to a tuple so it pairs with args
-                axes = in_axes if isinstance(in_axes, (tuple, list)) else (in_axes,) * len(args)
+                axes = (
+                    in_axes
+                    if isinstance(in_axes, (tuple, list))
+                    else (in_axes,) * len(args)
+                )
 
                 # Determine the batch size by looking at the first mapped argument
                 batch_size = None
@@ -97,11 +101,18 @@ except Exception:
                 """A NumPy shim for jax.lax.dynamic_slice."""
                 operand = np.asarray(operand)
 
-                if len(start_indices) != operand.ndim or len(slice_sizes) != operand.ndim:
-                    raise ValueError("start_indices and slice_sizes must match the rank of the operand.")
+                if (
+                    len(start_indices) != operand.ndim
+                    or len(slice_sizes) != operand.ndim
+                ):
+                    raise ValueError(
+                        "start_indices and slice_sizes must match the rank of the operand."
+                    )
 
                 slices = []
-                for start, size, dim_size in zip(start_indices, slice_sizes, operand.shape):
+                for start, size, dim_size in zip(
+                    start_indices, slice_sizes, operand.shape
+                ):
                     # JAX clamps the start index so the requested slice size always fits
                     max_valid_start = max(0, dim_size - size)
                     clamped_start = min(max(0, start), max_valid_start)
