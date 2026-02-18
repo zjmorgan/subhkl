@@ -27,11 +27,11 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     # Generate 5 peaks per bank to have a stronger signal
     hkls = np.array(
         [
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-            [1, 1, 0],
-            [1, 0, 1],
+            [1, 0, -1],
+            [0, 1, -1],
+            [0, 0, -1],
+            [-1, -1, -1],
+            [1, 1, -1],
         ]
     )
     num_hkls = len(hkls)

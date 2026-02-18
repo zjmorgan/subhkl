@@ -423,11 +423,15 @@ def calculate_angular_error(
     # Q_obs direction
     with np.errstate(divide="ignore", invalid="ignore"):
         q_obs_norm = delta_k / two_sin_theta[:, None]
+        # Handle 0-degree scattering where direction is undefined
+        q_obs_norm = np.nan_to_num(q_obs_norm, nan=0.0)
 
     # 3. Angular Error (Angle between Q_calc direction and Q_obs direction)
     dot = np.sum(q_obs_norm * q_calc_norm, axis=1)
     dot = np.clip(dot, -1.0, 1.0)
     ang_err = np.rad2deg(np.arccos(dot))
+    # If q_obs_norm was zeroed out (0-degree scattering), arccos(0) = 90 deg.
+    # This is a reasonable penalty for a 0-degree observation matching a finite Q prediction.
 
     # 4. D-Spacing Error
     # d_obs = lambda / 2sin(theta)
