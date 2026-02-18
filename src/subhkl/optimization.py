@@ -1054,7 +1054,9 @@ class VectorizedObjective:
             hkl_cands = jnp.take(pool_T, gather_idx, axis=0, mode="wrap")
             # Broadcasted matmul: (S, 3, 3) @ (S, M, W, 3, 1) -> (S, M, W, 3, 1)
             # hkl_cands is (S, M, W, 3)
-            q_pred = jnp.matmul(ub_mat[:, None, None, ...], hkl_cands[..., None]).squeeze(-1)
+            q_pred = jnp.matmul(
+                ub_mat[:, None, None, ...], hkl_cands[..., None]
+            ).squeeze(-1)
             k_obs = jnp.transpose(kf_ki_sample, (0, 2, 1))[:, :, None, :]
             k_dot_q = jnp.sum(k_obs * q_pred, axis=3)
             lambda_opt = k_sq[..., None] / jnp.where(
@@ -1230,7 +1232,9 @@ class VectorizedObjective:
         hkl_selected = jnp.take(hkl_pool_padded.T, top_idxs, axis=0)
         # ub_mat: (S, 3, 3), hkl_selected: (S, N, K, 3)
         # We want (S, N, K, 3)
-        q_selected = jnp.matmul(ub_mat[:, None, None, ...], hkl_selected[..., None]).squeeze(-1)
+        q_selected = jnp.matmul(
+            ub_mat[:, None, None, ...], hkl_selected[..., None]
+        ).squeeze(-1)
         q_sq_selected = jnp.sum(q_selected**2, axis=3)
         norm_q_selected = jnp.sqrt(q_sq_selected + 1e-9)
 
@@ -1410,7 +1414,9 @@ class VectorizedObjective:
             if R_per_peak is not None:
                 if R_per_peak.ndim == 4:
                     # (S, N, 3, 3) @ (S, 3, 1) -> (S, N, 3, 1)
-                    s_lab = jnp.matmul(R_per_peak, sample_total[:, None, :, None]).squeeze(-1)
+                    s_lab = jnp.matmul(
+                        R_per_peak, sample_total[:, None, :, None]
+                    ).squeeze(-1)
                     s = s_lab.transpose(0, 2, 1)  # (S, 3, N)
                 elif R_per_peak.ndim == 3:
                     # Broadcasted Matmul: (1, N, 3, 3) @ (S, 1, 3, 1) -> (S, N, 3, 1)
@@ -1420,7 +1426,9 @@ class VectorizedObjective:
                     s = s_lab.transpose(0, 2, 1)
                 else:
                     # (3, 3) @ (S, 3, 1) -> (S, 3, 1)
-                    s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, :, None]).squeeze(-1)
+                    s_lab = jnp.matmul(
+                        R_per_peak[None, ...], sample_total[:, :, None]
+                    ).squeeze(-1)
                     s = s_lab[:, :, None]
             else:
                 s = sample_total[:, :, None]
@@ -1494,7 +1502,12 @@ class VectorizedObjective:
             )
 
         # Slice results back to original batch size (Workaround cleanup)
-        return jax.tree.map(lambda arr: arr[:original_S] if hasattr(arr, "shape") and arr.ndim > 0 else arr, res)
+        return jax.tree.map(
+            lambda arr: (
+                arr[:original_S] if hasattr(arr, "shape") and arr.ndim > 0 else arr
+            ),
+            res,
+        )
 
     @partial(jax.jit, static_argnames="self")
     def __call__(self, x):
