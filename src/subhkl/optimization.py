@@ -1722,6 +1722,7 @@ class FindUB:
         population_size: int = 1000,
         num_generations: int = 100,
         seed: int = 0,
+        tolerance_deg: float = 0.1,
         softness: float = 0.01,
         loss_method: str = "gaussian",
         init_params: np.ndarray = None,
@@ -1822,7 +1823,7 @@ class FindUB:
             angle_cdf=self._angle_cdf,
             angle_t=self._angle_t,
             weights=weights,
-            tolerance_deg=softness * 180.0 / np.pi,  # convert rad to deg for obj
+            tolerance_deg=tolerance_deg,
             cell_params=[self.a, self.b, self.c, self.alpha, self.beta, self.gamma],
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
@@ -1893,10 +1894,28 @@ class FindUB:
         )
 
         print("\n--- Optimization Complete ---")
-        print(f"Best score: {-result.fun:.2f}")
+        print(f"Best DE score: {-result.fun:.2f}")
+
+        # --- Local Refinement (BFGS) ---
+        print("Polishing solution with BFGS refinement...")
+        from scipy.optimize import minimize as scipy_minimize
+
+        res_ref = scipy_minimize(
+            objective_scipy,
+            result.x,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 50},
+        )
+
+        if res_ref.success:
+            print(f"Refinement successful. Final score: {-res_ref.fun:.2f}")
+            self.x = res_ref.x
+        else:
+            print(f"Refinement did not converge: {res_ref.message}")
+            self.x = result.x
 
         # 5. Store Results
-        self.x = result.x
         best_member = self.x[None, :]
 
         # Extract physical parameters and update self
@@ -2123,6 +2142,7 @@ class FindUB:
                 population_size=population_size,
                 num_generations=num_generations,
                 seed=seed,
+                tolerance_deg=tolerance_deg,
                 softness=softness,
                 loss_method=loss_method,
                 init_params=init_params,
