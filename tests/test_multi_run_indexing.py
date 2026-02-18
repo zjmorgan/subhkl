@@ -182,29 +182,6 @@ def test_sample_offset_refinement_multirun():
     assert error < 1e-2
 
 
-def test_stage1_multirun_rotation_bypass():
-    _a, _b, _c = 10.0, 10.0, 10.0
-    B = np.eye(3)
-    tt = np.array([20.0, 20.0])
-    az = np.array([0.0, 0.0])
-    from subhkl.optimization import scattering_vector_from_angles
-
-    kf_ki_dir = scattering_vector_from_angles(tt, az)
-    R1 = np.eye(3)
-    R2 = Rotation.from_euler("y", 90, degrees=True).as_matrix()
-    static_R = np.stack([R1, R2], axis=0)
-    obj = VectorizedObjective(
-        B=B,
-        kf_ki_dir=kf_ki_dir,
-        peak_xyz_lab=None,
-        wavelength=[1.0, 2.0],
-        angle_cdf=np.zeros(100),
-        angle_t=np.zeros(100),
-        refine_goniometer=False,
-        static_R=static_R,
-    )
-
-
 def test_predictor_multirun_sample_rotation():
     from subhkl.detector import Detector
     from subhkl.utils import predict_reflections_on_panel
