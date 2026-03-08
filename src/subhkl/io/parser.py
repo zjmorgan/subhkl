@@ -1423,7 +1423,7 @@ def zone_axis_search(
         return
 
     print("Filtering Prior through Exact Physics Forward-Model...")
-    physics_evaluator = ImageBasedObjectiveJAX(
+    physics_evaluator = ImageBasedObjective(
         images_landscape, hkl_pool, B_mat, np.array(R_stack), wavelength_min, wavelength_max,
         np.array(det_centers), np.array(uhats), np.array(vhats), np.array(widths), np.array(heights), np.array(ms), np.array(ns),
         np.array([0., 0., 1.]), np.zeros(3)
