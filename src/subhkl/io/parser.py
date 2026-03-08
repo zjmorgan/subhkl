@@ -1329,7 +1329,7 @@ def zone_axis_search(
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
-        file_bank_ids = list(f_in["bank_ids"].asstr())
+        file_bank_ids = list(str(bid) for bid in f_in["bank_ids"])
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
 
