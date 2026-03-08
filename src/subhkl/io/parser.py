@@ -1297,6 +1297,164 @@ def merge_images(
 
     print(f"Successfully created {output_filename}")
 
+@app.command()
+def zone_axis_search(
+    merged_h5_filename: str,
+    instrument: str,
+    output_h5_filename: str,
+    a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float,
+    space_group: str,
+    d_min: float = 1.0,
+    sigma: float = 2.0, 
+    min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
+    hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
+    davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
+    prior_top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
+    use_first_run_only: bool = typer.Option(True, help="Limit to the first goniometer orientation.")
+):
+    """
+    Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
+    Outputs an HDF5 file that can be passed directly to 'indexer --bootstrap'.
+    """
+    import h5py
+    import numpy as np
+    import scipy.ndimage
+    import jax
+    import jax.numpy as jnp
+    from subhkl.config import beamlines, reduction_settings
+    from subhkl.optimization import FindUB
+    from subhkl.prior import HoughDavenportPrior, ImageBasedObjective
+    from subhkl.utils import generate_reflections
+
+    print(f"Loading data from {merged_h5_filename}...")
+    with h5py.File(merged_h5_filename, 'r') as f_in:
+        file_bank_ids = list(f_in["bank_ids"].asstr())
+        ax = f_in["goniometer/axes"][()]
+        goniometer_angles = np.array(f_in["goniometer/angles"][()])
+
+        from subhkl.config import calc_goniometer_rotation_matrix
+        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
+
+        file_offsets = f_in["file_offsets"][()]
+        images_raw = np.stack(f_in["images"][()])
+        
+    # By default, only use the first goniometer setting to prevent multi-run smearing
+    if use_first_run_only:
+        end_idx = file_offsets[1] if len(file_offsets) > 1 else len(file_bank_ids)
+        print(f"Limiting search to the first run (Images 0 to {end_idx-1})...")
+        file_bank_ids = file_bank_ids[:end_idx]
+        R_stack = R_stack[:end_idx]
+        images_raw = images_raw[:end_idx]
+
+    settings = reduction_settings[instrument]
+    wavelength_min, wavelength_max = settings.get("Wavelength")
+
+    # Spatial median filter to remove flat background
+    medians = np.median(images_raw, axis=(1, 2), keepdims=True)
+    images_bg = np.maximum(images_raw - medians, 0)
+
+    images_landscape = np.zeros_like(images_bg, dtype=np.float32)
+    print("Generating continuous image landscapes...")
+    for i in range(len(images_bg)):
+        smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
+        mask = smoothed > (min_intensity * 0.5)
+        if not np.any(mask): continue
+        dist = scipy.ndimage.distance_transform_edt(~mask)
+        images_landscape[i] = np.exp(-dist / sigma)
+
+    print("Generating theoretical HKL pool...")
+    h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    hkl_pool = np.vstack([h, k_idx, l])
+
+    ub_helper = FindUB()
+    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    B_mat = ub_helper.reciprocal_lattice_B()
+
+    det_centers, uhats, vhats = [], [], []
+    widths, heights, ms, ns = [], [], [], []
+
+    for i, phys_bank in enumerate(file_bank_ids):
+        from subhkl.detector import Detector
+        det_config = beamlines[instrument][str(phys_bank)]
+        det = Detector(det_config)
+
+        det_centers.append(det.center)
+        uhats.append(det.uhat)
+        vhats.append(det.vhat)
+        widths.append(det.width)
+        heights.append(det.height)
+        ms.append(det.m)
+        ns.append(det.n)
+
+    print("--- HOUGH-DAVENPORT PRIOR GENERATION ---")
+    prior_engine = HoughDavenportPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
+    
+    q_hat = prior_engine.extract_empirical_rays(images_bg, instrument, file_bank_ids,
+                                                min_intensity=min_intensity,
+                                                sigma=sigma,
+                                                top_k_rays=prior_top_k_rays)
+    
+    print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
+    n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution)
+    
+    if len(n_obs) == 0:
+        print("Failed to find any zone axes.")
+        return
+
+    n_calc = prior_engine.generate_theoretical_zones()
+    print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
+    
+    quats, _ = prior_engine.solve_davenport_permutations(
+        jnp.array(n_obs), jnp.array(weights_obs), n_calc, 
+        q_hat, angle_tol_deg=davenport_angle_tol
+    )
+    
+    if quats is None or len(quats) == 0:
+        print("Davenport solver failed to find any valid permutations.")
+        return
+
+    print("Filtering Prior through Exact Physics Forward-Model...")
+    physics_evaluator = ImageBasedObjective(
+        images_landscape, hkl_pool, B_mat, np.array(R_stack), wavelength_min, wavelength_max,
+        np.array(det_centers), np.array(uhats), np.array(vhats), np.array(widths), np.array(heights), np.array(ms), np.array(ns),
+        np.array([0., 0., 1.]), np.zeros(3)
+    )
+    
+    prior_rots = prior_engine.physics_filter(quats, physics_evaluator)
+
+    if prior_rots is None or len(prior_rots) == 0:
+        print("Exact physical model rejected all seeds. Exiting.")
+        return
+
+    print(f"Success! Saving optimal seed to {output_h5_filename}...")
+    with h5py.File(output_h5_filename, "w") as f:
+        # Expose the Rodrigues vector for FindUB to ingest
+        best_rot = np.array(prior_rots[0])
+        f.create_dataset("optimization/best_params", data=best_rot)
+        
+        # Save the matrix for reference
+        from subhkl.optimization import rotation_matrix_from_rodrigues_jax
+        U_matrix = np.array(rotation_matrix_from_rodrigues_jax(best_rot))
+        f.create_dataset("sample/U", data=U_matrix)
+        
+        # Unit Cell
+        f.create_dataset("sample/a", data=a)
+        f.create_dataset("sample/b", data=b)
+        f.create_dataset("sample/c", data=c)
+        f.create_dataset("sample/alpha", data=alpha)
+        f.create_dataset("sample/beta", data=beta)
+        f.create_dataset("sample/gamma", data=gamma)
+        
+        # Pad empty states required by the GA bootstrap loader
+        f.create_dataset("sample/offset", data=np.zeros(3))
+        f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
+        f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
+        f.create_dataset("sample/space_group", data=space_group.encode('utf-8'))
+        f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
+
+    print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
 
 if __name__ == "__main__":
     app()

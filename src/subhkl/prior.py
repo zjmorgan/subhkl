@@ -1,0 +1,595 @@
+import numpy as np
+import scipy.ndimage
+import jax
+import jax.numpy as jnp
+from subhkl.davenport import batch_davenport
+from subhkl.optimization import quaternion_to_rodrigues
+from subhkl.config import beamlines
+
+class HoughDavenportPrior:
+    """
+    A robust prior generator for Laue crystallography.
+    Fuses Multi-Run Combinatorial Hough Transforms with Davenport's q-method
+    and an exact physical forward-model filter to seed global evolutionary optimization.
+    """
+    def __init__(self, B_mat, R_stack, ki_vec=np.array([0.0, 0.0, 1.0])):
+        self.B_mat = B_mat
+        self.R_stack = R_stack
+        self.ki_vec = ki_vec
+
+    def extract_empirical_rays(self, images_bg, instrument, file_bank_ids,
+                              min_intensity=5.0, sigma=1.0, top_k_rays=20):
+        """Extracts and derotates the strongest physical scattering vectors into the Sample Frame."""
+        q_hat_list = []
+
+        for i, phys_bank in enumerate(file_bank_ids):
+            img = images_bg[i]
+            
+            smoothed = scipy.ndimage.gaussian_filter(img, sigma=sigma)
+            local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
+            peak_mask = local_max & (smoothed > min_intensity)
+            rows, cols = np.where(peak_mask)
+            
+            if len(rows) > 0:
+                intensities = smoothed[rows, cols]
+                # Force take the top K rays per image to guarantee dense intersections
+                top_k = min(top_k_rays, len(rows))
+                sort_idx = np.argsort(intensities)[::-1][:top_k]
+                rows, cols = rows[sort_idx], cols[sort_idx]
+
+                from subhkl.detector import Detector
+                det_config = beamlines[instrument][str(phys_bank)]
+                det = Detector(det_config)
+                R_gonio = self.R_stack[i]
+
+                xyz_lab = det.pixel_to_lab(rows, cols) 
+                norms_ray = np.linalg.norm(xyz_lab, axis=1, keepdims=True)
+                kf = xyz_lab / norms_ray
+                
+                # Unnormalized scattering vector
+                q_lab = kf - self.ki_vec[None, :]
+                q_sample = np.dot(q_lab, R_gonio) 
+                
+                # Normalized zone-axis generator
+                q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
+                q_hat = q_sample / q_norms
+                q_hat_list.append(q_hat)
+
+        if not q_hat_list:
+            return np.zeros((0, 3)), np.zeros((0, 3))
+            
+        return np.vstack(q_hat_list)
+
+    def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, plot_filename=None):
+        """Executes the 3D Combinatorial Hough Transform using Lambert Azimuthal projection."""
+        N = len(q_rays)
+        if N < 2:
+            return np.zeros((0, 3)), np.zeros(0)
+            
+        idx_i, idx_j = np.triu_indices(N, k=1)
+        n_cands = np.cross(q_rays[idx_i], q_rays[idx_j])
+        norms = np.linalg.norm(n_cands, axis=1)
+        
+        valid = norms > 1e-3
+        n_cands = n_cands[valid] / norms[valid, None]
+        
+        # Upper hemisphere projection
+        n_cands[n_cands[:, 2] < 0] *= -1
+        
+        # Lambert Projection
+        factor = np.sqrt(2.0 / (1.0 + n_cands[:, 2]))
+        x_proj = factor * n_cands[:, 0]
+        y_proj = factor * n_cands[:, 1]
+        
+        limit = np.sqrt(2.0)
+        H, xedges, yedges = np.histogram2d(
+            x_proj, y_proj, bins=grid_resolution, range=[[-limit, limit], [-limit, limit]]
+        )
+       
+        # Scale blur radius to bridge physical goniometer wobble
+        blur_sigma = grid_resolution / 1024.0
+        H_smooth = scipy.ndimage.gaussian_filter(H, sigma=blur_sigma)
+        local_max = scipy.ndimage.maximum_filter(H_smooth, size=3) == H_smooth
+        peak_mask = local_max & (H_smooth >= min_pairs)
+        
+        row_idx, col_idx = np.where(peak_mask)
+        weights = H_smooth[row_idx, col_idx]
+        
+        if len(weights) == 0:
+            return np.zeros((0, 3)), np.zeros(0)
+            
+        sort_order = np.argsort(weights)[::-1]
+
+        # --- SPATIAL DIVERSITY NMS (min_distance) ---
+        # Force a minimum separation of ~10 degrees between extracted Zone Axes.
+        # The Lambert grid spans 2*sqrt(2) over `grid_resolution` pixels.
+        # 90 degrees corresponds to a radius of sqrt(2).
+        min_dist_deg = 10.0
+        min_dist_px = int((min_dist_deg / 90.0) * (grid_resolution / 2.0))
+        min_dist_sq = min_dist_px**2
+
+        keep_rows, keep_cols, keep_weights = [], [], []
+
+        for idx in sort_order:
+            r, c, w = row_idx[idx], col_idx[idx], weights[idx]
+
+            # Check distance against already selected (stronger) peaks
+            if len(keep_rows) > 0:
+                dist_sq = (np.array(keep_rows) - r)**2 + (np.array(keep_cols) - c)**2
+                if np.min(dist_sq) < min_dist_sq:
+                    continue  # Suppress this peak, it belongs to the same physical cluster
+
+            keep_rows.append(r)
+            keep_cols.append(c)
+            keep_weights.append(w)
+
+            # Stop once we have 15 physically diverse, dominant axes
+            if len(keep_rows) >= 15:
+                break
+
+        row_idx = np.array(keep_rows)
+        col_idx = np.array(keep_cols)
+        weights_obs = np.array(keep_weights)
+        
+        # Grid dimensions
+        dx, dy = xedges[1] - xedges[0], yedges[1] - yedges[0]
+        
+        # --- THE SUB-PIXEL FIX: Continuous Center of Mass ---
+        exact_x, exact_y = [], []
+        
+        for r, c in zip(row_idx, col_idx):
+            # 1. Define the physical bounding box of the 3x3 grid neighborhood
+            x_min = xedges[max(0, r-1)]
+            x_max = xedges[min(len(xedges)-1, r+2)]
+            y_min = yedges[max(0, c-1)]
+            y_max = yedges[min(len(yedges)-1, c+2)]
+            
+            # 2. Find all exact, continuous cross-products that fall in this box
+            mask = (x_proj >= x_min) & (x_proj <= x_max) & \
+                   (y_proj >= y_min) & (y_proj <= y_max)
+            
+            x_local = x_proj[mask]
+            y_local = y_proj[mask]
+            
+            # 3. Calculate the continuous centroid (bypassing the grid entirely)
+            if len(x_local) > 0:
+                exact_x.append(np.mean(x_local))
+                exact_y.append(np.mean(y_local))
+            else:
+                # Fallback to bin center if no points (should never happen for a peak)
+                exact_x.append(xedges[r] + dx/2.0)
+                exact_y.append(yedges[c] + dy/2.0)
+                
+        exact_x = np.array(exact_x)
+        exact_y = np.array(exact_y)
+        
+        # Inverse Lambert Projection using the EXACT continuous coordinates
+        r_sq = exact_x**2 + exact_y**2
+        factor_inv = np.sqrt(np.clip(1.0 - r_sq / 4.0, 0, 1))
+        n_obs = np.column_stack([exact_x * factor_inv, exact_y * factor_inv, 1.0 - r_sq / 2.0])
+        
+        # Normalize to ensure perfect spherical geometry
+        n_obs /= np.linalg.norm(n_obs, axis=1, keepdims=True)
+        
+        if plot_filename:
+            self._plot_hough(x_proj, y_proj, n_obs, plot_filename, bins=grid_resolution)
+            
+        return n_obs, weights_obs
+
+    def _plot_hough(self, x_proj, y_proj, n_obs, filename, bins=256):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(10, 10))
+        plt.hist2d(x_proj, y_proj, bins=bins, range=[[-1.414, 1.414], [-1.414, 1.414]], cmap='viridis')
+        plt.colorbar(label='Cross Product Intersections')
+
+        if len(n_obs) > 0:
+            f_obs = np.sqrt(2.0 / (1.0 + n_obs[:, 2]))
+            x_obs, y_obs = f_obs * n_obs[:, 0], f_obs * n_obs[:, 1]
+            plt.scatter(x_obs, y_obs, facecolors='none', edgecolors='red', marker='o', s=200, linewidths=2.5, label='Extracted Normals')
+            for idx, (x, y) in enumerate(zip(x_obs, y_obs)):
+                plt.text(x + 0.05, y + 0.05, str(idx), color='white', fontsize=12, fontweight='bold')
+
+        plt.title("Lambert Azimuthal Accumulator (Sample Frame)")
+        plt.legend(loc='upper right')
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+
+    def generate_theoretical_zones(self, grid_range=5, top_k=600):
+        """Generates the fundamental Zone Axes directly from Cartesian lattice translations."""
+        A_mat = np.linalg.inv(self.B_mat).T
+        grid = np.arange(-grid_range, grid_range + 1)
+        u_idx, v_idx, w_idx = np.meshgrid(grid, grid, grid, indexing='ij')
+        uvw = np.vstack([u_idx.flatten(), v_idx.flatten(), w_idx.flatten()])
+        uvw = uvw[:, np.any(uvw != 0, axis=0)]
+        
+        r_cart = np.dot(A_mat, uvw)
+        norms = np.linalg.norm(r_cart, axis=0)
+        
+        sort_idx = np.argsort(norms)
+        limit = min(top_k, len(norms))
+        n_calc_raw = r_cart[:, sort_idx[:limit]] / norms[sort_idx[:limit]]
+        
+        n_calc_raw[:, n_calc_raw[2] < 0] *= -1
+        n_calc_raw = np.round(n_calc_raw, 5)
+        return jnp.array(np.unique(n_calc_raw, axis=1).T)
+
+    def solve_davenport_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25):
+        """
+        Lifts the permutation problem from pairs to 3-cliques (triplets), 
+        and employs a RANSAC Consensus Polish to permanently eliminate the 'lever-arm' tilt.
+        """
+        n_obs_np = np.array(n_obs)
+        n_calc_np = np.array(n_calc)
+        weights_obs_np = np.array(weights_obs)
+        
+        # 1. Compute the exact angle matrices
+        S_obs = np.abs(np.dot(n_obs_np, n_obs_np.T))
+        S_calc = np.abs(np.dot(n_calc_np, n_calc_np.T))
+        
+        ang_obs = np.degrees(np.arccos(np.clip(S_obs, -1.0, 1.0)))
+        ang_calc = np.degrees(np.arccos(np.clip(S_calc, -1.0, 1.0)))
+        
+        valid_permutations = []
+        
+        # 2. Only build triplets out of the top 15 absolute strongest empirical zone axes.
+        num_obs = min(len(n_obs_np), 15)
+        strict_tol = angle_tol_deg 
+        
+        print(f"  -> Scanning theoretical lattice for exact 3D triplet matches (Tol: {strict_tol} deg)...")
+        
+        for i in range(num_obs):
+            for j in range(i + 1, num_obs):
+                for k in range(j + 1, num_obs):
+                    
+                    a_ij, a_ik, a_jk = ang_obs[i, j], ang_obs[i, k], ang_obs[j, k]
+                    
+                    M_AB = np.abs(ang_calc - a_ij) <= strict_tol
+                    M_AC = np.abs(ang_calc - a_ik) <= strict_tol
+                    M_BC = np.abs(ang_calc - a_jk) <= strict_tol
+                    
+                    A_idx, B_idx = np.where(M_AB)
+                    
+                    for A, B in zip(A_idx, B_idx):
+                        if A == B: continue
+                        valid_C = np.where(M_AC[A, :] & M_BC[B, :])[0]
+                        for C in valid_C:
+                            if C == A or C == B: continue
+                            valid_permutations.append(([i, j, k], [A, B, C]))
+                            
+        print(f"  -> Triplet Graph Search yielded exactly {len(valid_permutations)} physical matches.")
+        
+        if len(valid_permutations) == 0:
+            return None, None
+            
+        # 3. Formulate RANSAC Hypotheses (Fully Vectorized GPU Expansion)
+        print(f"  -> Vectorizing {len(valid_permutations)} physical matches onto GPU...")
+        
+        # Unpack indices into raw NumPy arrays (fast in Python)
+        obs_indices = np.array([p[0] for p in valid_permutations], dtype=np.int32)
+        calc_indices = np.array([p[1] for p in valid_permutations], dtype=np.int32)
+        
+        # Map indices to base triplets
+        v_base = jnp.array(n_obs_np)[obs_indices]      # Shape: (M, 3, 3)
+        u_base = jnp.array(n_calc_np)[calc_indices]    # Shape: (M, 3, 3)
+        w_base = jnp.array(weights_obs_np)[obs_indices] # Shape: (M, 3)
+        
+        import itertools
+        from subhkl.optimization import quaternion_to_rodrigues, rotation_matrix_from_rodrigues_jax
+        
+        # 8-way Sign Expansion via JAX Broadcasting (Zero Python loops!)
+        signs = jnp.array(list(itertools.product([1, -1], repeat=3)), dtype=v_base.dtype) # (8, 3)
+        
+        # Multiply (M, 1, 3, 3) with (1, 8, 3, 1) -> (M, 8, 3, 3)
+        v_expanded = v_base[:, None, :, :] * signs[None, :, :, None]
+        
+        v_hyp_all = v_expanded.reshape(-1, 3, 3)  # Flattens to (M*8, 3, 3)
+        u_hyp_all = jnp.repeat(u_base, 8, axis=0) # Expands to (M*8, 3, 3)
+        w_hyp_all = jnp.repeat(w_base, 8, axis=0) # Expands to (M*8, 3)
+        
+        v_all_obs = jnp.array(n_obs_np)
+        w_all_obs = jnp.array(weights_obs_np)
+        u_all_calc = jnp.array(n_calc_np)
+        
+        print(f"  -> Polishing {len(v_hyp_all)} geometric hypotheses using Angular Laue Indexing...")
+        
+        # 1. EXPANDED GRID: Increase to -10 to +10 to capture true Laue diffraction limits
+        grid = np.arange(-10, 11)
+        u, v, w = np.meshgrid(grid, grid, grid, indexing='ij')
+        hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
+        hkls = hkls[:, np.any(hkls != 0, axis=0)] # Remove (0,0,0)
+        
+        q_theor = np.dot(self.B_mat, hkls).T
+        q_theor_norms = np.linalg.norm(q_theor, axis=1, keepdims=True)
+        q_theor_hat = q_theor / q_theor_norms
+        
+        q_theor_hemi = np.where(q_theor_hat[:, 2:3] < 0, -q_theor_hat, q_theor_hat)
+        q_theor_hemi = np.round(q_theor_hemi, 5)
+        q_theor_unique = np.unique(q_theor_hemi, axis=0)
+        
+        q_theor_jax = jnp.array(q_theor_unique)
+        q_sample_jax = jnp.array(q_hat_sample)
+        
+        # 2. TIGHTER TOLERANCE: Since the sphere is now densely packed with theoretical lines,
+        # we drop the capture radius to 0.5 degrees to suppress the random noise floor.
+        cos_tol = jnp.cos(jnp.radians(0.5))
+        
+        @jax.jit
+        def evaluate_chunk(v_hyp, u_hyp, w_hyp):
+            q_hyp, _ = batch_davenport(v_hyp, u_hyp, w_hyp)
+            q_hyp = jnp.where(q_hyp[:, 0:1] < 0, -q_hyp, q_hyp)
+            
+            rots_hyp = jax.vmap(quaternion_to_rodrigues)(q_hyp)
+            U_hyp = jax.vmap(rotation_matrix_from_rodrigues_jax)(rots_hyp)
+            
+            # Rotate all empirical unit rays into the proposed crystal frame
+            # U_hyp: (batch, 3, 3) | q_sample_jax: (N_rays, 3) -> (batch, N_rays, 3)
+            q_cryst_hat = jnp.einsum('bij,nj->bni', U_hyp, q_sample_jax)
+            
+            # Compute angular alignment against all theoretical reflections
+            # q_cryst_hat: (batch, N_rays, 3) | q_theor_jax: (N_theor, 3) -> (batch, N_rays, N_theor)
+            dots = jnp.einsum('bni,mi->bnm', q_cryst_hat, q_theor_jax)
+            
+            # Use abs() to handle Friedel opposites automatically
+            max_dots = jnp.max(jnp.abs(dots), axis=2)
+            
+            # HARD VOTING: Count how many empirical rays point at a valid theoretical reflection
+            scores = jnp.sum(max_dots >= cos_tol, axis=1)
+            
+            return q_hyp, scores
+
+        all_q_final, all_s_final = [], []
+
+        # 3. VRAM PROTECTION: Dynamically calculate the chunk size to never exceed 10GB of VRAM.
+        # Bytes per single hypothesis evaluation = rays * theoretical_lines * 4 bytes (float32)
+        bytes_per_hyp = len(q_hat_sample) * len(q_theor_unique) * 4
+
+        # Target 10 GB limit (10 * 1024**3 bytes)
+        target_vram_bytes = 10 * 1024**3
+        chunk_size = max(1, int(target_vram_bytes / bytes_per_hyp))
+
+        print(f"  -> Dynamic VRAM Safety: Batching {chunk_size} hypotheses per GPU pass...")
+        
+        for start in range(0, len(v_hyp_all), chunk_size):
+            end = start + chunk_size
+            
+            # This is an async dispatch. It returns immediately, queueing the kernel on the GPU.
+            q_f, s_f = evaluate_chunk(v_hyp_all[start:end], u_hyp_all[start:end], w_hyp_all[start:end])
+            
+            # CRITICAL: Keep these as JAX DeviceArrays. Do NOT call np.array() here!
+            all_q_final.append(q_f)
+            all_s_final.append(s_f)
+            
+        print("  -> Execution queued. Waiting for GPU to drain pipeline...")
+        
+        quats_gpu = jnp.concatenate(all_q_final)
+        scores_gpu = jnp.concatenate(all_s_final)
+        
+        # --- DYNAMIC STATISTICAL FILTERING ---
+        num_rays = len(q_hat_sample)
+        num_lines = len(q_theor_unique)
+        
+        # The fraction of the sphere covered by a symmetric 1.5 deg tolerance cone
+        fraction_of_sphere_per_line = 1.0 - float(cos_tol)
+        random_hit_prob = num_lines * fraction_of_sphere_per_line
+        expected_random_hits = num_rays * random_hit_prob
+        
+        min_inliers = max(5, int(expected_random_hits + 5 * np.sqrt(expected_random_hits)))
+        
+        print(f"  -> Statistical Noise Floor: ~{expected_random_hits:.1f} accidental hits per matrix.")
+        print(f"  -> Pruning hypotheses with fewer than {min_inliers} indexed rays...")
+        
+        valid_mask = scores_gpu >= min_inliers
+        
+        quats_valid = quats_gpu[valid_mask]
+        scores_valid = scores_gpu[valid_mask]
+        
+        quats = np.array(quats_valid)
+        scores = np.array(scores_valid)
+
+        # INVERT THE QUATERNIONS: Map from Sample->Crystal to Crystal->Sample (Busing-Levy)
+        # Conjugating the vector components [w, -x, -y, -z] perfectly inverts the rotation
+        quats_inv = quats * np.array([1.0, -1.0, -1.0, -1.0])
+
+        print(f"  -> Angular Laue Indexing returned {len(quats)} valid seeds. Deduplicating...")
+
+        # --- FAST HASH-BASED DEDUPLICATION ---
+        sort_idx = np.argsort(np.array(scores))[::-1]
+        quats_sorted = np.array(quats_inv)[sort_idx]
+        scores_sorted = np.array(scores)[sort_idx]
+        
+        quats_hemi = np.where(quats_sorted[:, 0:1] < 0, -quats_sorted, quats_sorted)
+        quats_rounded = np.round(quats_hemi, decimals=2)
+        
+        _, unique_indices = np.unique(quats_rounded, axis=0, return_index=True)
+        q_unique = quats_sorted[unique_indices]
+        s_unique = scores_sorted[unique_indices]
+        
+        final_sort = np.argsort(s_unique)[::-1]
+        q_final = q_unique[final_sort]
+        s_final = s_unique[final_sort]
+        
+        print(f"  -> Fast-Hash Deduplication preserved {len(q_final)} unique orientations out of {len(quats_inv)} total permutations.")
+        return jnp.array(q_final), jnp.array(s_final)
+
+    def physics_filter(self, prior_quats, objective_function, batch_size=4096, z_score_threshold=4.0):
+        """Evaluates all macroscopic seeds against the strict physical forward-model to gather statistics."""
+        if prior_quats is None or len(prior_quats) == 0:
+            return None
+
+        print("\n[Prior Validation] Computing Random Orientation Baseline...")
+        rng = jax.random.PRNGKey(42)
+        rand_q = jax.random.normal(rng, (4096, 4))
+        rand_q = rand_q / jnp.linalg.norm(rand_q, axis=1, keepdims=True)
+        rand_rots = jax.vmap(quaternion_to_rodrigues)(rand_q)
+
+        rand_scores = np.array(-objective_function(rand_rots))
+        r_mean = np.mean(rand_scores)
+        r_std = np.std(rand_scores)
+        r_max = np.max(rand_scores)
+
+        print(f"  -> Random Background (N=4096) | Mean: {r_mean:.2f} | Max: {r_max:.2f} | Std: {r_std:.2f}")
+
+        print(f"  -> Forward-Modeling all {len(prior_quats)} Davenport seeds for statistical observation...")
+        prior_rots = jax.vmap(quaternion_to_rodrigues)(prior_quats)
+
+        # 1. Evaluate all with an accurate progress bar
+        physics_scores = []
+        import tqdm
+        # We use a blocking call (np.array) inside the loop to give tqdm true timings
+        for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter"):
+            batch = prior_rots[i:i+batch_size]
+            scores = np.array(-objective_function(batch))
+            physics_scores.append(scores)
+
+        physics_scores_np = np.concatenate(physics_scores)
+
+        # 2. Compute Rank Statistics
+        # Davenport rank is exactly the array index (0 is best consensus score)
+        davenport_ranks = np.arange(len(physics_scores_np))
+
+        # Physics rank (0 is best forward-model score)
+        physics_sort_idx = np.argsort(physics_scores_np)[::-1]
+        physics_ranks = np.empty_like(physics_sort_idx)
+        physics_ranks[physics_sort_idx] = np.arange(len(physics_scores_np))
+
+        import scipy.stats
+        rho, p_val = scipy.stats.spearmanr(davenport_ranks, physics_ranks)
+
+        print("\n[Observation Stats] Davenport vs. Physical Ranking:")
+        print(f"  -> Global Spearman Rho: {rho:.4f} (p={p_val:.2e})")
+
+        # Where are the true physical winners located in the Davenport ranking?
+        top_1_dav_rank = physics_sort_idx[0]
+        top_10_dav_ranks = physics_sort_idx[:10]
+        top_100_dav_ranks = physics_sort_idx[:100]
+
+        print(f"  -> Top 1 Physical Seed was Davenport Rank: #{top_1_dav_rank}")
+        print(f"  -> Top 10 Physical Seeds max Davenport Rank: #{np.max(top_10_dav_ranks)}")
+        print(f"  -> Top 100 Physical Seeds max Davenport Rank: #{np.max(top_100_dav_ranks)}")
+
+        # Calculate Intersection Overlap for various truncation sizes
+        for N in [1000, 10000, 50000]:
+            if len(physics_scores_np) >= N:
+                dav_top_n = set(davenport_ranks[:N])
+                phys_top_n = set(physics_sort_idx[:N])
+                overlap = len(dav_top_n.intersection(phys_top_n))
+                print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
+
+        # 3. Dynamic Scale-Invariant Decision
+        best_score = physics_scores_np[physics_sort_idx[0]]
+        z_score = (best_score - r_mean) / (r_std + 1e-9)
+
+        print(f"\n  -> Davenport Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
+        print(f"  -> Top 5 Prior Scores: {physics_scores_np[physics_sort_idx[:5]]}")
+
+        if best_score > r_max and z_score >= z_score_threshold:
+            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
+            return prior_rots[physics_sort_idx]
+        else:
+            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.1f} < {z_score_threshold}). Falling back to Uniform GA...")
+            return None
+
+@jax.jit
+def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, vhat, width, height, m, n, wl_min, wl_max):
+    """
+    Pure JAX 3D-to-2D Laue Detector Projection.
+    Strictly parallels predict_reflections_on_panel and lab_to_pixel.
+    """
+    # 1. Calculate Q vectors (Units: 1/d)
+    q_local = jnp.dot(B, hkl)
+    q_lab_direction = jnp.dot(R @ U, q_local)
+
+    # Scale to 2pi/d to match predict_reflections_on_panel
+    Q_vecs = 2.0 * jnp.pi * q_lab_direction
+
+    ki_hat = ki_vec / (jnp.linalg.norm(ki_vec) + 1e-9)
+    Q_sq = jnp.sum(Q_vecs**2, axis=0)
+    Q_dot_ki = jnp.sum(Q_vecs * ki_hat[:, None], axis=0)
+
+    # 2. Calculate Wavelength using the exact subhkl formula
+    lamda = -4.0 * jnp.pi * Q_dot_ki / (Q_sq + 1e-9)
+
+    valid_wl = (lamda >= wl_min) & (lamda <= wl_max)
+
+    # 3. Calculate kf direction
+    k_mag = 2.0 * jnp.pi / (lamda + 1e-9)
+    kf_vecs = Q_vecs + k_mag * ki_hat[:, None]
+
+    kf_hat = kf_vecs / jnp.linalg.norm(kf_vecs, axis=0)
+
+    s_lab = jnp.dot(R, sample_offset)
+
+    norm = jnp.cross(uhat, vhat)
+    c_minus_s_dot_n = jnp.dot(center - s_lab, norm)
+    d_dot_n = jnp.sum(norm[:, None] * kf_hat, axis=0)
+
+    t = c_minus_s_dot_n / (d_dot_n + 1e-9)
+    valid_t = t > 0
+
+    intersection = s_lab[:, None] + t * kf_hat
+
+    vec = intersection - center[:, None]
+
+    dw = width / (m - 1)
+    dh = height / (n - 1)
+
+    dot_v = jnp.sum(vec * vhat[:, None], axis=0)
+    row_f = dot_v / dh
+
+    dot_u = jnp.sum(vec * uhat[:, None], axis=0)
+    col_f = dot_u / dw
+
+    valid_row = (row_f >= 0) & (row_f < n)
+    valid_col = (col_f >= 0) & (col_f < m)
+
+    valid = valid_wl & valid_t & valid_row & valid_col
+
+    return row_f, col_f, lamda, valid
+
+class ImageBasedObjective:
+    def __init__(self, images_landscape, hkl_pool, B_mat, R_stack, wl_min, wl_max,
+                 det_centers, uhats, vhats, widths, heights, ms, ns, ki_vec, sample_offset):
+        self.images_landscape = jnp.array(images_landscape)
+        self.hkl = jnp.array(hkl_pool)
+        self.B_mat = jnp.array(B_mat)
+        self.R_stack = jnp.array(R_stack)
+        self.wl_min = wl_min
+        self.wl_max = wl_max
+
+        self.det_centers = jnp.array(det_centers)
+        self.uhats = jnp.array(uhats)
+        self.vhats = jnp.array(vhats)
+        self.widths = jnp.array(widths)
+        self.heights = jnp.array(heights)
+        self.ms = jnp.array(ms)
+        self.ns = jnp.array(ns)
+
+        self.ki_vec = jnp.array(ki_vec)
+        self.sample_offset = jnp.array(sample_offset)
+
+    @partial(jax.jit, static_argnames='self')
+    def __call__(self, x):
+        def evaluate_single_U(params):
+            U = rotation_matrix_from_rodrigues_jax(params[:3])
+
+            def scan_fn(carry, frame_data):
+                R, center, uhat, vhat, w, h, m, n, img_land = frame_data
+                row, col, lam, valid = jax_predict_reflections(
+                    U, self.B_mat, self.hkl, R, self.ki_vec, self.sample_offset,
+                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max
+                )
+                coords = jnp.stack([row, col], axis=0)
+                b_i = jax.scipy.ndimage.map_coordinates(img_land, coords, order=1, mode='constant', cval=0.0)
+
+                return carry + jnp.sum((b_i**2) * valid), None
+
+            frame_data = (self.R_stack, self.det_centers, self.uhats, self.vhats,
+                          self.widths, self.heights, self.ms, self.ns, self.images_landscape)
+            total_fitness, _ = jax.lax.scan(scan_fn, 0.0, frame_data)
+
+            return -total_fitness
+
+        return jax.vmap(evaluate_single_U)(x)
