@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from subhkl.davenport import batch_davenport
 from subhkl.config import beamlines
-from subhk.optimization import rotation_matrix_from_rodrigues_jax
+from subhkl.optimization import rotation_matrix_from_rodrigues_jax
 
 class HoughDavenportPrior:
     """
