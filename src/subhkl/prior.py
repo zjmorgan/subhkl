@@ -3,8 +3,8 @@ import scipy.ndimage
 import jax
 import jax.numpy as jnp
 from subhkl.davenport import batch_davenport
-from subhkl.optimization import quaternion_to_rodrigues
 from subhkl.config import beamlines
+from subhk.optimization import rotation_matrix_from_rodrigues_jax
 
 class HoughDavenportPrior:
     """
@@ -277,7 +277,6 @@ class HoughDavenportPrior:
         w_base = jnp.array(weights_obs_np)[obs_indices] # Shape: (M, 3)
         
         import itertools
-        from subhkl.optimization import quaternion_to_rodrigues, rotation_matrix_from_rodrigues_jax
         
         # 8-way Sign Expansion via JAX Broadcasting (Zero Python loops!)
         signs = jnp.array(list(itertools.product([1, -1], repeat=3)), dtype=v_base.dtype) # (8, 3)
@@ -548,6 +547,20 @@ def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, v
     valid = valid_wl & valid_t & valid_row & valid_col
 
     return row_f, col_f, lamda, valid
+
+@jax.jit
+def quaternion_to_rodrigues(q):
+    """Maps a normalized quaternion [w, x, y, z] to a 3D Rodrigues vector safely."""
+    w, x, y, z = q[0], q[1], q[2], q[3] # <--- BACK TO w, x, y, z
+    # Safely handle the double-cover without zeroing out w=0
+    sign = jnp.where(w < 0, -1.0, 1.0)
+    w, x, y, z = w * sign, x * sign, y * sign, z * sign
+    w_safe = jnp.clip(w, -1.0, 1.0)
+    theta = 2.0 * jnp.arccos(w_safe)
+    sin_half = jnp.sqrt(1.0 - w_safe**2)
+    scale = jnp.where(sin_half > 1e-12, theta / sin_half, 2.0)
+
+    return jnp.array([x * scale, y * scale, z * scale])
 
 class ImageBasedObjective:
     def __init__(self, images_landscape, hkl_pool, B_mat, R_stack, wl_min, wl_max,
