@@ -36,10 +36,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies (NumPy backend)
         if: matrix.backend == 'numpy'
-        run: uv pip install -e ".[test]" --system
+        run: uv pip install -e . --system
       - name: Install dependencies (JAX backend)
         if: matrix.backend == 'jax'
-        run: uv pip install -e ".[test,jax]" --system
+        run: uv pip install -e ".[jax]" --system
       - name: Verify backend
         run: |
           python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
