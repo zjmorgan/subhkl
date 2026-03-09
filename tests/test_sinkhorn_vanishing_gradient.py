@@ -10,7 +10,6 @@ from subhkl.optimization import VectorizedObjective
 )
 @pytest.mark.dependency()
 def test_jax_import():
-
     # Try to import jax and assert that it worked
     spec = importlib.util.find_spec("jax")
     assert spec
