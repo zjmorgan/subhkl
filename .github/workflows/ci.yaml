@@ -27,8 +27,8 @@ jobs:
         run: uv sync
       - name: Run linting
         run: |
-          ruff format --check
-          ruff check
+          uv run ruff format --check
+          uv run ruff check
 
   test-unit:
     name: Unit tests (${{ matrix.backend }})
