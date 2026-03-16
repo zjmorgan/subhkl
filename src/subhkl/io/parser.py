@@ -1215,7 +1215,7 @@ def export_batch_list(
             orig_fn = peaks.get_image_label(b)
             run_id = peaks.get_run_id(b)
             batch_id = 10000*run_id + b
-            f.write(f'{batch_id},{orig_fn},{phys_bank}')
+            f.write(f'{batch_id},{orig_fn},{phys_bank}\n')
 
 @app.command()
 def reduce(
