@@ -143,10 +143,12 @@ class PeakIntegrator:
                     stats = self._fit_gaussian_mle(
                         intensity, peak_masks[i_peak], bg_masks[i_peak]
                     )
-                else:
+                elif integration_method == "free_fit":
                     stats = self._calculate_statistics(
                         intensity, peak_masks[i_peak], bg_masks[i_peak]
                     )
+                else:
+                    raise ValueError("Unsupported integration method")
 
                 if stats[0] is not None:
                     (
