@@ -1193,6 +1193,31 @@ def mtz_exporter(
 
 
 @app.command()
+def export_batch_list(
+    filename: str,
+    integrated_h5_filename: str,
+    instrument: str,
+    out_file: str,
+    ):
+
+    peaks = Peaks(
+        filename,
+        instrument,
+    )
+
+    with h5py.File(integrated_h5_filename, "r") as f_in:
+        unique_banks = np.unique(f_in['peaks/bank'][()])
+
+    with open(out_file, 'w') as f:
+        f.write('batch,fn,bank')
+        for b in unique_banks:
+            phys_bank = peaks.bank_mapping.get(b, b)
+            orig_fn = peaks.get_image_label(b)
+            run_id = peaks.get_run_id(b)
+            batch_id = 10000*run_id + b
+            f.write(f'{batch_id},{orig_fn},{phys_bank}')
+
+@app.command()
 def reduce(
     nexus_filename: str,
     output_filename: str,

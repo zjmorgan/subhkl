@@ -192,7 +192,7 @@ class MTZExporter:
             else:
                 self.runs = np.zeros_like(self.h, dtype=np.int32)
 
-            self.runs = 1000 * self.runs + f["peaks/bank"]
+            self.runs = 10000 * self.runs + f["peaks/bank"]
 
         self.space_group = space_group
 
