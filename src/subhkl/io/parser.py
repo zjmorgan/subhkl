@@ -1209,7 +1209,7 @@ def export_batch_list(
         unique_banks = np.unique(f_in['peaks/bank'][()])
 
     with open(out_file, 'w') as f:
-        f.write('batch,fn,bank')
+        f.write('batch,fn,bank\n')
         for b in unique_banks:
             phys_bank = peaks.bank_mapping.get(b, b)
             orig_fn = peaks.get_image_label(b)
