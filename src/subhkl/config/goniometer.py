@@ -38,7 +38,7 @@ Notes
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Union, List
 from .config import reduction_settings
 
@@ -130,7 +130,7 @@ class Goniometer:
     axes_raw: List[np.ndarray] = None
     angles_raw: Union[List[float], np.ndarray] = None
     names_raw: List[str] = None
-    rotation: np.ndarray = np.eye(3)
+    rotation: np.ndarray = field(default_factory=lambda: np.eye(3))
 
     @classmethod
     def from_nexus(cls, filename, instrument):
