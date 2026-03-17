@@ -12,7 +12,7 @@ class ImageData:
     ims: Dict[int, np.ndarray]
     file_offsets: Optional[np.ndarray] = None
     raw_files: Optional[List[str]] = None
-    bank_mapping: Dict[int, int] = field(default_factory={})
+    bank_mapping: Dict[int, int] = field(default_factory=dict)
 
     @classmethod
     def load_nexus(cls, filename: str, instrument) -> dict[int, np.ndarray]:
