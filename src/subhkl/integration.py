@@ -738,7 +738,7 @@ class Peaks:
         writer.write_hdf5(
             self,
             output_filename,
-            detector_peaks.rotations,
+            detector_peaks.R,
             detector_peaks.two_theta,
             detector_peaks.az_phi,
             detector_peaks.wavelength_mins,
