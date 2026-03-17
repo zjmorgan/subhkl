@@ -183,7 +183,7 @@ class Peaks:
             filename, ext, instrument, is_merged, goniometer_axes, goniometer_angles
         )
         self.wavelength = init_wavelength(
-            filename, ext, instrument, is_merged, min=wavelength_min, max=wavelength_max
+            filename, ext, instrument, is_merged, wavelength_min, wavelength_max
         )
         self.image = init_ims(filename, ext, instrument, is_merged)
 

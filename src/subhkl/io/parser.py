@@ -370,7 +370,7 @@ def finder(
         gonio_axes=detector_peaks.gonio_axes,
         gonio_angles=detector_peaks.gonio_angles,
         gonio_names=detector_peaks.gonio_names,
-        instrument_wavelength=[peaks.wavelength_min, peaks.wavelength_max],
+        instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
     )
 
 
