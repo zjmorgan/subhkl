@@ -200,7 +200,7 @@ class Peaks:
         """Helper to resolve the run ID for an image key."""
         if self.image.file_offsets is not None:
             return int(
-                np.searchsorted(self.image_data.file_offsets, img_key, side="right") - 1
+                np.searchsorted(self.image.file_offsets, img_key, side="right") - 1
             )
         return 0
 
