@@ -2,7 +2,6 @@ import bisect
 import multiprocessing
 import os
 import re
-from collections import namedtuple
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import cv2
@@ -41,45 +40,58 @@ from subhkl.utils import (
     predict_reflections_on_panel,
 )
 
-DetectorPeaks = namedtuple(
-    "DetectorPeaks",
-    [
-        "R",
-        "two_theta",
-        "az_phi",
-        "wavelength_mins",
-        "wavelength_maxes",
-        "intensity",
-        "sigma",
-        "radii",
-        "xyz",
-        "bank",
-        "image_index",
-        "run_id",
-        "gonio_axes",
-        "gonio_angles",
-        "gonio_names",
-    ],
-)
+from dataclasses import dataclass, astuple
+from typing import List, Any, Optional
 
-IntegrationResult = namedtuple(
-    "IntegrationResult",
-    [
-        "h",
-        "k",
-        "l",
-        "intensity",
-        "sigma",
-        "tt",
-        "az",
-        "wavelength",
-        "bank",
-        "run_id",
-        "xyz",
-        "R",
-        "angles",
-    ],
-)
+@dataclass(frozen=True)
+class DetectorPeaks:
+    R: List[Any]
+    two_theta: List[float]
+    az_phi: List[float]
+    wavelength_mins: List[float]
+    wavelength_maxes: List[float]
+    intensity: List[float]
+    sigma: List[float]
+    radii: List[float]
+    xyz: List[List[float]]
+    bank: List[int]
+    image_index: List[int]
+    run_id: List[int]
+    gonio_axes: Optional[List[List[float]]]
+    gonio_angles: List[List[float]]
+    gonio_names: Optional[List[str]]
+
+    def __iter__(self):
+        """Allows tuple unpacking"""
+        return iter(astuple(self))
+
+    def __getitem__(self, index):
+        """Allows index access"""
+        return astuple(self)[index]
+
+@dataclass(frozen=True)
+class IntegrationResult:
+    h: List[float]
+    k: List[float]
+    l: List[float]
+    intensity: List[float]
+    sigma: List[float]
+    tt: List[float]
+    az: List[float]
+    wavelength: List[float]
+    bank: List[int]
+    run_id: List[int]
+    xyz: List[List[float]]
+    R: List[Any]
+    angles: List[List[float]]
+
+    def __iter__(self):
+        """Allows tuple unpacking"""
+        return iter(astuple(self))
+
+    def __getitem__(self, index):
+        """Allows index access"""
+        return astuple(self)[index]
 
 # ==============================================================================
 # WORKER FUNCTIONS (Multiprocessing)
