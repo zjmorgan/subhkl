@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 import h5py
 import numpy as np
@@ -12,7 +12,7 @@ class ImageData:
     ims: Dict[int, np.ndarray]
     file_offsets: Optional[np.ndarray] = None
     raw_files: Optional[List[str]] = None
-    bank_mapping: Dict[int, int] = {}
+    bank_mapping: Dict[int, int] = field(default_factory={})
 
     @classmethod
     def load_nexus(cls, filename: str, instrument) -> dict[int, np.ndarray]:
