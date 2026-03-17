@@ -1,7 +1,7 @@
 import numpy as np
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.convex_hull.region_grower import RegionGrower
-from subhkl.integration import _integrate_single_bank
+from subhkl._integration.worker import integrate_single_bank
 
 
 def test_integration_worker_handles_numpy_centers():
@@ -75,7 +75,7 @@ def test_integration_worker_handles_numpy_centers():
     )
 
     # This should NOT raise TypeError
-    res = _integrate_single_bank(
+    res = integrate_single_bank(
         0,
         0,
         intensity,
