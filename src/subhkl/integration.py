@@ -1,13 +1,11 @@
 import bisect
 import multiprocessing
 import os
-import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import cv2
 import h5py
 import numpy as np
-import numpy.typing as npt
 import scipy.ndimage
 import scipy.optimize
 import scipy.spatial
@@ -15,6 +13,7 @@ import skimage.feature
 from h5py import File
 from PIL import Image
 
+import _integration.io
 # Ensure we have tqdm for progress bars
 try:
     from tqdm import tqdm
@@ -759,56 +758,12 @@ class Peaks:
         wavelength_min, wavelength_max = settings.get("Wavelength")
         return wavelength_min, wavelength_max
 
-    def load_merged_h5(self, filename: str) -> dict[int, npt.NDArray]:
-        ims = {}
-        with h5py.File(filename, "r") as f:
-            images = f["images"]
-            N = images.shape[0]
-            if "bank_ids" in f:
-                bank_ids = f["bank_ids"][()]
-            else:
-                bank_ids = np.zeros(N, dtype=int)
-            if "files" in f and "file_offsets" in f:
-                self.image_files_raw = [
-                    n.decode("utf-8") if isinstance(n, bytes) else str(n)
-                    for n in f["files"][()]
-                ]
-                self.file_offsets = f["file_offsets"][()]
-            else:
-                self.image_files_raw = None
-                self.file_offsets = None
-            data = images[()]
-            for i in range(N):
-                ims[i] = data[i]
-                self.bank_mapping[i] = int(bank_ids[i])
-        return ims
+    def load_nexus(self, filename: str) -> dict[int, np.ndarray]:    
+        return _integration.io.load_nexus(self, filename)
 
-    def load_nexus(self, filename: str) -> dict[int, npt.NDArray]:
-        detectors = beamlines[self.instrument]
-        settings = reduction_settings[self.instrument]
-        ims = {}
-        with File(filename, "r") as f:
-            keys = []
-            banks = []
-            for key in f["/entry/"].keys():
-                match = re.match(r"bank(\d+).*", key)
-                if match is not None:
-                    keys.append(key)
-                    banks.append(int(match.groups()[0]))
-            for rel_key, bank in zip(keys, banks, strict=False):
-                key = "/entry/" + rel_key + "/event_id"
-                array = f[key][()]
-                det = detectors.get(str(bank))
-                if det is not None:
-                    m, n, offset = det["m"], det["n"], det["offset"]
-                    bc = np.bincount(array - offset, minlength=m * n)
-                    if np.sum(bc) > 0:
-                        if settings.get("YAxisIsFastVaryingIndex"):
-                            ims[bank] = bc.reshape(m, n).T
-                        else:
-                            ims[bank] = bc.reshape(n, m)
-
-        return ims
+    def load_merged_h5(self, filename: str) -> dict[int, np.ndarray]:    
+        return _integration.io.load_merged_h5(self, filename)
+    
 
     def get_detector(self, bank: int) -> Detector:
         if bank in self.bank_mapping:
