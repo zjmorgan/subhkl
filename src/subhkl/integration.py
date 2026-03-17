@@ -1,4 +1,3 @@
-import bisect
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, astuple
 import multiprocessing
@@ -197,26 +196,10 @@ class Peaks:
         return Detector(det_config)
 
     def get_run_id(self, img_key: int) -> int:
-        """Helper to resolve the run ID for an image key."""
-        if self.image.file_offsets is not None:
-            return int(
-                np.searchsorted(self.image.file_offsets, img_key, side="right") - 1
-            )
-        return 0
+        return self.image.get_run_id(img_key)
 
     def get_image_label(self, img_key):
-        """Helper to resolve a readable label for an image key."""
-        files = self.image.raw_files
-        offsets = self.image.file_offsets
-
-        if files and offsets is not None:
-            file_idx = bisect.bisect_right(self.image.file_offsets, img_key) - 1
-            if 0 <= file_idx < len(self.image.raw_files):
-                orig_name = os.path.basename(self.image.raw_files[file_idx])
-                clean_name = os.path.splitext(orig_name)[0]
-                clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
-                return clean_name
-        return f"img{img_key}"
+        return self.image.get_label(img_key)
 
     def get_detector_peaks(
         self,
