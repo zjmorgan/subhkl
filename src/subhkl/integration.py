@@ -13,7 +13,7 @@ import skimage.feature
 from h5py import File
 from PIL import Image
 
-import _integration.loader
+import subhkl._integration.loader as loader
 
 # Ensure we have tqdm for progress bars
 try:
@@ -708,9 +708,9 @@ def init_wavelength(filename, ext, instrument, is_merged, min=None, max=None):
 def init_ims(filename, ext, is_merged):
     if ext == ".h5":
         if is_merged:
-            ims = _integration.loader.load_merged_h5(filename)
+            ims = loader.load_merged_h5(filename)
         else:
-            ims = _integration.loader.load_nexus(filename)
+            ims = loader.load_nexus(filename)
     else:
         ims = {0: np.array(Image.open(filename))}
 
