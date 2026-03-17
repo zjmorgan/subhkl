@@ -355,21 +355,7 @@ def finder(
 
     peaks.write_hdf5(
         output_filename=output_filename,
-        rotations=detector_peaks.R,
-        two_theta=detector_peaks.two_theta,
-        az_phi=detector_peaks.az_phi,
-        wavelength_mins=detector_peaks.wavelength_mins,
-        wavelength_maxes=detector_peaks.wavelength_maxes,
-        intensity=detector_peaks.intensity,
-        sigma=detector_peaks.sigma,
-        radii=detector_peaks.radii,
-        xyz=detector_peaks.xyz,  # Store XYZ
-        bank=detector_peaks.bank,
-        image_index=detector_peaks.image_index,
-        run_id=detector_peaks.run_id,
-        gonio_axes=detector_peaks.gonio_axes,
-        gonio_angles=detector_peaks.gonio_angles,
-        gonio_names=detector_peaks.gonio_names,
+        detector_peaks=detector_peaks,
         instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
     )
 
