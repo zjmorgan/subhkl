@@ -141,9 +141,9 @@ def init_wavelength(filename, ext, instrument, is_merged, min=None, max=None):
 def init_ims(filename, ext, instrument, is_merged):
     if ext == ".h5":
         if is_merged:
-            image_data = ImageData.load_merged_h5(filename, instrument)
+            image_data = ImageData.load_merged_h5(filename)
         else:
-            image_data = ImageData.load_nexus(filename)
+            image_data = ImageData.load_nexus(filename, instrument)
         return image_data
     else:
         ims = {0: np.array(PIL.Image.open(filename))}
