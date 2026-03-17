@@ -13,7 +13,7 @@ import skimage.feature
 from h5py import File
 from PIL import Image
 
-import _integration.io
+import _integration.loader
 # Ensure we have tqdm for progress bars
 try:
     from tqdm import tqdm
@@ -25,10 +25,10 @@ except ImportError:
 
 from subhkl.config import (
     beamlines,
-    calc_goniometer_rotation_matrix,
-    get_rotation_data_from_nexus,
     reduction_settings,
 )
+
+from subhkl.config.goniometer import Goniometer
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.detector import Detector
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
@@ -91,6 +91,14 @@ class IntegrationResult:
     def __getitem__(self, index):
         """Allows index access"""
         return astuple(self)[index]
+
+@dataclass
+class Wavelength:
+    min: float = None
+    max: float = None
+
+    def __iter__(self):
+        return iter((self.min, self.max))
 
 # ==============================================================================
 # WORKER FUNCTIONS (Multiprocessing)
@@ -644,6 +652,69 @@ def _integrate_single_bank(
         else [],
     }
 
+# NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
+def init_goniometer(filename, ext, instrument, is_merged, axes=None, angles=None):
+    """
+    Build goniometer with the following priority  
+    - merged hdf5
+    - nexus
+    - manual override
+    - default (assume beam aligned)
+    """
+
+    if ext == ".h5" and is_merged:
+        with h5py.File(filename, "r") as f:
+            if axes is None or angles is None:
+                if "goniometer/axes" in f and "goniometer/angles" in f:
+                    return Goniometer.from_h5_file(f)
+
+    if ext == ".h5" and not is_merged:
+        try:
+            return Goniometer.from_nexus(filename, instrument)
+        except Exception as e:
+            print(f"Warning: Failed to extract goniometer from nexus file: {e}")
+
+    if axes is not None and angles is not None:
+        rot = Goniometer.get_rotation(axes, angles)
+        return Goniometer(axes_raw=axes, angles_raw=angles, names_raw=None, rotation=rot)
+
+    return Goniometer()
+
+
+def init_wavelength(filename, ext, instrument, is_merged, min=None, max=None):
+    settings =reduction_settings[instrument]
+    wmin, wmax = settings.get("Wavelength")
+
+    if ext == ".h5" and is_merged:
+        with h5py.File(filename, 'r') as f:
+            if "instrument/wavelength" in f:
+                wl = f["instrument/wavelength"][()]
+                wmin, wmax = float(wl[0]), float(wl[1])
+
+    min = min if min is not None else wmin
+    max = max if max is not None else wmax
+
+    return Wavelength(min, max)
+
+def init_ims(filename, ext, is_merged):
+    if ext == ".h5":
+        if is_merged:
+            ims = _integration.loader.load_merged_h5(filename)
+        else:
+            ims = _integration.loader.load_nexus(filename)
+    else:
+        ims = {0: np.array(Image.open(filename))}
+
+    return ims
+
+def _check_if_merged(filename, ext) -> bool:
+    if ext != ".h5":
+        return False
+    try:
+        with h5py.File(filename, 'r') as f:
+            return 'images' in f
+    except OSError:
+        raise OSError
 
 class Peaks:
     def __init__(
@@ -659,111 +730,15 @@ class Peaks:
         self.filename = filename
         self.instrument = instrument
 
-        self.goniometer_axes_raw = None
-        self.goniometer_angles_raw = None
-        self.goniometer_names_raw = None
         self.bank_mapping = {}
 
-        if goniometer_axes is not None and goniometer_angles is not None:
-            self.goniometer_rotation = calc_goniometer_rotation_matrix(
-                goniometer_axes, goniometer_angles
-            )
-            self.goniometer_axes_raw = goniometer_axes
-            self.goniometer_angles_raw = np.array(goniometer_angles)
-        else:
-            self.goniometer_rotation = np.eye(3)
+        is_merged =_check_if_merged(filename, ext)
+        if is_merged:
+            print(f"Detected Merged HDF5 file format: {filename}")
 
-        self.wavelength_min = None
-        self.wavelength_max = None
-
-        if ext == ".h5":
-            is_merged = False
-            try:
-                with h5py.File(filename, "r") as f:
-                    if "images" in f:
-                        is_merged = True
-            except OSError:
-                pass
-
-            if is_merged:
-                print(f"Detected Merged HDF5 format: {filename}")
-                self.ims = self.load_merged_h5(filename)
-                with h5py.File(filename, "r") as f:
-                    if "instrument/wavelength" in f:
-                        wl = f["instrument/wavelength"][()]
-                        self.wavelength_min, self.wavelength_max = (
-                            float(wl[0]),
-                            float(wl[1]),
-                        )
-                    else:
-                        self.wavelength_min, self.wavelength_max = (
-                            self.get_wavelength_from_settings()
-                        )
-
-                    if goniometer_axes is None or goniometer_angles is None:
-                        if "goniometer/axes" in f and "goniometer/angles" in f:
-                            self.goniometer_axes_raw = f["goniometer/axes"][()]
-                            self.goniometer_angles_raw = f["goniometer/angles"][()]
-                            if "goniometer/names" in f:
-                                self.goniometer_names_raw = [
-                                    n.decode() if isinstance(n, bytes) else str(n)
-                                    for n in f["goniometer/names"][()]
-                                ]
-                            if self.goniometer_angles_raw.ndim == 2:
-                                self.goniometer_rotation = np.stack(
-                                    [
-                                        calc_goniometer_rotation_matrix(
-                                            self.goniometer_axes_raw, ang
-                                        )
-                                        for ang in self.goniometer_angles_raw
-                                    ]
-                                )
-                            else:
-                                self.goniometer_rotation = (
-                                    calc_goniometer_rotation_matrix(
-                                        self.goniometer_axes_raw,
-                                        self.goniometer_angles_raw,
-                                    )
-                                )
-                        else:
-                            self.goniometer_rotation = np.eye(3)
-            else:
-                self.ims = self.load_nexus(filename)
-                self.wavelength_min, self.wavelength_max = (
-                    self.get_wavelength_from_settings()
-                )
-                if goniometer_axes is None or goniometer_angles is None:
-                    axes, angles, names = get_rotation_data_from_nexus(
-                        filename, self.instrument
-                    )
-                    self.goniometer_rotation = calc_goniometer_rotation_matrix(
-                        axes, angles
-                    )
-                    self.goniometer_axes_raw = axes
-                    self.goniometer_angles_raw = np.array(angles)
-                    self.goniometer_names_raw = names
-        else:
-            self.ims = {0: np.array(Image.open(filename))}
-            self.wavelength_min, self.wavelength_max = (
-                self.get_wavelength_from_settings()
-            )
-
-        if wavelength_min:
-            self.wavelength_min = wavelength_min
-        if wavelength_max:
-            self.wavelength_max = wavelength_max
-
-    def get_wavelength_from_settings(self) -> tuple[float, float]:
-        settings = reduction_settings[self.instrument]
-        wavelength_min, wavelength_max = settings.get("Wavelength")
-        return wavelength_min, wavelength_max
-
-    def load_nexus(self, filename: str) -> dict[int, np.ndarray]:    
-        return _integration.io.load_nexus(self, filename)
-
-    def load_merged_h5(self, filename: str) -> dict[int, np.ndarray]:    
-        return _integration.io.load_merged_h5(self, filename)
-    
+        self.goniometer = init_goniometer(filename, ext, instrument, is_merged, goniometer_axes, goniometer_angles)
+        self.wavelength = init_wavelength(filename, ext, instrument, is_merged, min=wavelength_min, max=wavelength_max)
+        self.ims = init_ims(filename, ext, is_merged)
 
     def get_detector(self, bank: int) -> Detector:
         if bank in self.bank_mapping:
@@ -865,25 +840,25 @@ class Peaks:
 
             det_config = beamlines[self.instrument][str(physical_bank)]
 
-            if self.goniometer_rotation.ndim == 3:
+            if self.goniometer.rotation.ndim == 3:
                 current_R = (
-                    self.goniometer_rotation[img_key]
-                    if img_key < len(self.goniometer_rotation)
-                    else self.goniometer_rotation[-1]
+                    self.goniometer.rotation[img_key]
+                    if img_key < len(self.goniometer.rotation)
+                    else self.goniometer.rotation[-1]
                 )
             else:
-                current_R = self.goniometer_rotation
+                current_R = self.goniometer.rotation
 
             current_angles = None
-            if self.goniometer_angles_raw is not None:
-                if self.goniometer_angles_raw.ndim == 2:
+            if self.goniometer.angles_raw is not None:
+                if self.goniometer.angles_raw.ndim == 2:
                     current_angles = (
-                        self.goniometer_angles_raw[img_key]
-                        if img_key < len(self.goniometer_angles_raw)
-                        else self.goniometer_angles_raw[-1]
+                        self.goniometer.angles_raw[img_key]
+                        if img_key < len(self.goniometer.angles_raw)
+                        else self.goniometer.angles_raw[-1]
                     )
                 else:
-                    current_angles = self.goniometer_angles_raw
+                    current_angles = self.goniometer.angles_raw
 
             pre_coords = None
             if finder_algorithm == "sparse_rbf":
@@ -898,8 +873,8 @@ class Peaks:
             geo_info = (
                 current_R,
                 current_angles,
-                self.wavelength_min,
-                self.wavelength_max,
+                self.wavelength.min,
+                self.wavelength.max,
             )
             viz_info = (visualize, file_prefix)
 
@@ -980,9 +955,9 @@ class Peaks:
             banks,
             image_indices,
             run_ids,
-            self.goniometer_axes_raw,
+            self.goniometer.axes_raw,
             gonio_angles_out,
-            self.goniometer_names_raw,
+            self.goniometer.names_raw,
         )
 
     def predict_peaks(
@@ -1052,8 +1027,8 @@ class Peaks:
                     det_config,
                     unit_cell_params,  # Pass tuple instead of arrays
                     rub_val,
-                    self.wavelength_min,
-                    self.wavelength_max,
+                    self.wavelength.min,
+                    self.wavelength.max,
                     sample_offset,
                     ki_vec,
                     current_R_val,
