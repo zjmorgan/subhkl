@@ -892,25 +892,25 @@ def peak_predictor(
     )
 
     print(
-        f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}"
+        f"Predicting peaks for {len(peaks.image.ims)} images using solution from {indexed_hdf5_filename}"
     )
 
     # 3. Calculate RUB Stack for Parallel Processing
     # We always start with the nominal geometry of the TARGET file (filename)
-    all_R = peaks.goniometer_rotation
+    all_R = peaks.goniometer.rotation
 
     # Then we apply refined parameters from the INDEXER file
     if offsets is not None:
         print(f"Applying refined goniometer offsets from indexer: {offsets}")
         # Re-calculate refined R stack for the TARGET images
         if (
-            peaks.goniometer_angles_raw is not None
-            and peaks.goniometer_axes_raw is not None
+            peaks.goniometer.angles_raw is not None
+            and peaks.goniometer.axes_raw is not None
         ):
-            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
             all_R = np.stack(
                 [
-                    calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                    calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
                     for ang in angles_refined
                 ]
             )
@@ -921,7 +921,7 @@ def peak_predictor(
     elif idx_R is not None:
         # Fallback: if the indexer has a stack that happens to match the image count,
         # we use it, but warn that this is less robust than offsets.
-        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
+        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.image.ims):
             print("Using R stack directly from indexer (matches image count).")
             all_R = idx_R
 
@@ -963,9 +963,9 @@ def peak_predictor(
         f["sample/c"] = c
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
-        sorted_keys = sorted(peaks.ims.keys())
+        sorted_keys = sorted(peaks.image.ims.keys())
         bank_ids = np.array(
-            [peaks.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
+            [peaks.image.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
         )
         f.create_dataset("bank_ids", data=bank_ids)
         f["sample/gamma"] = gamma
@@ -978,14 +978,14 @@ def peak_predictor(
         try:
             goniometer_angles_to_save = angles_refined
         except NameError:
-            goniometer_angles_to_save = peaks.goniometer_angles_raw
+            goniometer_angles_to_save = peaks.goniometer.angles_raw
 
         f["goniometer/angles"] = goniometer_angles_to_save
-        f["goniometer/axes"] = peaks.goniometer_axes_raw
+        f["goniometer/axes"] = peaks.goniometer.axes_raw
         if peaks.goniometer_names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
-                "goniometer/names", data=peaks.goniometer_names_raw, dtype=dt
+                "goniometer/names", data=peaks.goniometer.names_raw, dtype=dt
             )
 
         f["sample/offset"] = sample_offset
@@ -1092,10 +1092,10 @@ def integrator(
     # Calculate RUB Stack from loaded parameters
     if all_R is None:
         print("Warning: Refined R stack not found in prediction file. Using nominal.")
-        all_R = peaks.goniometer_rotation
+        all_R = peaks.goniometer.rotation
 
     if angles_stack is None:
-        angles_stack = peaks.goniometer_angles_raw
+        angles_stack = peaks.goniometer.angles_raw
 
     UB = U @ B
     if all_R.ndim == 3:
