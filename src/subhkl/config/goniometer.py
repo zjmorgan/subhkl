@@ -125,8 +125,6 @@ def calc_goniometer_rotation_matrix(axes, angles):
     return matrix
 
 
-
-
 @dataclass
 class Goniometer:
     axes_raw = None
@@ -178,7 +176,12 @@ class Goniometer:
 
         rotation = cls.get_rotation(axes, angles)
 
-        return cls(axes_raw=axes, angles_raw=np.array(angles), names_raw=names, rotation=rotation)
+        return cls(
+            axes_raw=axes,
+            angles_raw=np.array(angles),
+            names_raw=names,
+            rotation=rotation,
+        )
 
     @classmethod
     def from_h5_file(cls, h5_file):

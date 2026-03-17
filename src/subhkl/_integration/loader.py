@@ -1,10 +1,8 @@
 import re
 import h5py
 import numpy as np
-from subhkl.config import (
-        beamlines,
-        reduction_settings
-    )
+from subhkl.config import beamlines, reduction_settings
+
 
 def load_nexus(peaks, filename: str) -> dict[int, np.ndarray]:
     detectors = beamlines[peaks.instrument]
@@ -33,6 +31,7 @@ def load_nexus(peaks, filename: str) -> dict[int, np.ndarray]:
 
     return ims
 
+
 def load_merged_h5(peaks, filename: str) -> dict[int, np.ndarray]:
     ims = {}
     with h5py.File(filename, "r") as f:
@@ -56,4 +55,3 @@ def load_merged_h5(peaks, filename: str) -> dict[int, np.ndarray]:
             ims[i] = data[i]
             peaks.bank_mapping[i] = int(bank_ids[i])
     return ims
-

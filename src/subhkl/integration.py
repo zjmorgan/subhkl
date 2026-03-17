@@ -14,6 +14,7 @@ from h5py import File
 from PIL import Image
 
 import _integration.loader
+
 # Ensure we have tqdm for progress bars
 try:
     from tqdm import tqdm
@@ -42,6 +43,7 @@ from subhkl.utils import (
 from dataclasses import dataclass, astuple
 from typing import List, Any, Optional
 
+
 @dataclass(frozen=True)
 class DetectorPeaks:
     R: List[Any]
@@ -68,6 +70,7 @@ class DetectorPeaks:
         """Allows index access"""
         return astuple(self)[index]
 
+
 @dataclass(frozen=True)
 class IntegrationResult:
     h: List[float]
@@ -92,6 +95,7 @@ class IntegrationResult:
         """Allows index access"""
         return astuple(self)[index]
 
+
 @dataclass
 class Wavelength:
     min: float = None
@@ -99,6 +103,7 @@ class Wavelength:
 
     def __iter__(self):
         return iter((self.min, self.max))
+
 
 # ==============================================================================
 # WORKER FUNCTIONS (Multiprocessing)
@@ -652,10 +657,11 @@ def _integrate_single_bank(
         else [],
     }
 
+
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
 def init_goniometer(filename, ext, instrument, is_merged, axes=None, angles=None):
     """
-    Build goniometer with the following priority  
+    Build goniometer with the following priority
     - merged hdf5
     - nexus
     - manual override
@@ -676,17 +682,19 @@ def init_goniometer(filename, ext, instrument, is_merged, axes=None, angles=None
 
     if axes is not None and angles is not None:
         rot = Goniometer.get_rotation(axes, angles)
-        return Goniometer(axes_raw=axes, angles_raw=angles, names_raw=None, rotation=rot)
+        return Goniometer(
+            axes_raw=axes, angles_raw=angles, names_raw=None, rotation=rot
+        )
 
     return Goniometer()
 
 
 def init_wavelength(filename, ext, instrument, is_merged, min=None, max=None):
-    settings =reduction_settings[instrument]
+    settings = reduction_settings[instrument]
     wmin, wmax = settings.get("Wavelength")
 
     if ext == ".h5" and is_merged:
-        with h5py.File(filename, 'r') as f:
+        with h5py.File(filename, "r") as f:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
                 wmin, wmax = float(wl[0]), float(wl[1])
@@ -695,6 +703,7 @@ def init_wavelength(filename, ext, instrument, is_merged, min=None, max=None):
     max = max if max is not None else wmax
 
     return Wavelength(min, max)
+
 
 def init_ims(filename, ext, is_merged):
     if ext == ".h5":
@@ -707,14 +716,16 @@ def init_ims(filename, ext, is_merged):
 
     return ims
 
+
 def _check_if_merged(filename, ext) -> bool:
     if ext != ".h5":
         return False
     try:
-        with h5py.File(filename, 'r') as f:
-            return 'images' in f
+        with h5py.File(filename, "r") as f:
+            return "images" in f
     except OSError:
         raise OSError
+
 
 class Peaks:
     def __init__(
@@ -732,12 +743,16 @@ class Peaks:
 
         self.bank_mapping = {}
 
-        is_merged =_check_if_merged(filename, ext)
+        is_merged = _check_if_merged(filename, ext)
         if is_merged:
             print(f"Detected Merged HDF5 file format: {filename}")
 
-        self.goniometer = init_goniometer(filename, ext, instrument, is_merged, goniometer_axes, goniometer_angles)
-        self.wavelength = init_wavelength(filename, ext, instrument, is_merged, min=wavelength_min, max=wavelength_max)
+        self.goniometer = init_goniometer(
+            filename, ext, instrument, is_merged, goniometer_axes, goniometer_angles
+        )
+        self.wavelength = init_wavelength(
+            filename, ext, instrument, is_merged, min=wavelength_min, max=wavelength_max
+        )
         self.ims = init_ims(filename, ext, is_merged)
 
     def get_detector(self, bank: int) -> Detector:
