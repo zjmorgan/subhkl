@@ -982,7 +982,7 @@ def peak_predictor(
 
         f["goniometer/angles"] = goniometer_angles_to_save
         f["goniometer/axes"] = peaks.goniometer.axes_raw
-        if peaks.goniometer_names_raw:
+        if peaks.goniometer.names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
                 "goniometer/names", data=peaks.goniometer.names_raw, dtype=dt
@@ -1202,31 +1202,31 @@ def reduce(
         wavelength_max=wavelength_max,
     )
 
-    if not peaks_handler.ims:
+    if not peaks_handler.image.ims:
         print("Warning: No images found in file.")
         return
 
     # 2. Stack Data for Batch Processing
     # Ensure consistent ordering of banks
-    sorted_banks = sorted(peaks_handler.ims.keys())
+    sorted_banks = sorted(peaks_handler.image.ims.keys())
 
     # Stack images: (N_banks, H, W)
     # Note: Assumes all banks have the same shape, which is standard for one instrument.
-    image_stack = np.stack([peaks_handler.ims[b] for b in sorted_banks])
+    image_stack = np.stack([peaks_handler.image.ims[b] for b in sorted_banks])
 
     bank_ids = np.array(sorted_banks, dtype=np.int32)
     n_images = len(sorted_banks)
 
     # 3. Prepare Metadata
     # Repeat angles for each bank so they stay aligned after merging
-    if peaks_handler.goniometer_angles_raw is not None:
+    if peaks_handler.goniometer.angles_raw is not None:
         # shape (1, 3) -> (N_banks, 3)
-        angles_repeated = np.tile(peaks_handler.goniometer_angles_raw, (n_images, 1))
+        angles_repeated = np.tile(peaks_handler.goniometer.angles_raw, (n_images, 1))
     else:
         angles_repeated = np.zeros((n_images, 3))  # Fallback
 
-    if peaks_handler.goniometer_axes_raw is not None:
-        axes = np.array(peaks_handler.goniometer_axes_raw)
+    if peaks_handler.goniometer.axes_raw is not None:
+        axes = np.array(peaks_handler.goniometer.axes_raw)
     else:
         axes = np.array([0.0, 1.0, 0.0])  # Fallback
 
@@ -1243,17 +1243,17 @@ def reduce(
         # Metadata (Constant)
         f.create_dataset("goniometer/axes", data=axes)
 
-        if peaks_handler.goniometer_names_raw:
+        if peaks_handler.goniometer.names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
                 "goniometer/names",
-                data=peaks_handler.goniometer_names_raw,
+                data=peaks_handler.goniometer.names_raw,
                 dtype=dt,
             )
 
         # Save Wavelength (Min/Max)
         # Using format compatible with downstream indexer
-        wl = [peaks_handler.wavelength_min, peaks_handler.wavelength_max]
+        wl = [peaks_handler.wavelength.min, peaks_handler.wavelength.max]
         f.create_dataset("instrument/wavelength", data=wl)
 
         # Save Instrument Name
