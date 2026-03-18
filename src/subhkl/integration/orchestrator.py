@@ -173,7 +173,7 @@ def prepare_harvest_tasks(
                 viz_info,
             )
         )
-        return tasks
+    return tasks
 
 
 def prepare_predict_tasks(
@@ -410,7 +410,7 @@ def prepare_integrate_tasks(
                 metrics_info,
             )
         )
-        return tasks
+    return tasks
 
 
 # NOTE(vivek): handle multiprocessing orchestration
