@@ -16,7 +16,7 @@ from subhkl.core.spacegroup import (
 )
 
 # Import JAX with fallback from utils (centralized)
-from subhkl.shim import (
+from subhkl.utils.shim import (
     CMA_ES,
     HAS_JAX,
     OPTIMIZATION_BACKEND,
