@@ -1,4 +1,4 @@
-from subhkl.config import beamlines, reduction_settings
+from .config import beamlines, reduction_settings
 
 __all__ = [
     "beamlines",
