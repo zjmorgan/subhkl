@@ -711,12 +711,23 @@ def process_panel_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: j
 def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, active_volumes: np.ndarray):
     """Calculates robust SIGI strictly on the active set using CPU-based SVD."""
     intensity = np.dot(c_active, active_volumes[:len(c_active)])
-    U, S, Vh = np.linalg.svd(I_fisher_active, full_matrices=False)
-    tol = 1e-12 * np.max(S)
-    S_inv = np.where(S > tol, 1.0 / S, 0.0)
-    covariance_matrix = (Vh.T * S_inv) @ U.T
-    variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
-    return float(intensity), float(np.sqrt(variance_I))
+    
+    # Protect against OpenBLAS infinite loop bug on NaNs/Infs
+    if not np.all(np.isfinite(I_fisher_active)):
+        return float(intensity), 0.0
+        
+    try:
+        U, S, Vh = np.linalg.svd(I_fisher_active, full_matrices=False)
+        tol = 1e-12 * np.max(S)
+        S_inv = np.where(S > tol, 1.0 / S, 0.0)
+        covariance_matrix = (Vh.T * S_inv) @ U.T
+        variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
+        
+        # Ensure variance doesn't dip negative due to floating point drift
+        return float(intensity), float(np.sqrt(np.maximum(0.0, variance_I)))
+    except np.linalg.LinAlgError:
+        # If the SVD fails to converge, return 0.0 for the uncertainty
+        return float(intensity), 0.0
 
 # --- LEGACY WRAPPERS FOR PYTEST SUITE COMPATIBILITY ---
 def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigmas: List[float], gamma: float, max_peaks: int):
