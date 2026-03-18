@@ -594,60 +594,65 @@ from typing import Tuple, List, Dict
 from functools import partial
 from tqdm import tqdm
 
-@partial(jax.jit, static_argnames=['N_shapes', 'max_peaks', 'max_iter'])
-def build_solve_and_fisher_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: jnp.ndarray,
-                               alpha: float, gamma: float, N_shapes: int, max_peaks: int, max_iter: int = 100, tol: float = 1e-6):
-    """
-    End-to-End GPU Execution: Builds the matrix, solves the SSN, and computes Fisher Info entirely in VRAM.
-    """
+@partial(jax.jit, static_argnames=['N_shapes', 'max_peaks'])
+def build_dense_padded_matrix_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: jnp.ndarray,
+                                  gamma: float, N_shapes: int, max_peaks: int):
+    """Vectorized GPU matrix builder."""
     H, W = image.shape
     K = H * W
     N_c = max_peaks * N_shapes
-    N = N_c + 3
 
-    # 1. BUILD DENSE MATRIX ON GPU (Vectorized)
-    y_idx = jnp.arange(H)
-    x_idx = jnp.arange(W)
+    y_idx = jnp.arange(H, dtype=jnp.float32)
+    x_idx = jnp.arange(W, dtype=jnp.float32)
     y_coords, x_coords = jnp.meshgrid(y_idx, x_idx, indexing='ij')
     x_flat = x_coords.flatten()
     y_flat = y_coords.flatten()
 
-    # Distances via broadcasting: (K, 1) - (1, max_peaks) -> (K, max_peaks)
     dx = x_flat[:, None] - padded_centers[None, :, 0]
     dy = y_flat[:, None] - padded_centers[None, :, 1]
     r2 = dx**2 + dy**2
 
-    # Apply sigmas: (K, max_peaks, 1) / (1, 1, N_shapes) -> (K, max_peaks, N_shapes)
     sig_arr = sigmas[None, None, :]
-    phi = jnp.exp(-r2[:, :, None] / (2 * sig_arr**2))
+    phi = jnp.exp(-r2[:, :, None] / (2.0 * sig_arr**2))
     w = sig_arr**gamma
 
     A_peaks = (phi / w).reshape((K, N_c))
     weights = jnp.broadcast_to(w, (1, max_peaks, N_shapes)).reshape((N_c,))
-    volumes = 2 * jnp.pi * (jnp.broadcast_to(sig_arr, (1, max_peaks, N_shapes)).reshape((N_c,))**2)
+    volumes = 2.0 * jnp.pi * (jnp.broadcast_to(sig_arr, (1, max_peaks, N_shapes)).reshape((N_c,))**2)
 
     x_norm = (x_flat - W / 2.0) / W
     y_norm = (y_flat - H / 2.0) / H
-    A_bg = jnp.column_stack([jnp.ones(K), x_norm, y_norm])
+    A_bg = jnp.column_stack([jnp.ones(K, dtype=jnp.float32), x_norm, y_norm])
 
     A = jnp.hstack([A_peaks, A_bg])
-    y = image.flatten()
+    return A, weights, volumes
 
-    # 2. SOLVE SEMI-SMOOTH NEWTON ON GPU
-    Ht = A.T @ A
-    At_y = A.T @ y
-    y_sq_norm = jnp.sum(y**2) / 2.0
+@partial(jax.jit, static_argnames=['N_c', 'max_iter'])
+def solve_ssn(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_iter: int = 100, tol: float = 1e-6):
+    """
+    Solves the L1 regularized system using jax.lax.while_loop.
+    Strictly enforces float32 to prevent XLA dtype mismatch crashes.
+    """
+    N = A.shape[1]
+
+    alpha = jnp.float32(alpha)
+    tol = jnp.float32(tol)
+
+    # Precompute outside the loop to shrink XLA graph
+    Ht = (A.T @ A).astype(jnp.float32)
+    At_y = (A.T @ y).astype(jnp.float32)
+    y_sq_norm = jnp.float32(jnp.sum(y**2) / 2.0)
 
     def obj(u):
-        quad = 0.5 * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y) + y_sq_norm
+        quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y) + y_sq_norm
         return quad + alpha * jnp.sum(jnp.abs(u[:N_c]))
 
     u_init = jnp.zeros(N, dtype=jnp.float32)
     gf0 = -At_y
     gf0_c = gf0[:N_c]
     mask = jnp.abs(gf0_c) > alpha
-    gf0_c = jnp.where(mask, (1 - 1e-14) * alpha * jnp.sign(gf0_c), gf0_c)
-    q_init = u_init - jnp.concatenate([gf0_c, gf0[N_c:]])
+    gf0_c = jnp.where(mask, jnp.float32(1.0 - 1e-14) * alpha * jnp.sign(gf0_c), gf0_c).astype(jnp.float32)
+    q_init = (u_init - jnp.concatenate([gf0_c, gf0[N_c:]])).astype(jnp.float32)
 
     def cond_fun(state):
         step, _, _, Gq_norm, _ = state
@@ -658,115 +663,73 @@ def build_solve_and_fisher_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, 
 
         Gq = (q - u) + (Ht @ u) - At_y
         II_c = jnp.abs(q[:N_c]) > alpha
-        II_b = jnp.ones(N - N_c, dtype=bool)
+        II_b = jnp.ones(N - N_c, dtype=jnp.bool_)
         II = jnp.concatenate([II_c, II_b])
 
-        DPc_mat = jnp.diag(II.astype(Ht.dtype))
-        I = jnp.eye(N, dtype=Ht.dtype)
+        DPc_mat = jnp.diag(II.astype(jnp.float32))
+        I = jnp.eye(N, dtype=jnp.float32)
         DG = (I - DPc_mat) + Ht @ DPc_mat
 
-        epsi = 1e-12 * jnp.max(jnp.sum(jnp.abs(DG), axis=1))
+        epsi = jnp.float32(1e-12) * jnp.max(jnp.sum(jnp.abs(DG), axis=1))
         DG = DG + epsi * DPc_mat
-        dq = jnp.linalg.solve(DG, -Gq)
+        dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
-        # Backtracking Line Search
         j_baseline = obj(u)
+
         def bt_cond(bt_state):
             bt_i, tau, _, _, j_test, j_curr = bt_state
-            return (bt_i < 10) & (j_test > j_curr * (1.0 + 1e-10))
+            return (bt_i < 10) & (j_test > j_curr * jnp.float32(1.0 + 1e-10))
 
         def bt_body(bt_state):
             bt_i, tau, _, _, _, j_curr = bt_state
-            tau = tau * 0.5
+            tau = jnp.float32(tau * 0.5)
             q_test = q + tau * dq
             c_test = jnp.sign(q_test[:N_c]) * jnp.maximum(0.0, jnp.abs(q_test[:N_c]) - alpha)
-            u_test = jnp.concatenate([c_test, q_test[N_c:]])
+            u_test = jnp.concatenate([c_test, q_test[N_c:]]).astype(jnp.float32)
             j_test = obj(u_test)
             return (bt_i + 1, tau, q_test, u_test, j_test, j_curr)
 
         q_init_test = q + dq
         c_init_test = jnp.sign(q_init_test[:N_c]) * jnp.maximum(0.0, jnp.abs(q_init_test[:N_c]) - alpha)
-        u_init_test = jnp.concatenate([c_init_test, q_init_test[N_c:]])
+        u_init_test = jnp.concatenate([c_init_test, q_init_test[N_c:]]).astype(jnp.float32)
 
-        bt_init = (0, 1.0, q_init_test, u_init_test, obj(u_init_test), j_baseline)
+        bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, u_init_test, obj(u_init_test), j_baseline)
         bt_final = jax.lax.while_loop(bt_cond, bt_body, bt_init)
         _, _, q_final, u_final, _, _ = bt_final
 
-        return (step + 1, q_final, u_final, jnp.linalg.norm(Gq), II)
+        return (step + 1, q_final, u_final, jnp.linalg.norm(Gq).astype(jnp.float32), II)
 
-    init_state = (0, q_init, u_init, 1e9, jnp.zeros(N, dtype=bool))
+    init_state = (jnp.int32(0), q_init, u_init, jnp.float32(1e9), jnp.zeros(N, dtype=jnp.bool_))
     final_state = jax.lax.while_loop(cond_fun, body_fun, init_state)
     _, _, u_prime, _, active_set = final_state
 
-    # 3. COMPUTE FISHER INFORMATION (A^T W_var A) ON GPU
-    # By vectorizing W_var, we prevent creating a dense (K, K) matrix, keeping VRAM safe.
-    variances = jnp.maximum(y, 1.0)
-    W_var_diag = 1.0 / variances
-    I_fisher = A.T @ (W_var_diag[:, None] * A)
-
-    return u_prime, active_set, I_fisher, weights, volumes
+    return u_prime, active_set
 
 def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, active_volumes: np.ndarray):
     """Calculates robust SIGI strictly on the active set using CPU-based SVD."""
     intensity = np.dot(c_active, active_volumes[:len(c_active)])
-
-    # Robust Pseudo-Inverse using CPU SVD
     U, S, Vh = np.linalg.svd(I_fisher_active, full_matrices=False)
     tol = 1e-12 * np.max(S)
     S_inv = np.where(S > tol, 1.0 / S, 0.0)
     covariance_matrix = (Vh.T * S_inv) @ U.T
-
     variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
     return float(intensity), float(np.sqrt(variance_I))
 
-# --- LEGACY WRAPPERS FOR PYTEST SUITE COMPATIBILITY ---
 def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigmas: List[float], gamma: float, max_peaks: int):
-    # Fallback to satisfy test_sparse_rbf_integrator.py tests without breaking them
-    sigmas_jnp = jnp.array(sigmas, dtype=jnp.float32)
+    """Bridge for the PyTest suite."""
     actual_peaks = len(peak_centers)
     padded = np.pad(peak_centers, ((0, max_peaks - actual_peaks), (0, 0)), constant_values=-10000.0)
-    image_jnp = jnp.array(image, dtype=jnp.float32)
-
-    # Extract inner logic for the test
-    # (Since we merged build and solve for performance, we re-expose it here just for pytest)
-    H, W = image.shape
-    y_idx = jnp.arange(H); x_idx = jnp.arange(W)
-    y_coords, x_coords = jnp.meshgrid(y_idx, x_idx, indexing='ij')
-    r2 = (x_coords.flatten()[:, None] - padded[None, :, 0])**2 + (y_coords.flatten()[:, None] - padded[None, :, 1])**2
-    sig_arr = sigmas_jnp[None, None, :]
-    phi = jnp.exp(-r2[:, :, None] / (2 * sig_arr**2))
-    w = sig_arr**gamma
-    A_peaks = (phi / w).reshape((H*W, max_peaks * len(sigmas)))
-    x_norm = (x_coords.flatten() - W / 2.0) / W
-    y_norm = (y_coords.flatten() - H / 2.0) / H
-    A_bg = jnp.column_stack([jnp.ones(H*W), x_norm, y_norm])
-    A = jnp.hstack([A_peaks, A_bg])
-
-    weights = jnp.broadcast_to(w, (1, max_peaks, len(sigmas))).reshape((max_peaks * len(sigmas),))
-    volumes = 2 * jnp.pi * (jnp.broadcast_to(sig_arr, (1, max_peaks, len(sigmas))).reshape((max_peaks * len(sigmas),))**2)
-
+    A, weights, volumes = build_dense_padded_matrix_gpu(
+        jnp.array(image, dtype=jnp.float32),
+        jnp.array(padded, dtype=jnp.float32),
+        jnp.array(sigmas, dtype=jnp.float32),
+        gamma, len(sigmas), max_peaks
+    )
     return A, weights, volumes, actual_peaks
-
-def solve_ssn(A, y, N_c, alpha):
-    # Dummy wrapper to keep tests alive
-    Ht = A.T @ A
-    At_y = A.T @ y
-    # Use jax.jit to execute the actual step
-    return _solve_ssn_test_wrapper(A, y, Ht, At_y, N_c, alpha)
-
-@partial(jax.jit, static_argnames=['N_c'])
-def _solve_ssn_test_wrapper(A, y, Ht, At_y, N_c, alpha):
-    y_sq = jnp.sum(y**2) / 2.0
-    u = jnp.zeros(A.shape[1], dtype=jnp.float32)
-    gf0_c = jnp.where(jnp.abs(-At_y[:N_c]) > alpha, (1 - 1e-14) * alpha * jnp.sign(-At_y[:N_c]), -At_y[:N_c])
-    q = u - jnp.concatenate([gf0_c, -At_y[N_c:]])
-    # Very simplified version just to make tests pass...
-    return jnp.zeros(A.shape[1]), jnp.zeros(A.shape[1], dtype=bool)
-# -----------------------------------------------------
 
 def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool):
-    """Iterates dense solves over all panels/images using pure GPU execution."""
+    """Orchestrator for Dense GPU integration."""
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
@@ -774,7 +737,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
             self.tt, self.run_id, self.xyz = [], [], []
 
     res = RBFResult()
-    sigmas_jnp = jnp.array(sigmas, dtype=jnp.float32)
     N_shapes = len(sigmas)
     N_c = max_peaks * N_shapes
 
@@ -784,32 +746,23 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
 
         if actual_peaks_count == 0:
             continue
-
         if actual_peaks_count > max_peaks:
             raise ValueError(f"Actual peaks ({actual_peaks_count}) exceeds max_peaks ({max_peaks}).")
 
-        # Pad coordinates for static JIT shapes
-        padded_centers = np.pad(peak_centers, ((0, max_peaks - actual_peaks_count), (0, 0)), constant_values=-10000.0)
-        padded_centers_jnp = jnp.array(padded_centers, dtype=jnp.float32)
-
         image = image_handler.ims[img_key]
-        image_jnp = jnp.array(image, dtype=jnp.float32)
+        A, weights, volumes, _ = build_dense_padded_matrix(image, peak_centers, sigmas, gamma, max_peaks)
+        intensities = jnp.array(image.flatten(), dtype=jnp.float32)
 
-        # 1. SEND TO GPU (A completely self-contained execution)
-        u_prime, active_set, I_fisher, weights, volumes = build_solve_and_fisher_gpu(
-            image=image_jnp,
-            padded_centers=padded_centers_jnp,
-            sigmas=sigmas_jnp,
-            alpha=alpha,
-            gamma=gamma,
-            N_shapes=N_shapes,
-            max_peaks=max_peaks
-        )
+        # GPU Solve
+        u_prime, active_set = solve_ssn(A, intensities, N_c, alpha)
 
-        # 2. PULL FROM GPU TO CPU
+        # Compute Fisher explicitly
+        variances = jnp.maximum(intensities, 1.0)
+        W_var_diag = 1.0 / variances
+        I_fisher = np.array(A.T @ (W_var_diag[:, None] * A))
+
         u_prime = np.array(u_prime)
         active_set = np.array(active_set)
-        I_fisher = np.array(I_fisher)
         weights = np.array(weights)
         volumes = np.array(volumes)
 
@@ -825,14 +778,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
             if p_intensity > 0:
                 p_mask = np.zeros_like(active_set)
                 p_mask[start_idx:end_idx] = active_set[start_idx:end_idx]
-                p_mask[N_c:] = True # Keep Background
+                p_mask[N_c:] = True
 
-                # Extract dense subset from the active mask for SVD
-                # SVD works much better on the exact subspace of active parameters
                 if np.any(p_mask[:N_c]):
                     active_indices = np.where(p_mask)[0]
                     I_fisher_active = I_fisher[np.ix_(active_indices, active_indices)]
-
                     c_active = u_prime[active_indices] / np.concatenate([weights, np.ones(3)])[active_indices]
                     vols_active = np.concatenate([volumes, np.zeros(3)])[active_indices]
 
