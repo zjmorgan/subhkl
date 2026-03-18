@@ -496,7 +496,7 @@ def indexer(
     # Logic to resolve SG
     sg_to_use = "P 1"
     if space_group:
-        from subhkl.spacegroup import get_space_group_object
+        from subhkl.core.spacegroup import get_space_group_object
 
         try:
             get_space_group_object(space_group)
