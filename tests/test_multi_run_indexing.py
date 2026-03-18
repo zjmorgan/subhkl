@@ -184,7 +184,7 @@ def test_sample_offset_refinement_multirun():
 
 def test_predictor_multirun_sample_rotation():
     from subhkl.instrument.detector import Detector
-    from subhkl.utils import predict_reflections_on_panel
+    from subhkl.instrument.physics import predict_reflections_on_panel
 
     det_config = {
         "m": 256,

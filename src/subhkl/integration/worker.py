@@ -7,11 +7,11 @@ import skimage.feature
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.instrument.detector import Detector
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
-from subhkl.utils import (
+from subhkl.instrument.physics import (
     calculate_angular_error,
     predict_reflections_on_panel,
-    generate_reflections
 )
+from subhkl.core.crystallography import generate_reflections
 
 def _run_harvest_local_max(
     im,
