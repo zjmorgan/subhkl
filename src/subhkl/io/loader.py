@@ -2,7 +2,7 @@ import re
 import h5py
 import numpy as np
 from subhkl.config import beamlines, reduction_settings
-from subhkl.integration import ImageData
+from subhkl.integration.image_data import ImageData
 
 
 class ImageLoader:
