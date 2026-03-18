@@ -9,7 +9,7 @@ from subhkl.instrument.goniometer import (
     calc_goniometer_rotation_matrix,
     get_rotation_data_from_nexus,
 )
-from subhkl.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
+from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
