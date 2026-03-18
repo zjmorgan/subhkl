@@ -3,7 +3,7 @@ import h5py
 import pytest
 from subhkl.io.parser import indexer
 
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 
 
 def test_indexer_run_gap_crash(tmp_path):

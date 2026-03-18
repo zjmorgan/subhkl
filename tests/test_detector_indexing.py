@@ -1,6 +1,6 @@
 import pytest
 
-from subhkl.detector import Detector
+from subhkl.instrument.detector import Detector
 
 
 @pytest.fixture

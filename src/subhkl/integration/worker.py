@@ -5,14 +5,13 @@ import scipy
 import skimage.feature
 
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
-from subhkl.detector import Detector
+from subhkl.instrument.detector import Detector
 from subhkl.threshold_peak_finder import ThresholdingPeakFinder
 from subhkl.utils import (
     calculate_angular_error,
-    generate_reflections,
     predict_reflections_on_panel,
+    generate_reflections
 )
-
 
 def _run_harvest_local_max(
     im,

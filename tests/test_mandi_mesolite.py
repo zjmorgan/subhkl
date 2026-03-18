@@ -25,7 +25,7 @@ from subhkl.io.parser import (
     mtz_exporter,
     peak_predictor,
 )
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 
 # Test data configuration
 MESOLITE_FILE = "MANDI_11613.nxs.h5"  # Use the first file from the Zenodo dataset

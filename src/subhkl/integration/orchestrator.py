@@ -5,7 +5,7 @@ from typing import List, Any, Optional, Dict, Tuple
 
 from .image_data import ImageData
 from subhkl.config import beamlines
-from subhkl.config.goniometer import Goniometer
+from subhkl.instrument.goniometer import Goniometer
 from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
 
 

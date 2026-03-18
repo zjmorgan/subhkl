@@ -4,13 +4,14 @@ import h5py
 import numpy as np
 import typer
 
-from subhkl.config.goniometer import (
+# NOTE(Vivek): deprecate and use Goniometer class to handler rotation calc 
+from subhkl.instrument.goniometer import (
     calc_goniometer_rotation_matrix,
     get_rotation_data_from_nexus,
 )
 from subhkl.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
 from subhkl.integration import Peaks
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
 
 app = typer.Typer()
@@ -781,7 +782,7 @@ def metrics(
     """
     CLI command to compute and display indexing quality metrics.
 
-    Calls compute_metrics from subhkl.metrics and formats output for display.
+    Calls compute_metrics from subhkl.instrument.metrics and formats output for display.
     """
     # Typer API might pass OptionInfo objects if called directly (e.g. in tests)
     if hasattr(found_peaks_file, "default"):

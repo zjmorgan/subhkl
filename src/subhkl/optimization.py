@@ -8,8 +8,8 @@ import scipy.interpolate
 import scipy.linalg
 import scipy.spatial
 
-from subhkl.detector import scattering_vector_from_angles
-from subhkl.spacegroup import (
+from subhkl.instrument.detector import scattering_vector_from_angles
+from subhkl.core.spacegroup import (
     generate_hkl_mask,
     get_centering,
     get_space_group_object,

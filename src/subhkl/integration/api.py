@@ -8,9 +8,9 @@ import numpy as np
 from tqdm import tqdm
 
 from subhkl.config import beamlines, reduction_settings
-from subhkl.config.goniometer import Goniometer
-from subhkl.detector import Detector
 from subhkl.io import loader, writer
+from subhkl.instrument.detector import Detector
+from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength

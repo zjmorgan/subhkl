@@ -9,9 +9,9 @@ import numpy as np
 import scipy.spatial
 
 from subhkl.config import beamlines
-from subhkl.detector import Detector
+from subhkl.instrument.detector import Detector
+from subhkl.instrument.physics import calculate_angular_error
 from subhkl.optimization import FindUB
-from subhkl.utils import calculate_angular_error
 
 
 def _get_safe_R_stack(R_file_in, run_indices_in, target_len):
