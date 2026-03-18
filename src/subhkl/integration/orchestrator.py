@@ -107,7 +107,7 @@ def prepare_harvest_tasks(
     tasks = []
     for img_key in sorted(ims.keys()):
         physical_bank = bank_mapping.get(img_key, img_key)
-        img_label = image_data.get_image_label(img_key)
+        img_label = image_data.get_label(img_key)
 
         # FIX: Skip banks that are not in beamlines config
         if str(physical_bank) not in beamlines[instrument]:
@@ -353,7 +353,7 @@ def prepare_integrate_tasks(
         run_id = image.get_run_id(bank)
 
         # UPDATED: Generate nice labels for visualization
-        img_label = image.get_image_label(bank)
+        img_label = image.get_label(bank)
         viz_label = f"{img_label}_bank{physical_bank}"
 
         # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
