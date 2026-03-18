@@ -1,23 +1,11 @@
-import os
-import bisect
-from dataclasses import dataclass, field
 import re
 import h5py
 import numpy as np
-from typing import Dict, List, Optional
-
 from subhkl.config import beamlines, reduction_settings
+from subhkl.integration.loader import ImageData
 
-
-@dataclass(frozen=True)
-class ImageData:
-    ims: Dict[int, np.ndarray]
-    file_offsets: Optional[np.ndarray] = None
-    raw_files: Optional[List[str]] = None
-    bank_mapping: Dict[int, int] = field(default_factory=dict)
-
-    @classmethod
-    def load_nexus(cls, filename: str, instrument) -> dict[int, np.ndarray]:
+class ImageLoader:
+    def load_nexus(filename: str, instrument) -> ImageData:
         detectors = beamlines[instrument]
         settings = reduction_settings[instrument]
         ims = {}
@@ -42,10 +30,9 @@ class ImageData:
                         else:
                             ims[bank] = bc.reshape(n, m)
 
-        return cls(ims=ims)
+        return ImageData(ims=ims)
 
-    @classmethod
-    def load_merged_h5(cls, filename: str) -> dict[int, np.ndarray]:
+    def load_merged_h5(filename: str) -> ImageData:
         ims = {}
         bank_mapping = {}
         with h5py.File(filename, "r") as f:
@@ -69,26 +56,10 @@ class ImageData:
                 ims[i] = data[i]
                 bank_mapping[i] = int(bank_ids[i])
 
-        return cls(
+        return ImageData(
             ims=ims,
             raw_files=image_files_raw,
             file_offsets=file_offsets,
             bank_mapping=bank_mapping,
         )
 
-    def get_label(self, img_key: int) -> str:
-        files = self.raw_files
-        offsets = self.file_offsets
-        if files and offsets is not None:
-            file_idx = bisect.bisect_right(self.file_offsets, img_key) - 1
-            if 0 <= file_idx < len(self.raw_files):
-                orig_name = os.path.basename(self.raw_files[file_idx])
-                clean_name = os.path.splitext(orig_name)[0]
-                clean_name = clean_name.replace(".nxs.h5", "").replace(".h5", "")
-                return clean_name
-        return f"img{img_key}"
-
-    def get_run_id(self, img_key: int) -> int:
-        if self.file_offsets is None:
-            return 0
-        return int(np.searchsorted(self.file_offsets, img_key, side="right") - 1)
