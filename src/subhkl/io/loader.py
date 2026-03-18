@@ -4,6 +4,7 @@ import numpy as np
 from subhkl.config import beamlines, reduction_settings
 from subhkl.integration.loader import ImageData
 
+
 class ImageLoader:
     def load_nexus(filename: str, instrument) -> ImageData:
         detectors = beamlines[instrument]
@@ -62,4 +63,3 @@ class ImageLoader:
             file_offsets=file_offsets,
             bank_mapping=bank_mapping,
         )
-

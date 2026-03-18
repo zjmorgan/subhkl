@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from typing import Dict, List, Optional
 
+
 @dataclass(frozen=True)
 class ImageData:
     ims: Dict[int, np.ndarray]
@@ -27,4 +28,3 @@ class ImageData:
         if self.file_offsets is None:
             return 0
         return int(np.searchsorted(self.file_offsets, img_key, side="right") - 1)
-
