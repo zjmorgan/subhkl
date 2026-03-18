@@ -7,15 +7,9 @@ import PIL.Image
 import numpy as np
 from tqdm import tqdm
 
-from . import (
-    writer,
-    worker,
-    orchestrator,
-    ImageData,
-    DetectorPeaks,
-    IntegrationResult,
-    Wavelength,
-)
+from .image_data import ImageData
+from .orchestrator import DetectorPeaks, IntegrationResult, Wavelength
+from . import writer, worker, orchestrator
 from subhkl.config import beamlines, reduction_settings
 from subhkl.config.goniometer import Goniometer
 from subhkl.detector import Detector
