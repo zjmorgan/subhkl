@@ -7,14 +7,7 @@ from typing import List, Any, Optional
 import h5py
 import PIL.Image
 import numpy as np
-
-try:
-    from tqdm import tqdm
-except ImportError:
-
-    def tqdm(x, **kwargs):
-        return x
-
+from tqdm import tqdm
 
 from subhkl._integration.loader import ImageData
 from subhkl._integration import writer, worker
@@ -83,11 +76,6 @@ class Wavelength:
 
     def __iter__(self):
         return iter((self.min, self.max))
-
-
-# ==============================================================================
-# WORKER FUNCTIONS (Multiprocessing)
-# ==============================================================================
 
 
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
