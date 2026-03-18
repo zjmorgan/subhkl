@@ -6,7 +6,7 @@ import skimage.feature
 
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.instrument.detector import Detector
-from subhkl.threshold_peak_finder import ThresholdingPeakFinder
+from subhkl.peakfinder.threshold import ThresholdingPeakFinder
 from subhkl.instrument.physics import (
     calculate_angular_error,
     predict_reflections_on_panel,

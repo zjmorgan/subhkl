@@ -6,7 +6,7 @@ from typing import List, Any, Optional, Dict, Tuple
 from .image_data import ImageData
 from subhkl.config import beamlines
 from subhkl.instrument.goniometer import Goniometer
-from subhkl.sparse_rbf_peak_finder import SparseRBFPeakFinder
+from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
 
 
 @dataclass(frozen=True)
