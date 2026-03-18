@@ -1297,6 +1297,69 @@ def merge_images(
 
     print(f"Successfully created {output_filename}")
 
+@app.command()
+def rbf_integrator(
+    filename: str = typer.Argument(..., help="Merged HDF5 image stack"),
+    instrument: str = typer.Argument(..., help="Instrument name"),
+    integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
+    output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
+    alpha: float = typer.Option(1.0, "--alpha", help="Sparsity regularization parameter (lambda)"),
+    gamma: float = typer.Option(2.0, "--gamma", help="Besov space weight exponent"),
+    sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
+    max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
+    show_progress: bool = typer.Option(True, "--show-progress"),
+):
+    """
+    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
+    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
+    """
+    import h5py
+    from subhkl.integration import Peaks
+    from subhkl.sparse_rbf_peak_finder import integrate_peaks_rbf_ssn
+
+    sigma_list = [float(s.strip()) for s in sigmas.split(",")]
+
+    print(f"Starting Dense Sparse RBF Integration on {filename}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigmas={sigma_list}, Max Peaks Padding={max_peaks}")
+
+    peak_dict = {}
+    with h5py.File(integration_peaks_filename, "r") as f:
+        for key in f["banks"].keys():
+            img_idx = int(key)
+            grp = f[f"banks/{key}"]
+            # Structure matching the Predictor output
+            peak_dict[img_idx] = [
+                grp["i"][()], grp["j"][()], grp["h"][()],
+                grp["k"][()], grp["l"][()], grp["wavelength"][()]
+            ]
+
+    peaks = Peaks(filename, instrument)
+
+    # Execute Dense JAX solver loop
+    result = integrate_peaks_rbf_ssn(
+        peak_dict=peak_dict,
+        image_handler=peaks.image,
+        sigmas=sigma_list,
+        alpha=alpha,
+        gamma=gamma,
+        max_peaks=max_peaks,
+        show_progress=show_progress
+    )
+
+    print(f"Saving RBF integrated peaks to {output_filename}")
+    with h5py.File(output_filename, "w") as f:
+        f["peaks/h"] = result.h
+        f["peaks/k"] = result.k
+        f["peaks/l"] = result.l
+        f["peaks/intensity"] = result.intensity
+        f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
+        f["peaks/run_index"] = result.run_id
+
+        # Copy metadata context from predictor output
+        with h5py.File(integration_peaks_filename, "r") as f_in:
+            for key in ["sample/a", "sample/b", "sample/c", "sample/space_group", "instrument/wavelength"]:
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
 
 if __name__ == "__main__":
     app()
