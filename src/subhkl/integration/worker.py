@@ -13,6 +13,7 @@ from subhkl.instrument.physics import (
 )
 from subhkl.core.crystallography import generate_reflections
 
+
 def _run_harvest_local_max(
     im,
     max_peaks=200,

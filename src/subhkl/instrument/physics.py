@@ -3,6 +3,7 @@ import numpy.typing as npt
 from subhkl.instrument.detector import Detector
 from subhkl.core.crystallography import get_q_lab
 
+
 def scale_coordinates(xp, yp, scale_x, scale_y, nx, ny):
     """
     Scale pixel coordinates to physical coordinates.

@@ -277,4 +277,3 @@ def jnp_update_set(arr, idx, val):
         res = arr.copy()
         res[idx] = val
         return res
-

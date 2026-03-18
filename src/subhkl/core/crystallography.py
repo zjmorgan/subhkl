@@ -4,6 +4,7 @@ import scipy.linalg
 
 from subhkl.core.spacegroup import is_systematically_absent
 
+
 def cartesian_matrix_metric_tensor(a, b, c, alpha, beta, gamma):
     """
     Calculates the B matrix (orientation matrix) and G* (reciprocal metric tensor).
