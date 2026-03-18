@@ -773,8 +773,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
         if actual_peaks_count == 0:
             continue
 
-        intensities = jnp.array(image.flatten(), dtype=jnp.float32) 
-
         image = image_handler.ims[img_key]
         intensities = jnp.array(image.flatten(), dtype=jnp.float32)
 
