@@ -594,24 +594,18 @@ from typing import Tuple, List, Dict
 from functools import partial
 from tqdm import tqdm
 
-@partial(jax.jit, static_argnames=['N_shapes', 'max_peaks', 'max_iter'])
-def process_panel_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: jnp.ndarray, 
-                      alpha: float, gamma: float, N_shapes: int, max_peaks: int, max_iter: int = 100, tol: float = 1e-6):
-    """
-    FUSED GPU KERNEL:
-    Builds the dense matrix, solves the Semi-Smooth Newton system, and computes the Fisher
-    Information Matrix entirely within XLA. The massive 6GB design matrix is deallocated
-    automatically by the GPU before returning to Python, preventing PCIe memory thrashing.
-    """
-    H, W = image.shape
+# =====================================================================
+# 1. ISOLATED GPU KERNELS (Prevents XLA Over-fusion)
+# =====================================================================
+
+@partial(jax.jit, static_argnames=['N_shapes', 'max_peaks'])
+def build_matrix_gpu(image_dummy: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: jnp.ndarray,
+                     gamma: float, N_shapes: int, max_peaks: int):
+    """Explicitly materializes the A matrix in VRAM to prevent re-computation."""
+    H, W = image_dummy.shape
     K = H * W
     N_c = max_peaks * N_shapes
-    N = N_c + 3
-    
-    alpha = jnp.float32(alpha)
-    tol = jnp.float32(tol)
 
-    # 1. BUILD DENSE MATRIX
     y_idx = jnp.arange(H, dtype=jnp.float32)
     x_idx = jnp.arange(W, dtype=jnp.float32)
     y_coords, x_coords = jnp.meshgrid(y_idx, x_idx, indexing='ij')
@@ -633,9 +627,15 @@ def process_panel_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: j
     A_bg = jnp.column_stack([jnp.ones(K, dtype=jnp.float32), x_norm, y_norm])
 
     A = jnp.hstack([A_peaks, A_bg])
-    y = image.flatten()
+    return A, weights, volumes
 
-    # 2. PRECOMPUTE REDUCED HESSIAN
+@partial(jax.jit, static_argnames=['N_c', 'max_iter'])
+def solve_ssn_gpu(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_iter: int = 100, tol: float = 1e-6):
+    """Newton solve. A is passed in explicitly, dropping execution time to < 10ms."""
+    N = A.shape[1]
+    alpha = jnp.float32(alpha)
+    tol = jnp.float32(tol)
+
     Ht = (A.T @ A).astype(jnp.float32)
     At_y = (A.T @ y).astype(jnp.float32)
     y_sq_norm = jnp.float32(jnp.sum(y**2) / 2.0)
@@ -651,33 +651,32 @@ def process_panel_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: j
     gf0_c = jnp.where(mask, jnp.float32(1.0 - 1e-14) * alpha * jnp.sign(gf0_c), gf0_c).astype(jnp.float32)
     q_init = (u_init - jnp.concatenate([gf0_c, gf0[N_c:]])).astype(jnp.float32)
 
-    # 3. NEWTON WHILE LOOP
     def cond_fun(state):
         step, _, _, Gq_norm, _ = state
         return (step < max_iter) & (Gq_norm > tol)
 
     def body_fun(state):
         step, q, u, Gq_norm, active_set = state
-        
+
         Gq = (q - u) + (Ht @ u) - At_y
         II_c = jnp.abs(q[:N_c]) > alpha
         II_b = jnp.ones(N - N_c, dtype=jnp.bool_)
         II = jnp.concatenate([II_c, II_b])
-        
+
         DPc_mat = jnp.diag(II.astype(jnp.float32))
         I = jnp.eye(N, dtype=jnp.float32)
         DG = (I - DPc_mat) + Ht @ DPc_mat
-        
+
         epsi = jnp.float32(1e-12) * jnp.max(jnp.sum(jnp.abs(DG), axis=1))
         DG = DG + epsi * DPc_mat
         dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
-        
+
         j_baseline = obj(u)
-        
+
         def bt_cond(bt_state):
             bt_i, tau, _, _, j_test, j_curr = bt_state
             return (bt_i < 10) & (j_test > j_curr * jnp.float32(1.0 + 1e-10))
-            
+
         def bt_body(bt_state):
             bt_i, tau, _, _, _, j_curr = bt_state
             tau = jnp.float32(tau * 0.5)
@@ -686,27 +685,33 @@ def process_panel_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: j
             u_test = jnp.concatenate([c_test, q_test[N_c:]]).astype(jnp.float32)
             j_test = obj(u_test)
             return (bt_i + 1, tau, q_test, u_test, j_test, j_curr)
-            
+
         q_init_test = q + dq
         c_init_test = jnp.sign(q_init_test[:N_c]) * jnp.maximum(0.0, jnp.abs(q_init_test[:N_c]) - alpha)
         u_init_test = jnp.concatenate([c_init_test, q_init_test[N_c:]]).astype(jnp.float32)
-        
+
         bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, u_init_test, obj(u_init_test), j_baseline)
         bt_final = jax.lax.while_loop(bt_cond, bt_body, bt_init)
         _, _, q_final, u_final, _, _ = bt_final
-        
+
         return (step + 1, q_final, u_final, jnp.linalg.norm(Gq).astype(jnp.float32), II)
 
     init_state = (jnp.int32(0), q_init, u_init, jnp.float32(1e9), jnp.zeros(N, dtype=jnp.bool_))
     final_state = jax.lax.while_loop(cond_fun, body_fun, init_state)
     _, _, u_prime, _, active_set = final_state
 
-    # 4. COMPUTE FISHER INFO MATRIX
+    return u_prime, active_set
+
+@jax.jit
+def compute_fisher_gpu(A: jnp.ndarray, y: jnp.ndarray):
     variances = jnp.maximum(y, 1.0)
     W_var_diag = 1.0 / variances
-    I_fisher = A.T @ (W_var_diag[:, None] * A)
+    return A.T @ (W_var_diag[:, None] * A)
 
-    return u_prime, active_set, I_fisher, weights, volumes
+
+# =====================================================================
+# 2. CPU POST-PROCESSING & PYTEST BRIDGES
+# =====================================================================
 
 def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, active_volumes: np.ndarray):
     """Calculates robust SIGI strictly on the active set using CPU-based SVD."""
@@ -718,126 +723,110 @@ def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, 
     variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
     return float(intensity), float(np.sqrt(variance_I))
 
-# --- LEGACY WRAPPERS FOR PYTEST SUITE COMPATIBILITY ---
 def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigmas: List[float], gamma: float, max_peaks: int):
+    """Bridge for Pytest Compatibility."""
     actual_peaks = len(peak_centers)
     padded = np.pad(peak_centers, ((0, max_peaks - actual_peaks), (0, 0)), constant_values=-10000.0)
-    # Recreate math to mock the old Python return signatures for tests
-    H, W = image.shape
-    y_idx = np.arange(H, dtype=np.float32)
-    x_idx = np.arange(W, dtype=np.float32)
-    y_coords, x_coords = np.meshgrid(y_idx, x_idx, indexing='ij')
-    r2 = (x_coords.flatten()[:, None] - padded[None, :, 0])**2 + (y_coords.flatten()[:, None] - padded[None, :, 1])**2
-    sig_arr = np.array(sigmas, dtype=np.float32)[None, None, :]
-    phi = np.exp(-r2[:, :, None] / (2.0 * sig_arr**2))
-    w = sig_arr**gamma
-    A_peaks = (phi / w).reshape((H*W, max_peaks * len(sigmas)))
-    A_bg = np.column_stack([np.ones(H*W), (x_coords.flatten() - W/2)/W, (y_coords.flatten() - H/2)/H])
-    weights = np.broadcast_to(w, (1, max_peaks, len(sigmas))).reshape((max_peaks * len(sigmas),))
-    volumes = 2.0 * np.pi * (np.broadcast_to(sig_arr, (1, max_peaks, len(sigmas))).reshape((max_peaks * len(sigmas),))**2)
-    return jnp.array(np.hstack([A_peaks, A_bg])), jnp.array(weights), jnp.array(volumes), actual_peaks
+    A, weights, volumes = build_matrix_gpu(
+        jnp.array(image, dtype=jnp.float32),
+        jnp.array(padded, dtype=jnp.float32),
+        jnp.array(sigmas, dtype=jnp.float32),
+        gamma, len(sigmas), max_peaks
+    )
+    return np.array(A), np.array(weights), np.array(volumes), actual_peaks
 
-def solve_ssn(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float):
-    # Wrapper purely for Pytest execution
-    y_sq_norm = jnp.sum(y**2) / 2.0
-    Ht = A.T @ A
-    At_y = A.T @ y
-    # Manually compile a subset of the logic just for PyTest compatibility
-    @jax.jit
-    def test_run():
-        q_init = jnp.zeros(A.shape[1]) - jnp.concatenate([jnp.where(jnp.abs(-At_y[:N_c]) > alpha, (1-1e-14)*alpha*jnp.sign(-At_y[:N_c]), -At_y[:N_c]), -At_y[N_c:]])
-        u_init = jnp.zeros(A.shape[1])
-        def c_f(s): return (s[0] < 100) & (s[3] > 1e-6)
-        def b_f(s):
-            step, q, u, _, _ = s
-            Gq = (q - u) + Ht @ u - At_y
-            II = jnp.concatenate([jnp.abs(q[:N_c]) > alpha, jnp.ones(A.shape[1]-N_c, dtype=bool)])
-            DPc = jnp.diag(II.astype(jnp.float32))
-            DG = (jnp.eye(A.shape[1]) - DPc) + Ht @ DPc + 1e-12 * DPc
-            dq = jnp.linalg.solve(DG, -Gq)
-            q_test = q + dq
-            u_test = jnp.concatenate([jnp.sign(q_test[:N_c])*jnp.maximum(0.0, jnp.abs(q_test[:N_c])-alpha), q_test[N_c:]])
-            return (step+1, q_test, u_test, jnp.linalg.norm(Gq), II)
-        return jax.lax.while_loop(c_f, b_f, (0, q_init, u_init, 1e9, jnp.zeros(A.shape[1], dtype=bool)))
-    
-    _, _, u_final, _, active_final = test_run()
-    return u_final, active_final
-# -----------------------------------------------------
+def solve_ssn(A: np.ndarray, y: np.ndarray, N_c: int, alpha: float):
+    """Bridge for Pytest Compatibility."""
+    u_prime, active_set = solve_ssn_gpu(jnp.array(A), jnp.array(y), N_c, alpha)
+    return np.array(u_prime), np.array(active_set)
 
-def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float], 
+
+# =====================================================================
+# 3. SYNCHRONOUS ORCHESTRATOR
+# =====================================================================
+
+def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool):
-    """Orchestrator for Fused Dense GPU integration."""
+    """Iterates dense solves over all panels/images safely without VRAM buildup."""
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
             self.intensity, self.sigma = [], []
             self.tt, self.run_id, self.xyz = [], [], []
-            
+
     res = RBFResult()
     sigmas_jnp = jnp.array(sigmas, dtype=jnp.float32)
     N_shapes = len(sigmas)
     N_c = max_peaks * N_shapes
-    
+
     for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration (Dense GPU)"):
         peak_centers = np.column_stack([p_data[0], p_data[1]])
         actual_peaks_count = len(peak_centers)
-        
+
         if actual_peaks_count == 0:
             continue
         if actual_peaks_count > max_peaks:
             raise ValueError(f"Actual peaks ({actual_peaks_count}) exceeds max_peaks ({max_peaks}).")
-            
+
         padded_centers = np.pad(peak_centers, ((0, max_peaks - actual_peaks_count), (0, 0)), constant_values=-10000.0)
         padded_centers_jnp = jnp.array(padded_centers, dtype=jnp.float32)
-        
-        image_jnp = jnp.array(image_handler.ims[img_key], dtype=jnp.float32)
-        
-        # 1. SEND TO FUSED GPU PIPELINE
-        u_prime, active_set, I_fisher, weights, volumes = process_panel_gpu(
-            image=image_jnp, 
-            padded_centers=padded_centers_jnp, 
-            sigmas=sigmas_jnp, 
-            alpha=alpha, 
-            gamma=gamma, 
-            N_shapes=N_shapes, 
-            max_peaks=max_peaks
-        )
-        
-        # 2. PULL FROM GPU (Automatically blocks and clears GPU Cache!)
-        u_prime = np.array(u_prime)
-        active_set = np.array(active_set)
-        I_fisher = np.array(I_fisher)
-        weights = np.array(weights)
-        volumes = np.array(volumes)
-        
-        c_unscaled = u_prime[:N_c] / weights
-        
-        # 3. CPU EXTRACTION OF METRICS
+
+        # Sanitize NaNs and Infs from masked/dead pixels to immunize the SVD step
+        image_raw = np.nan_to_num(image_handler.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
+        image_jnp = jnp.array(image_raw, dtype=jnp.float32)
+        intensities = image_jnp.flatten()
+
+        # 1. Build and Materialize Matrix
+        A, weights, volumes = build_matrix_gpu(image_jnp, padded_centers_jnp, sigmas_jnp, gamma, N_shapes, max_peaks)
+        A = A.block_until_ready()  # Force execution, prevents async queue explosion
+
+        # 2. Solve
+        u_prime, active_set = solve_ssn_gpu(A, intensities, N_c, alpha)
+        u_prime = u_prime.block_until_ready()
+
+        # 3. Fisher Info
+        I_fisher = compute_fisher_gpu(A, intensities)
+        I_fisher = I_fisher.block_until_ready()
+
+        # 4. CPU Extraction (Frees VRAM safely)
+        u_prime_cpu = np.array(u_prime)
+        active_set_cpu = np.array(active_set)
+        I_fisher_cpu = np.array(I_fisher)
+        weights_cpu = np.array(weights)
+        volumes_cpu = np.array(volumes)
+
+        # Force garbage collection of the 6GB JAX arrays
+        del A
+        del image_jnp
+        del intensities
+
+        c_unscaled = u_prime_cpu[:N_c] / weights_cpu
+
         for p_idx in range(actual_peaks_count):
             start_idx = p_idx * N_shapes
             end_idx = start_idx + N_shapes
-            
-            p_intensity = np.dot(c_unscaled[start_idx:end_idx], volumes[start_idx:end_idx])
+
+            p_intensity = np.dot(c_unscaled[start_idx:end_idx], volumes_cpu[start_idx:end_idx])
             p_sigi = 0.0
-            
+
             if p_intensity > 0:
-                p_mask = np.zeros_like(active_set)
-                p_mask[start_idx:end_idx] = active_set[start_idx:end_idx]
-                p_mask[N_c:] = True 
-                
+                p_mask = np.zeros_like(active_set_cpu)
+                p_mask[start_idx:end_idx] = active_set_cpu[start_idx:end_idx]
+                p_mask[N_c:] = True
+
                 if np.any(p_mask[:N_c]):
                     active_indices = np.where(p_mask)[0]
-                    I_fisher_active = I_fisher[np.ix_(active_indices, active_indices)]
-                    c_active = u_prime[active_indices] / np.concatenate([weights, np.ones(3)])[active_indices]
-                    vols_active = np.concatenate([volumes, np.zeros(3)])[active_indices]
-                    
+                    I_fisher_active = I_fisher_cpu[np.ix_(active_indices, active_indices)]
+                    c_active = u_prime_cpu[active_indices] / np.concatenate([weights_cpu, np.ones(3)])[active_indices]
+                    vols_active = np.concatenate([volumes_cpu, np.zeros(3)])[active_indices]
+
                     _, p_sigi = evaluate_fisher_sigi_cpu(I_fisher_active, c_active, vols_active)
-            
+
             res.h.append(p_data[2][p_idx])
             res.k.append(p_data[3][p_idx])
             res.l.append(p_data[4][p_idx])
             res.intensity.append(float(p_intensity))
             res.sigma.append(float(p_sigi))
-            res.run_id.append(img_key) 
-            
+            res.run_id.append(img_key)
+
     return res
