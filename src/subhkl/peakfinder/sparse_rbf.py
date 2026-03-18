@@ -624,7 +624,7 @@ def ssn_step(q: jnp.ndarray, A: jnp.ndarray, y: jnp.ndarray, alpha: float, N_c: 
     dq = jnp.linalg.solve(DG, -Gq)
     return u, Gq, dq, II
 
-@partial(jax.jit, static_argnames=['N_c', 'K', 'max_iter'])
+@partial(jax.jit, static_argnames=['N_c','max_iter'])
 def solve_ssn(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_iter: int = 100, tol: float = 1e-6):
     """
     Solves the L1 regularized system using jax.lax.while_loop to prevent
