@@ -40,7 +40,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from dataclasses import dataclass, field
 from typing import Union, List
-from .config import reduction_settings
+from subhkl.config import reduction_settings
 
 
 def get_rotation_data_from_nexus(filename, instrument):
