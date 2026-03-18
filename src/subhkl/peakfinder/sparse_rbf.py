@@ -667,8 +667,10 @@ def solve_ssn_gpu(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_it
         I = jnp.eye(N, dtype=jnp.float32)
         DG = (I - DPc_mat) + Ht @ DPc_mat
 
+        # Fixed Float32 Epsilon
         epsi = jnp.float32(1e-5) * jnp.maximum(jnp.float32(1e-5), jnp.max(jnp.sum(jnp.abs(DG), axis=1)))
         DG = DG + epsi * DPc_mat
+
         dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
         j_baseline = obj(u)
@@ -714,14 +716,21 @@ def compute_fisher_gpu(A: jnp.ndarray, y: jnp.ndarray):
 # =====================================================================
 
 def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, active_volumes: np.ndarray):
-    """Calculates robust SIGI strictly on the active set using CPU-based SVD."""
+    """Calculates robust SIGI with NaN guards to prevent OpenBLAS infinite loops."""
+    if np.any(np.isnan(I_fisher_active)) or np.any(np.isinf(I_fisher_active)):
+        return 0.0, 0.0
+
     intensity = np.dot(c_active, active_volumes[:len(c_active)])
-    U, S, Vh = np.linalg.svd(I_fisher_active, full_matrices=False)
-    tol = 1e-12 * np.max(S)
-    S_inv = np.where(S > tol, 1.0 / S, 0.0)
-    covariance_matrix = (Vh.T * S_inv) @ U.T
-    variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
-    return float(intensity), float(np.sqrt(variance_I))
+
+    try:
+        U, S, Vh = np.linalg.svd(I_fisher_active, full_matrices=False)
+        tol = 1e-6 * np.max(S)
+        S_inv = np.where(S > tol, 1.0 / S, 0.0)
+        covariance_matrix = (Vh.T * S_inv) @ U.T
+        variance_I = np.dot(active_volumes.T, np.dot(covariance_matrix, active_volumes))
+        return float(intensity), float(np.sqrt(max(0.0, variance_I)))
+    except np.linalg.LinAlgError:
+        return float(intensity), 0.0
 
 def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigmas: List[float], gamma: float, max_peaks: int):
     """Bridge for Pytest Compatibility."""
@@ -771,14 +780,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
         padded_centers = np.pad(peak_centers, ((0, max_peaks - actual_peaks_count), (0, 0)), constant_values=-10000.0)
         padded_centers_jnp = jnp.array(padded_centers, dtype=jnp.float32)
 
-        # Sanitize NaNs and Infs from masked/dead pixels to immunize the SVD step
         image_raw = np.nan_to_num(image_handler.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         image_jnp = jnp.array(image_raw, dtype=jnp.float32)
         intensities = image_jnp.flatten()
 
         # 1. Build and Materialize Matrix
         A, weights, volumes = build_matrix_gpu(image_jnp, padded_centers_jnp, sigmas_jnp, gamma, N_shapes, max_peaks)
-        A = A.block_until_ready()  # Force execution, prevents async queue explosion
+        A = A.block_until_ready()
 
         # 2. Solve
         u_prime, active_set = solve_ssn_gpu(A, intensities, N_c, alpha)
@@ -795,10 +803,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
         weights_cpu = np.array(weights)
         volumes_cpu = np.array(volumes)
 
-        # Force garbage collection of the 6GB JAX arrays
-        del A
-        del image_jnp
-        del intensities
+        # Force garbage collection
+        del A, image_jnp, intensities
 
         c_unscaled = u_prime_cpu[:N_c] / weights_cpu
 
