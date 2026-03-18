@@ -7,13 +7,13 @@ import PIL.Image
 import numpy as np
 from tqdm import tqdm
 
-from subhkl.integration.image_data import ImageData
-from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
-from subhkl.integration import writer, worker, orchestrator
 from subhkl.config import beamlines, reduction_settings
 from subhkl.config.goniometer import Goniometer
 from subhkl.detector import Detector
-from subhkl.io.loader import ImageLoader
+from subhkl.io import loader, writer
+from subhkl.integration import worker, orchestrator
+from subhkl.integration.image_data import ImageData
+from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
 
 
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
@@ -70,9 +70,9 @@ def _init_wavelength(
 def _init_ims(filename: str, ext: str, instrument: str, is_merged: bool) -> ImageData:
     if ext == ".h5":
         if is_merged:
-            image_data = ImageLoader.load_merged_h5(filename)
+            image_data = loader.ImageLoader.load_merged_h5(filename)
         else:
-            image_data = ImageLoader.load_nexus(filename, instrument)
+            image_data = loader.ImageLoader.load_nexus(filename, instrument)
         return image_data
     else:
         ims = {0: np.array(PIL.Image.open(filename))}
