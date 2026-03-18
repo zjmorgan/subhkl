@@ -594,50 +594,54 @@ from typing import Tuple, List, Dict
 from functools import partial
 from tqdm import tqdm
 
-@partial(jax.jit, static_argnames=['N_c', 'K'])
-def ssn_step(q: jnp.ndarray, A: jnp.ndarray, y: jnp.ndarray, alpha: float, N_c: int, K: int) -> Tuple:
-    """A single Semi-Smooth Newton step. Fully JIT-able."""
+@partial(jax.jit, static_argnames=['N_c'])
+def ssn_step_fast(q: jnp.ndarray, u: jnp.ndarray, Ht: jnp.ndarray, At_y_K: jnp.ndarray, alpha: float, N_c: int) -> Tuple:
+    """A single Semi-Smooth Newton step using precomputed Ht. Fully JIT-able and extremely fast."""
     N = q.shape[0]
 
-    # 1. Proximal operator mapping q -> u
-    c_part = jnp.sign(q[:N_c]) * jnp.maximum(0.0, jnp.abs(q[:N_c]) - alpha)
-    b_part = q[N_c:]
-    u = jnp.concatenate([c_part, b_part])
+    # Gq = (q - u) + A^T (A u - y) / K  --> rewritten with Ht
+    Gq = (q - u) + (Ht @ u) - At_y_K
 
-    # 2. Robinson Normal Map G(q, u)
-    residual = A @ u - y
-    Gq = (q - u) + A.T @ residual / K
-
-    # 3. Active set mask
+    # Active set mask
     II_c = jnp.abs(q[:N_c]) > alpha
     II_b = jnp.ones(N - N_c, dtype=bool)
     II = jnp.concatenate([II_c, II_b])
 
-    # 4. Generalized Jacobian DG (using masking)
-    DPc_mat = jnp.diag(II.astype(A.dtype))
-    I = jnp.eye(N, dtype=A.dtype)
-    DG = (I - DPc_mat) + (A.T @ A / K) @ DPc_mat
+    # Generalized Jacobian DG (using masking)
+    DPc_mat = jnp.diag(II.astype(Ht.dtype))
+    I = jnp.eye(N, dtype=Ht.dtype)
+
+    # DG = (I - DPc) + Ht @ DPc
+    DG = (I - DPc_mat) + Ht @ DPc_mat
 
     epsi = 1e-12 * jnp.max(jnp.sum(jnp.abs(DG), axis=1))
     DG = DG + epsi * DPc_mat
 
     dq = jnp.linalg.solve(DG, -Gq)
-    return u, Gq, dq, II
+    return Gq, dq, II
 
-@partial(jax.jit, static_argnames=['N_c','max_iter'])
+@partial(jax.jit, static_argnames=['N_c', 'max_iter'])
 def solve_ssn(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_iter: int = 100, tol: float = 1e-6):
     """
-    Solves the L1 regularized system using jax.lax.while_loop to prevent
-    unrolling and massive compile times.
+    Solves the L1 regularized system using jax.lax.while_loop.
+    Precomputes dense matrices before the loop to prevent XLA compile hangs.
     """
     K_val, N = A.shape
 
+    # --- PRECOMPUTE OUTSIDE THE LOOP ---
+    # This turns O(K*N) loop operations into O(N*N) loop operations
+    Ht = (A.T @ A) / K_val
+    At_y_K = (A.T @ y) / K_val
+    y_sq_norm_K = jnp.sum(y**2) / (2 * K_val)
+
     def obj(u):
-        return jnp.sum((A @ u - y)**2) / (2 * K_val) + alpha * jnp.sum(jnp.abs(u[:N_c]))
+        # 0.5 * u^T (Ht) u - u^T (At_y_K) + 0.5 * y^T y / K + L1
+        quad = 0.5 * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y_K) + y_sq_norm_K
+        return quad + alpha * jnp.sum(jnp.abs(u[:N_c]))
 
     u_init = jnp.zeros(N, dtype=jnp.float32)
-    gf0 = A.T @ (-y) / K_val
 
+    gf0 = -At_y_K
     gf0_c = gf0[:N_c]
     mask = jnp.abs(gf0_c) > alpha
     gf0_c = jnp.where(mask, (1 - 1e-14) * alpha * jnp.sign(gf0_c), gf0_c)
@@ -649,9 +653,10 @@ def solve_ssn(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_iter: 
 
     def body_fun(state):
         step, q, u, Gq_norm, active_set = state
-        u_new, Gq, dq, active_set_new = ssn_step(q, A, y, alpha, N_c, K_val)
 
-        # Backtracking Line Search (Inner while loop)
+        Gq, dq, active_set_new = ssn_step_fast(q, u, Ht, At_y_K, alpha, N_c)
+
+        # Backtracking Line Search
         j_baseline = obj(u)
 
         def bt_cond(bt_state):
