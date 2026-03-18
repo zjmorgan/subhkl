@@ -667,7 +667,7 @@ def solve_ssn_gpu(A: jnp.ndarray, y: jnp.ndarray, N_c: int, alpha: float, max_it
         I = jnp.eye(N, dtype=jnp.float32)
         DG = (I - DPc_mat) + Ht @ DPc_mat
 
-        epsi = jnp.float32(1e-12) * jnp.max(jnp.sum(jnp.abs(DG), axis=1))
+        epsi = jnp.float32(1e-5) * jnp.maximum(jnp.float32(1e-5), jnp.max(jnp.sum(jnp.abs(DG), axis=1)))
         DG = DG + epsi * DPc_mat
         dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
