@@ -145,10 +145,9 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
                         "height": H * 1.0,
                         "pixel_size": 1.0,
                         "center": [0.0, 0.0, 100.0],
-                        "fast_axis": [1.0, 0.0, 0.0],
-                        "slow_axis": [0.0, -1.0, 0.0],
                         "uhat": [1.0, 0.0, 0.0],
                         "vhat": [0.0, 1.0, 0.0],
+                        "panel": "flat",
                     }
                 }
             }
