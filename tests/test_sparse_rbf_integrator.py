@@ -132,22 +132,24 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
         def get_run_id(self, img_key):
             return 0  # Mock run index
 
-    class MockPeaks:
-        def __init__(self, ims):
-            self.image = MockImageHandler(ims)
-            # Provide a minimal mock detector configuration that subhkl.Detector expects
-            self.config = {
-                "0": {
-                    "detector": {
-                        "n": H,
-                        "m": W,
-                        "pixel_size": 1.0,
-                        "center": [0.0, 0.0, 100.0],
-                        "fast_axis": [1.0, 0.0, 0.0],
-                        "slow_axis": [0.0, -1.0, 0.0]
+        class MockPeaks:
+            def __init__(self, ims):
+                self.image = MockImageHandler(ims)
+                # Provide a minimal mock detector configuration that subhkl.Detector expects
+                self.config = {
+                    "0": {
+                        "detector": {
+                            "n": H,
+                            "m": W,
+                            "width": W * 1.0,
+                            "height": H * 1.0,
+                            "pixel_size": 1.0,
+                            "center": [0.0, 0.0, 100.0],
+                            "fast_axis": [1.0, 0.0, 0.0],
+                            "slow_axis": [0.0, -1.0, 0.0]
+                        }
                     }
                 }
-            }
 
     mock_peaks_obj = MockPeaks({0: image})
 
