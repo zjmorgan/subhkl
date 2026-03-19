@@ -68,7 +68,7 @@ class HoughDavenportPrior:
                 sort_idx = np.argsort(intensities)[::-1][:top_k]
                 rows, cols = rows[sort_idx], cols[sort_idx]
 
-                from subhkl.detector import Detector
+                from subhkl.instrument.detector import Detector
                 det_config = beamlines[instrument][str(phys_bank)]
                 det = Detector(det_config)
                 R_gonio = self.R_stack[i]
