@@ -262,7 +262,7 @@ def finder(
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
     thresholding_mask_file: str | None = None,
-    thresholding_mask_rel_erosion_radius: float = 0.05,
+    thresholding_mask_rel_erosion_radius: float = None,
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
     wavelength_min: float | None = None,
@@ -1012,7 +1012,7 @@ def integrator(
     output_filename: str,
     integration_method: str = "free_fit",
     integration_mask_file: str | None = None,
-    integration_mask_rel_erosion_radius: float | None = 0.05,
+    integration_mask_rel_erosion_radius: float | None = None,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 50.0,  # Adjusted default
     region_growth_minimum_sigma: float | None = None,
