@@ -646,11 +646,11 @@ def build_and_reduce_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas
     return Ht, At_y, y_sq_norm, I_fisher, weights, volumes
 
 @partial(jax.jit, static_argnames=['N_c', 'max_iter'])
-def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
+def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32, 
                   N_c: int, alpha: float, max_iter: int = 50, tol: float = 1e-5):
     """
-    Newton solve completely decoupled from A. Uses Conjugate Gradient (CG)
-    to avoid O(N^3) LU factorizations, making it 150x faster.
+    Newton solve using Conjugate Gradient (CG).
+    Enforces Non-Negative L1 (NN-Lasso) constraints so physical intensities cannot drop below zero.
     """
     N = Ht.shape[0]
     alpha = jnp.float32(alpha)
@@ -658,13 +658,16 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
 
     def obj(u):
         quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y) + y_sq_norm
-        return quad + alpha * jnp.sum(jnp.abs(u[:N_c]))
+        # Non-negative constraint means u[:N_c] >= 0, so no jnp.abs() is needed here
+        return quad + alpha * jnp.sum(u[:N_c])
 
     u_init = jnp.zeros(N, dtype=jnp.float32)
     gf0 = -At_y
     gf0_c = gf0[:N_c]
-    mask = jnp.abs(gf0_c) > alpha
-    gf0_c = jnp.where(mask, jnp.float32(1.0 - 1e-14) * alpha * jnp.sign(gf0_c), gf0_c).astype(jnp.float32)
+    
+    # Non-negative active set mask (x > alpha instead of |x| > alpha)
+    mask = gf0_c > alpha
+    gf0_c = jnp.where(mask, jnp.float32(1.0 - 1e-14) * alpha, gf0_c).astype(jnp.float32)
     q_init = (u_init - jnp.concatenate([gf0_c, gf0[N_c:]])).astype(jnp.float32)
 
     def cond_fun(state):
@@ -673,47 +676,53 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
 
     def body_fun(state):
         step, q, u, Gq_norm, _ = state
-
+        
         Gq = (q - u) + (Ht @ u) - At_y
-        II_c = jnp.abs(q[:N_c]) > alpha
+        
+        # Non-negative active set (strictly q > alpha)
+        II_c = q[:N_c] > alpha
         II_b = jnp.ones(N - N_c, dtype=jnp.bool_)
         D = jnp.concatenate([II_c, II_b]).astype(jnp.float32)
-
+        
         epsi = jnp.float32(1e-4)
-
-        # 150x Faster Conjugate Gradient Solve for the Active Sub-system
+        
         def matvec(v):
             return D * jnp.dot(Ht, D * v) + (1.0 - D) * v + epsi * v
-
+        
         x, _ = jax.scipy.sparse.linalg.cg(matvec, -Gq, maxiter=30)
-
+        
         dq_I = D * x
         dq_Ic = (1.0 - D) * (-Gq - jnp.dot(Ht, dq_I))
         dq = dq_I + dq_Ic
-
+        
         j_baseline = obj(u)
-
+        
         def bt_cond(bt_state):
             bt_i, tau, _, _, j_test, j_curr = bt_state
             return (bt_i < 10) & (j_test > j_curr * jnp.float32(1.0 + 1e-10))
-
+            
         def bt_body(bt_state):
             bt_i, tau, _, _, _, j_curr = bt_state
             tau = jnp.float32(tau * 0.5)
             q_test = q + tau * dq
-            c_test = jnp.sign(q_test[:N_c]) * jnp.maximum(0.0, jnp.abs(q_test[:N_c]) - alpha)
+            
+            # Non-Negative Thresholding Operator: max(0, x - alpha)
+            c_test = jnp.maximum(0.0, q_test[:N_c] - alpha)
             u_test = jnp.concatenate([c_test, q_test[N_c:]]).astype(jnp.float32)
+            
             j_test = obj(u_test)
             return (bt_i + 1, tau, q_test, u_test, j_test, j_curr)
-
+            
         q_init_test = q + dq
-        c_init_test = jnp.sign(q_init_test[:N_c]) * jnp.maximum(0.0, jnp.abs(q_init_test[:N_c]) - alpha)
+        
+        # Non-Negative Thresholding Operator: max(0, x - alpha)
+        c_init_test = jnp.maximum(0.0, q_init_test[:N_c] - alpha)
         u_init_test = jnp.concatenate([c_init_test, q_init_test[N_c:]]).astype(jnp.float32)
-
+        
         bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, u_init_test, obj(u_init_test), j_baseline)
         bt_final = jax.lax.while_loop(bt_cond, bt_body, bt_init)
         _, _, q_final, u_final, _, _ = bt_final
-
+        
         return (step + 1, q_final, u_final, jnp.linalg.norm(Gq).astype(jnp.float32), D > 0.5)
 
     init_state = (jnp.int32(0), q_init, u_init, jnp.float32(1e9), jnp.zeros(N, dtype=jnp.bool_))
@@ -938,7 +947,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             # Caption inside the top-left of the frame
             ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})", 
                     transform=ax.transAxes, ha='left', va='top', 
-                    fontsize=16, fontweight='bold', color='black',
+                    fontsize=16, color='black',
                     bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=3))
             
             # Predicted peaks (blue crosses)
