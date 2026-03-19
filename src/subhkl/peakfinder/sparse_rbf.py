@@ -967,7 +967,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 handles.append(circle_key)
                 labels.append(rf'Integrated ($2\sigma={2.0 * active_sig}$)')
                 
-            ax.legend(handles=handles, labels=labels, loc='upper right')
+            # Place the legend outside the right edge of the image
+            ax.legend(handles=handles, labels=labels, loc='upper left', bbox_to_anchor=(1.02, 1.0), frameon=False)
             
             out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
             fig.savefig(out_name, bbox_inches="tight", dpi=150)
