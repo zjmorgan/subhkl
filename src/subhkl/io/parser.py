@@ -1304,7 +1304,7 @@ def rbf_integrator(
     integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
     output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
     alpha: float = typer.Option(1.0, "--alpha", help="Sparsity regularization parameter (lambda)"),
-    gamma: float = typer.Option(2.0, "--gamma", help="Besov space weight exponent"),
+    gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
     sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     show_progress: bool = typer.Option(True, "--show-progress"),
