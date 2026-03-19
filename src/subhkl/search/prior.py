@@ -3,7 +3,6 @@ import scipy.ndimage
 import jax
 import jax.numpy as jnp
 
-from subhkl.davenport import batch_davenport
 from subhkl.config import beamlines
 from subhkl.optimization import rotation_matrix_from_rodrigues_jax
 
