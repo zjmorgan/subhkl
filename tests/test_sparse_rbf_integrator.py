@@ -110,63 +110,90 @@ def test_overlapping_peaks_crosstalk():
 
 def test_integrate_peaks_rbf_ssn_orchestrator():
     """
-    Tests the full loop, validating that Intensity (I) and Uncertainty (SIGI) 
-    are properly mapped to the result object.
+    Tests the full loop, validating that Intensity (I), Uncertainty (SIGI),
+    and physical angles (two_theta, azimuthal) are properly mapped to the result object.
     """
-    # 1. Mock Image Handler mapping
-    class MockImageHandler:
-        def __init__(self, ims):
-            self.ims = ims
-            
     H, W = 40, 40
     image = np.full((H, W), 5.0, dtype=np.float32)
     cx, cy = 20.0, 20.0
     y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
-    
+
     true_sigma = 2.0
     true_amp = 50.0
     r2 = (x_coords - cx)**2 + (y_coords - cy)**2
     image += true_amp * np.exp(-r2 / (2 * true_sigma**2))
-    
-    mock_handler = MockImageHandler({0: image})
-    
+
+    # 1. Mock Peaks Object (Replaces the old MockImageHandler)
+    class MockImageHandler:
+        def __init__(self, ims):
+            self.ims = ims
+            self.bank_mapping = {}  # Mock bank map
+
+        def get_run_id(self, img_key):
+            return 0  # Mock run index
+
+    class MockPeaks:
+        def __init__(self, ims):
+            self.image = MockImageHandler(ims)
+            # Provide a minimal mock detector configuration that subhkl.Detector expects
+            self.config = {
+                "0": {
+                    "detector": {
+                        "n": H,
+                        "m": W,
+                        "pixel_size": 1.0,
+                        "center": [0.0, 0.0, 100.0],
+                        "fast_axis": [1.0, 0.0, 0.0],
+                        "slow_axis": [0.0, -1.0, 0.0]
+                    }
+                }
+            }
+
+    mock_peaks_obj = MockPeaks({0: image})
+
     # 2. Mock peak dictionary structure: {img_key: [i, j, h, k, l, wl]}
     peak_dict = {
         0: [
-            np.array([cx]), 
-            np.array([cy]), 
-            np.array([1]), 
-            np.array([2]), 
-            np.array([3]), 
+            np.array([cx]),
+            np.array([cy]),
+            np.array([1]),
+            np.array([2]),
+            np.array([3]),
             np.array([1.5])
         ]
     }
-    
+
     # 3. Run Orchestrator
     res = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict,
-        image_handler=mock_handler,
+        peaks_obj=mock_peaks_obj, # Pass the new mock
         sigmas=[1.0, 2.0, 3.0],
         alpha=0.5,
         gamma=2.0,
         max_peaks=3,
         show_progress=False
     )
-    
+
     assert len(res.intensity) == 1
-    
+
     # Expected mathematical integral: Amplitude * 2 * pi * sigma^2
     expected_intensity = true_amp * 2 * np.pi * (true_sigma**2)
-    
+
     # 4. Verify Final Export Metrics
     assert res.intensity[0] > 0
-    # Tolerance is wide enough to account for L1 penalty bias 
-    assert np.isclose(res.intensity[0], expected_intensity, rtol=0.15) 
-    
+    assert np.isclose(res.intensity[0], expected_intensity, rtol=0.15)
+
+    # Verify metadata propagation
     assert res.h[0] == 1
     assert res.k[0] == 2
     assert res.l[0] == 3
+    assert res.wavelength[0] == 1.5
     assert res.run_id[0] == 0
-    
-    # Verify that the SVD Fisher Information successfully generated an uncertainty estimate
+    assert res.bank[0] == 0
+
+    # Verify angles evaluated properly without crashing
+    assert isinstance(res.tt[0], float)
+    assert isinstance(res.az[0], float)
+
+    # Verify SVD Fisher Information successfully generated an uncertainty estimate
     assert res.sigma[0] > 0.0
