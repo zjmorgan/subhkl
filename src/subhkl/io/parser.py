@@ -1311,7 +1311,7 @@ def zone_axis_search(
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
     prior_top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
-    num_runs: int = typer.Option(1, help="Number of goniometer runs to use. Set to 0 to use all.")
+    num_runs: int = typer.Option(1, help="Number of goniometer runs to use. Set to 0 to use all."),
     output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename.")
 ):
     """
