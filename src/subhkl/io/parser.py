@@ -1325,7 +1325,7 @@ def zone_axis_search(
     from subhkl.config import beamlines, reduction_settings
     from subhkl.optimization import FindUB
     from subhkl.search.prior import HoughDavenportPrior, ImageBasedObjective
-    from subhkl.utils import generate_reflections
+    from subhkl.core.crystallography import generate_reflections
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
