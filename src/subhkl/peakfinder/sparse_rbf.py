@@ -799,30 +799,46 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration (Dense GPU)"):
 
-        # --- 1. HARMONIC DEDUPLICATION ---
-        # 2D spatial integration cannot resolve TOF harmonics. We must group by spatial
-        # (i, j) footprint and retain ONLY the fundamental (minimum h^2 + k^2 + l^2)
-        # to ensure the design matrix A remains linearly independent.
+
+        # --- 1. HARMONIC DEDUPLICATION (EXACT CRYSTALLOGRAPHIC) ---
+        # Group strictly by the fundamental Miller ray (h/g, k/g, l/g) where g is the GCD.
+        # This is immune to spatial projection jitter and ensures perfect linear independence.
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
         initial_peaks_count = len(i_arr)
-
+        
         if initial_peaks_count == 0:
             continue
-
+            
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
+        
         for idx in range(initial_peaks_count):
-            # Round to 2 decimal places to catch floating point projection drifts
-            coord = (round(float(i_arr[idx]), 2), round(float(j_arr[idx]), 2))
-            if coord not in unique_peaks or hkl_sq[idx] < unique_peaks[coord]['hkl_sq']:
-                unique_peaks[coord] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
-
+            h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
+            
+            if h == 0 and k == 0 and l == 0:
+                continue # Safety skip for origin
+                
+            # Find the fundamental ray using the Greatest Common Divisor
+            g = np.gcd.reduce([abs(h), abs(k), abs(l)])
+            fund_hkl = (h//g, k//g, l//g)
+            
+            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
+                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+                
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         p_data = [arr[keep_indices] for arr in p_data]
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
-
+        
         peak_centers = np.column_stack([i_arr, j_arr])
         actual_peaks_count = len(peak_centers)
+        
+        # Diagnostic Compression Output
+        if show_progress and initial_peaks_count != actual_peaks_count:
+            physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
+            comp_ratio = (1.0 - actual_peaks_count / initial_peaks_count) * 100
+            tqdm.write(f"Bank {physical_b} [Run {peaks_obj.image.get_run_id(img_key)}]: "
+                       f"Harmonics Filtered {initial_peaks_count} -> {actual_peaks_count} "
+                       f"({comp_ratio:.1f}% compression)")
 
         if actual_peaks_count == 0:
             continue
