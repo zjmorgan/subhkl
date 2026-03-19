@@ -136,7 +136,7 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
         def __init__(self, ims):
             self.image = MockImageHandler(ims)
             # Provide a minimal mock detector configuration that subhkl.Detector expects
-            self.instrument_config = {
+            self.config = {
                 "0": {
                     "detector": {
                         "n": H,
@@ -151,6 +151,10 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
                     }
                 }
             }
+
+        def get_detector(self, bank):
+            from subhkl.detector import Detector
+            return Detector(self.config["0"]["detector"])
 
     mock_peaks_obj = MockPeaks({0: image})
 
