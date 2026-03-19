@@ -658,17 +658,19 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
 
     def obj(u):
         quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y) + y_sq_norm
-        # Non-negative constraint means u[:N_c] >= 0, so no jnp.abs() is needed here
+        # Non-negative constraint means u[:N_c] >= 0, so no jnp.abs() is needed
         return quad + alpha * jnp.sum(u[:N_c])
 
     u_init = jnp.zeros(N, dtype=jnp.float32)
-    gf0 = -At_y
-    gf0_c = gf0[:N_c]
     
-    # Non-negative active set mask (x > alpha instead of |x| > alpha)
-    mask = gf0_c > alpha
-    gf0_c = jnp.where(mask, jnp.float32(1.0 - 1e-14) * alpha, gf0_c).astype(jnp.float32)
-    q_init = (u_init - jnp.concatenate([gf0_c, gf0[N_c:]])).astype(jnp.float32)
+    # Initialize q = u - grad_f(u). At u=0, q = At_y.
+    q_init = At_y
+    q_c = q_init[:N_c]
+    
+    # Clamp active variables strictly below alpha to start with an empty active set.
+    # This prevents the solver from activating all highly-collinear shapes at once.
+    q_c_clamped = jnp.minimum(q_c, jnp.float32(1.0 - 1e-14) * alpha)
+    q_init = jnp.concatenate([q_c_clamped, q_init[N_c:]]).astype(jnp.float32)
 
     def cond_fun(state):
         step, _, _, Gq_norm, _ = state
@@ -684,7 +686,7 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
         II_b = jnp.ones(N - N_c, dtype=jnp.bool_)
         D = jnp.concatenate([II_c, II_b]).astype(jnp.float32)
         
-        epsi = jnp.float32(1e-4)
+        epsi = jnp.float32(1e-5)
         
         def matvec(v):
             return D * jnp.dot(Ht, D * v) + (1.0 - D) * v + epsi * v
