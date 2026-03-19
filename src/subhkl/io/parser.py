@@ -1312,7 +1312,8 @@ def zone_axis_search(
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
     prior_top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
     num_runs: int = typer.Option(1, help="Number of goniometer runs to use. Set to 0 to use all."),
-    output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename.")
+    output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
+    batch_size: int = typer.Option(1024, help="Batch size for validation loop"),
 ):
     """
     Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
@@ -1431,7 +1432,7 @@ def zone_axis_search(
         np.array([0., 0., 1.]), np.zeros(3)
     )
 
-    prior_rots = prior_engine.physics_filter(quats, physics_evaluator)
+    prior_rots = prior_engine.physics_filter(quats, physics_evaluator, batch_size=batch_size)
 
     if prior_rots is None or len(prior_rots) == 0:
         print("Exact physical model rejected all seeds. Exiting.")
