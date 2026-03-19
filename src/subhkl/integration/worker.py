@@ -102,7 +102,7 @@ def process_single_image(
     if mask_file is not None:
         mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
 
     if erosion:
         radius = max(1, int(min(mask.shape) * erosion))
@@ -406,7 +406,7 @@ def integrate_single_bank(
     if mask_file is not None:
         mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
 
     if mask_erosion:
         radius = max(1, int(min(mask.shape) * mask_erosion))
