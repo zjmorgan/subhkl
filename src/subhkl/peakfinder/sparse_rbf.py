@@ -920,40 +920,55 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         if create_visualizations:
             import matplotlib.pyplot as plt
             from matplotlib.patches import Circle
-
+            import matplotlib.lines as mlines
+            import matplotlib.cm as cm
+            
             if plt.get_backend().lower() != "agg":
                 plt.switch_backend("Agg")
-
+                
             fig, ax = plt.subplots(figsize=(10, 10))
-
+            
             # Show original image with log scaling
             ax.imshow(1 + image_raw, norm="log", cmap="binary", origin="lower")
             ax.set_title(f"RBF Integration - Bank {physical_bank} (Run {run_id})")
-
+            
             # Predicted peaks (blue crosses). Note: scatter takes (x=col=j, y=row=i)
             ax.scatter(peak_centers[:, 1], peak_centers[:, 0], marker='+', color='blue', s=60, label="Predicted")
-
-            # Draw red 2-sigma ellipses/circles for all ACTIVE shape parameters
+            
+            # Generate a dynamic colorscale (e.g., 'rainbow') for however many sigmas we have
+            # max(2, N_shapes) prevents a crash/division by zero if you only feed 1 sigma
+            color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
+            
+            # Draw 2-sigma ellipses/circles for all ACTIVE shape parameters
             for p_idx in range(actual_peaks_count):
                 start_idx = p_idx * N_shapes
                 end_idx = start_idx + N_shapes
-
+                
                 active_shapes = active_set_cpu[start_idx:end_idx]
                 if np.any(active_shapes):
                     cx = peak_centers[p_idx, 0] # row
                     cy = peak_centers[p_idx, 1] # col
-
-                    # Add a circle patch for each active sigma
+                    
+                    # Add a circle patch for each active sigma using its dedicated color
                     for s_idx, is_active in enumerate(active_shapes):
                         if is_active:
                             active_sig = sigmas[s_idx]
-                            circle = Circle((cy, cx), 2.0 * active_sig, edgecolor='red', facecolor='none', lw=1.5)
+                            color = color_map[s_idx]
+                            circle = Circle((cy, cx), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
                             ax.add_patch(circle)
-
-            # Dummy handle for the legend
-            ax.plot([], [], color='red', marker='o', fillstyle='none', ls='', markersize=10, label=r'Integrated ($2\sigma$)')
-            ax.legend(loc='upper right')
-
+            
+            # Update Legend to show the specific color for each sigma
+            handles, labels = ax.get_legend_handles_labels()
+            for s_idx in range(N_shapes):
+                color = color_map[s_idx]
+                active_sig = sigmas[s_idx]
+                # Create a dummy Line2D object to act as the legend key for this circle
+                circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+                handles.append(circle_key)
+                labels.append(rf'Integrated ($2\sigma={2.0 * active_sig}$)')
+                
+            ax.legend(handles=handles, labels=labels, loc='upper right')
+            
             out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
             fig.savefig(out_name, bbox_inches="tight", dpi=150)
             plt.close(fig)
