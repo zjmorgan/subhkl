@@ -401,7 +401,7 @@ def integrate_single_bank(
     # --- INTEGRATION ---
     mask_file, mask_erosion = (
         integration_params.get("integration_mask_file"),
-        integration_params.get("integration_mask_rel_erosion_radius", 0.05),
+        integration_params.get("integration_mask_rel_erosion_radius", None),
     )
     if mask_file is not None:
         mask = np.array(PIL.Image.open(mask_file))
