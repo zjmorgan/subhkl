@@ -776,18 +776,24 @@ def solve_ssn(A: np.ndarray, y: jnp.ndarray, N_c: int, alpha: float):
 # 3. SYNCHRONOUS ORCHESTRATOR
 # =====================================================================
 
-def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
-                            alpha: float, gamma: float, max_peaks: int, show_progress: bool):
+def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
+                            alpha: float, gamma: float, max_peaks: int, show_progress: bool,
+                            all_R: np.ndarray = None, sample_offset: np.ndarray = None):
+    """Orchestrator for Dense GPU integration with physical coordinate evaluation."""
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
             self.intensity, self.sigma = [], []
-            self.tt, self.run_id, self.xyz = [], [], []
+            self.tt, self.az, self.wavelength = [], [], []
+            self.run_id, self.bank, self.xyz = [], [], []
 
     res = RBFResult()
     sigmas_jnp = jnp.array(sigmas, dtype=jnp.float32)
     N_shapes = len(sigmas)
     N_c = max_peaks * N_shapes
+
+    if sample_offset is None:
+        sample_offset = np.zeros(3)
 
     for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration (Dense GPU)"):
         peak_centers = np.column_stack([p_data[0], p_data[1]])
@@ -801,8 +807,23 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
         padded_centers = np.pad(peak_centers, ((0, max_peaks - actual_peaks_count), (0, 0)), constant_values=-10000.0)
         padded_centers_jnp = jnp.array(padded_centers, dtype=jnp.float32)
 
-        image_raw = np.nan_to_num(image_handler.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
+        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         image_jnp = jnp.array(image_raw, dtype=jnp.float32)
+
+        # --- Context / Physical Angle Mapping ---
+        physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
+        det_config = peaks_obj.config[str(physical_bank)]["detector"]
+        det = Detector(det_config)
+
+        run_id = peaks_obj.image.get_run_id(img_key)
+        if all_R is not None and all_R.ndim == 3:
+            current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
+        else:
+            current_R_val = all_R
+
+        s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
+        bank_tt, bank_az = det.pixel_to_angles(p_data[0], p_data[1], sample_offset=s_lab)
+        # ---------------------------------------
 
         # 1. Condense Memory (Compute Ht and Fisher directly)
         Ht, At_y, y_sq_norm, I_fisher, weights, volumes = build_and_reduce_gpu(
@@ -846,8 +867,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, image_handler, sigmas: List[float],
             res.h.append(p_data[2][p_idx])
             res.k.append(p_data[3][p_idx])
             res.l.append(p_data[4][p_idx])
+            res.wavelength.append(p_data[5][p_idx])
             res.intensity.append(float(p_intensity))
             res.sigma.append(float(p_sigi))
-            res.run_id.append(img_key)
+            res.tt.append(float(bank_tt[p_idx]))
+            res.az.append(float(bank_az[p_idx]))
+            res.run_id.append(run_id)
+            res.bank.append(physical_bank)
 
     return res

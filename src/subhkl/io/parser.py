@@ -1323,11 +1323,25 @@ def rbf_integrator(
     print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigmas={sigma_list}, Max Peaks Padding={max_peaks}")
 
     peak_dict = {}
+
     with h5py.File(integration_peaks_filename, "r") as f:
+        if "sample/U" in f:
+            U = f["sample/U"][()]
+        if "sample/B" in f:
+            B = f["sample/B"][()]
+        if "goniometer/R" in f:
+            all_R = f["goniometer/R"][()]
+        if "goniometer/angles" in f:
+            angles_stack = f["goniometer/angles"][()]
+            
+        if "sample/offset" in f:
+            sample_offset = f["sample/offset"][()]
+        else:
+            sample_offset = np.zeros(3)
+            
         for key in f["banks"].keys():
             img_idx = int(key)
             grp = f[f"banks/{key}"]
-            # Structure matching the Predictor output
             peak_dict[img_idx] = [
                 grp["i"][()], grp["j"][()], grp["h"][()],
                 grp["k"][()], grp["l"][()], grp["wavelength"][()]
@@ -1335,15 +1349,21 @@ def rbf_integrator(
 
     peaks = Peaks(filename, instrument)
 
-    # Execute Dense JAX solver loop
+    if all_R is None:
+        all_R = peaks.goniometer.rotation
+    if angles_stack is None:
+        angles_stack = peaks.goniometer.angles_raw
+
     result = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict,
-        image_handler=peaks.image,
+        peaks_obj=peaks,             # Pass the full Peaks object
         sigmas=sigma_list,
         alpha=alpha,
         gamma=gamma,
         max_peaks=max_peaks,
-        show_progress=show_progress
+        show_progress=show_progress,
+        all_R=all_R,                 # Pass rotation and offset downstream
+        sample_offset=sample_offset
     )
 
     print(f"Saving RBF integrated peaks to {output_filename}")
@@ -1351,24 +1371,20 @@ def rbf_integrator(
         f["peaks/h"] = result.h
         f["peaks/k"] = result.k
         f["peaks/l"] = result.l
+        f["peaks/lambda"] = result.wavelength
         f["peaks/intensity"] = result.intensity
         f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
+        f["peaks/two_theta"] = result.tt
+        f["peaks/azimuthal"] = result.az
+        f["peaks/bank"] = result.bank
         f["peaks/run_index"] = result.run_id
         
         # Copy full metadata context from predictor output
         copy_keys = [
-            "sample/a",
-            "sample/b",
-            "sample/c",
-            "sample/alpha",
-            "sample/beta",
-            "sample/gamma",
-            "sample/space_group",
-            "sample/U",
-            "sample/B",
-            "sample/offset",
-            "beam/ki_vec",
-            "instrument/wavelength",
+            "sample/a", "sample/b", "sample/c", 
+            "sample/alpha", "sample/beta", "sample/gamma",
+            "sample/space_group", "sample/U", "sample/B", 
+            "sample/offset", "beam/ki_vec", "instrument/wavelength"
         ]
         
         with h5py.File(integration_peaks_filename, "r") as f_in:
@@ -1376,7 +1392,6 @@ def rbf_integrator(
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
                     
-            # Copy goniometer globals
             for k in ["goniometer/axes", "goniometer/names"]:
                 if k in f_in:
                     f_in.copy(f_in[k], f, k)
