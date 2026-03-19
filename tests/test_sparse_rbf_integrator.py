@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import jax.numpy as jnp
 
-from subhkl.sparse_rbf_peak_finder import (
+from subhkl.peakfinder.sparse_rbf import (
     build_dense_padded_matrix,
     solve_ssn,
     integrate_peaks_rbf_ssn
