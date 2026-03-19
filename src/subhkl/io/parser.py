@@ -1354,12 +1354,32 @@ def rbf_integrator(
         f["peaks/intensity"] = result.intensity
         f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
         f["peaks/run_index"] = result.run_id
-
-        # Copy metadata context from predictor output
+        
+        # Copy full metadata context from predictor output
+        copy_keys = [
+            "sample/a",
+            "sample/b",
+            "sample/c",
+            "sample/alpha",
+            "sample/beta",
+            "sample/gamma",
+            "sample/space_group",
+            "sample/U",
+            "sample/B",
+            "sample/offset",
+            "beam/ki_vec",
+            "instrument/wavelength",
+        ]
+        
         with h5py.File(integration_peaks_filename, "r") as f_in:
-            for key in ["sample/a", "sample/b", "sample/c", "sample/space_group", "instrument/wavelength"]:
+            for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
+                    
+            # Copy goniometer globals
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in:
+                    f_in.copy(f_in[k], f, k)
 
 if __name__ == "__main__":
     app()
