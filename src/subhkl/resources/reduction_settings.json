@@ -51,7 +51,8 @@
         "RawFile": "nexus/IMAGINE_{}.nxs.h5",
         "BankPixels": [512, 512],
         "DeltaTheta": 0.0420,
-        "Processes": 8
+        "Processes": 8,
+	"YAxisIsFastVaryingIndex": true
     },
     "SNAP": {
         "Facility": "SNS",
