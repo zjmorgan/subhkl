@@ -593,7 +593,7 @@ import numpy as np
 from typing import Tuple, List, Dict
 from functools import partial
 from tqdm import tqdm
-from subhkl.detector import Detector
+from subhkl.instrument.detector import Detector
 
 # =====================================================================
 # 1. HYPER-OPTIMIZED GPU KERNELS

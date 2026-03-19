@@ -153,7 +153,7 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
             }
 
         def get_detector(self, bank):
-            from subhkl.detector import Detector
+            from subhkl.instrument.detector import Detector
             return Detector(self.config["0"]["detector"])
 
     mock_peaks_obj = MockPeaks({0: image})
