@@ -779,8 +779,9 @@ def solve_ssn(A: np.ndarray, y: jnp.ndarray, N_c: int, alpha: float):
 
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
-                            all_R: np.ndarray = None, sample_offset: np.ndarray = None):
-    """Orchestrator for Dense GPU integration with physical coordinate evaluation."""
+                            all_R: np.ndarray = None, sample_offset: np.ndarray = None,
+                            create_visualizations: bool = False):
+    """Orchestrator for Dense GPU integration with physical coordinate evaluation and visualization."""
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
@@ -824,7 +825,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
         bank_tt, bank_az = det.pixel_to_angles(p_data[0], p_data[1], sample_offset=s_lab)
-        # ---------------------------------------
 
         # 1. Condense Memory (Compute Ht and Fisher directly)
         Ht, At_y, y_sq_norm, I_fisher, weights, volumes = build_and_reduce_gpu(
@@ -875,5 +875,49 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.az.append(float(bank_az[p_idx]))
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
+
+        # ---------------------------------------
+        # VISUALIZATION
+        # ---------------------------------------
+        if create_visualizations:
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Circle
+
+            if plt.get_backend().lower() != "agg":
+                plt.switch_backend("Agg")
+
+            fig, ax = plt.subplots(figsize=(10, 10))
+
+            # Show original image with log scaling
+            ax.imshow(1 + image_raw, norm="log", cmap="binary", origin="lower")
+            ax.set_title(f"RBF Integration - Bank {physical_bank} (Run {run_id})")
+
+            # Predicted peaks (blue crosses). Note: scatter takes (x=col=j, y=row=i)
+            ax.scatter(peak_centers[:, 1], peak_centers[:, 0], marker='+', color='blue', s=60, label="Predicted")
+
+            # Draw red 2-sigma ellipses/circles for all ACTIVE shape parameters
+            for p_idx in range(actual_peaks_count):
+                start_idx = p_idx * N_shapes
+                end_idx = start_idx + N_shapes
+
+                active_shapes = active_set_cpu[start_idx:end_idx]
+                if np.any(active_shapes):
+                    cx = peak_centers[p_idx, 0] # row
+                    cy = peak_centers[p_idx, 1] # col
+
+                    # Add a circle patch for each active sigma
+                    for s_idx, is_active in enumerate(active_shapes):
+                        if is_active:
+                            active_sig = sigmas[s_idx]
+                            circle = Circle((cy, cx), 2.0 * active_sig, edgecolor='red', facecolor='none', lw=1.5)
+                            ax.add_patch(circle)
+
+            # Dummy handle for the legend
+            ax.plot([], [], color='red', marker='o', fillstyle='none', ls='', markersize=10, label=r'Integrated ($2\sigma$)')
+            ax.legend(loc='upper right')
+
+            out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
+            fig.savefig(out_name, bbox_inches="tight", dpi=150)
+            plt.close(fig)
 
     return res

@@ -1308,6 +1308,7 @@ def rbf_integrator(
     sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     show_progress: bool = typer.Option(True, "--show-progress"),
+    create_visualizations: bool = False,
 ):
     """
     Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
@@ -1363,7 +1364,8 @@ def rbf_integrator(
         max_peaks=max_peaks,
         show_progress=show_progress,
         all_R=all_R,                 # Pass rotation and offset downstream
-        sample_offset=sample_offset
+        sample_offset=sample_offset,
+        create_visualizations=create_visualizations
     )
 
     print(f"Saving RBF integrated peaks to {output_filename}")
