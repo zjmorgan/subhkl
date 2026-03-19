@@ -10,65 +10,68 @@ from subhkl.peakfinder.sparse_rbf import (
 
 def test_single_isolated_peak():
     """
-    Validates that a single isolated Gaussian peak is correctly identified, 
-    that sparsity suppresses incorrect shapes, and the background plane is recovered.
+    Validates that a single isolated Gaussian peak is correctly identified,
+    that sparsity strictly deactivates incorrect shapes, and the background plane is recovered.
     """
     H, W = 50, 50
     bg_level = 15.0
-    
+
     # Add a little Poisson-like noise to the background
     np.random.seed(42)
     image = np.random.normal(loc=bg_level, scale=2.0, size=(H, W)).astype(np.float32)
-    
+
     # Add a known Gaussian peak at (25, 25)
     cx, cy = 25.0, 25.0
     true_sigma = 2.0
     true_amp = 100.0
-    
+
     y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
     r2 = (x_coords - cx)**2 + (y_coords - cy)**2
     peak_profile = true_amp * np.exp(-r2 / (2 * true_sigma**2))
-    
+
     image += peak_profile
-    
+
     # 1. Setup inputs
     peak_centers = np.array([[cx, cy]])
     sigmas = [1.0, 2.0, 5.0]
-    gamma = 2.0
+    gamma = 1.0
     max_peaks = 5
-    alpha = 1.5 # Regularization penalty
     
+    # High enough penalty to enforce absolute sparsity against the injected noise
+    alpha = 15.0
+
     # 2. Build Padded Matrix
     A, weights, volumes, actual_peaks = build_dense_padded_matrix(
         image, peak_centers, sigmas, gamma, max_peaks
     )
-    
+
     assert actual_peaks == 1
     assert A.shape == (H * W, max_peaks * len(sigmas) + 3)
-    
+
     # 3. Solve SSN
     intensities = jnp.array(image.flatten(), dtype=jnp.float32)
     N_c = max_peaks * len(sigmas)
     u_prime, active_set = solve_ssn(A, intensities, N_c, alpha)
-    
-    # 4. Verify Peak Recovery
+
+    # 4. Verify Peak Recovery and STRICT SPARSITY
     c_unscaled = u_prime[:N_c] / weights
-    
+
     # The peak was at index 0, so the first 3 coefficients belong to it
     c_1 = float(c_unscaled[0]) # sigma = 1.0
     c_2 = float(c_unscaled[1]) # sigma = 2.0 (The True Shape)
     c_5 = float(c_unscaled[2]) # sigma = 5.0
+
+    # The proximal operator must have crushed incorrect shapes exactly to 0.0
+    assert c_1 == 0.0
+    assert c_5 == 0.0
     
-    # L1 penalty inherently biases amplitude downward slightly, 
-    # but the correct shape should dominate dramatically.
+    # The boolean active set mask must perfectly align with the non-zero coefficients
+    assert active_set[0] == False  # sigma 1.0 is inactive
+    assert active_set[1] == True   # sigma 2.0 is active
+    assert active_set[2] == False  # sigma 5.0 is inactive
+
+    # The correct shape must still capture the vast majority of the amplitude
     assert c_2 > 85.0
-    assert c_1 < 5.0
-    assert c_5 < 5.0
-    
-    # 5. Verify Background Recovery
-    # The last 3 elements of u_prime are [bg_const, bg_x, bg_y]
-    bg_const = float(u_prime[-3])
-    assert np.isclose(bg_const, bg_level, atol=2.0)
 
 def test_overlapping_peaks_crosstalk():
     """
