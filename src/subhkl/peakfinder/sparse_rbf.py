@@ -814,7 +814,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         # --- Context / Physical Angle Mapping ---
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
-        det_config = peaks_obj.config[str(physical_bank)]["detector"]
+        det_config = peaks_obj.instrument_config[str(physical_bank)]["detector"]
         det = Detector(det_config)
 
         run_id = peaks_obj.image.get_run_id(img_key)
