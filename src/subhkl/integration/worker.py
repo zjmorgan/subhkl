@@ -110,6 +110,25 @@ def process_single_image(
         mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
                 borderValue=0).astype(bool)
 
+    # ==========================================
+    # 2.5 STRICTLY ENFORCE MASK ON CANDIDATES
+    # ==========================================
+    valid_indices = []
+    for idx, (r, c) in enumerate(centers):
+        r_int, c_int = int(r), int(c)
+        # Only keep centers that fall inside the image bounds AND the true mask
+        if (
+            0 <= r_int < mask.shape[0]
+            and 0 <= c_int < mask.shape[1]
+            and mask[r_int, c_int]
+        ):
+            valid_indices.append(idx)
+
+    # Slice the arrays to drop forbidden peaks
+    centers = centers[valid_indices]
+    i = i[valid_indices]
+    j = j[valid_indices]
+
     # 3. Integration Setup (Sigma Override)
     # Rebuild integrator from params to avoid sharing state
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
