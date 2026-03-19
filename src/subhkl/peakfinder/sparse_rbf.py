@@ -965,10 +965,19 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 # Create a dummy Line2D object to act as the legend key for this circle
                 circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
                 handles.append(circle_key)
-                labels.append(rf'Integrated ($2\sigma={2.0 * active_sig}$)')
                 
-            # Place the legend outside the right edge of the image
-            ax.legend(handles=handles, labels=labels, loc='upper left', bbox_to_anchor=(1.02, 1.0), frameon=False)
+                # Omit "Integrated" - just show the 2*sigma value
+                labels.append(rf'$2\sigma={2.0 * active_sig}$')
+                
+            # Place the legend in the lower white padding, single row, no frame
+            ax.legend(
+                handles=handles, 
+                labels=labels, 
+                loc='upper center', 
+                bbox_to_anchor=(0.5, -0.05), 
+                ncol=len(handles), 
+                frameon=False
+            )
             
             out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
             fig.savefig(out_name, bbox_inches="tight", dpi=150)
