@@ -798,7 +798,30 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         sample_offset = np.zeros(3)
 
     for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration (Dense GPU)"):
-        peak_centers = np.column_stack([p_data[0], p_data[1]])
+
+        # --- 1. HARMONIC DEDUPLICATION ---
+        # 2D spatial integration cannot resolve TOF harmonics. We must group by spatial
+        # (i, j) footprint and retain ONLY the fundamental (minimum h^2 + k^2 + l^2)
+        # to ensure the design matrix A remains linearly independent.
+        i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
+        initial_peaks_count = len(i_arr)
+
+        if initial_peaks_count == 0:
+            continue
+
+        hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
+        unique_peaks = {}
+        for idx in range(initial_peaks_count):
+            # Round to 2 decimal places to catch floating point projection drifts
+            coord = (round(float(i_arr[idx]), 2), round(float(j_arr[idx]), 2))
+            if coord not in unique_peaks or hkl_sq[idx] < unique_peaks[coord]['hkl_sq']:
+                unique_peaks[coord] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+
+        keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
+        p_data = [arr[keep_indices] for arr in p_data]
+        i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
+
+        peak_centers = np.column_stack([i_arr, j_arr])
         actual_peaks_count = len(peak_centers)
 
         if actual_peaks_count == 0:
