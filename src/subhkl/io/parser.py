@@ -1666,7 +1666,7 @@ def index_images(
 
     xyz_out = []
     for f, (row_idx, col_idx) in enumerate(zip(rows, cols)):
-        from subhkl.detector import Detector
+        from subhkl.instrument.detector import Detector
         phys_bank = file_bank_ids[f]
         det_config = beamlines[instrument][str(phys_bank)]
         det = Detector(det_config)
