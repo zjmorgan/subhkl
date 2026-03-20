@@ -1585,6 +1585,8 @@ def index_images(
     injected_rots = None
     if U_initial is not None:
         # 1. Convert the 3x3 U_initial matrix to a Rodrigues rotation vector
+        print(f"Starting from provided U matrix...")
+
         from scipy.spatial.transform import Rotation as R
         u_rot = R.from_matrix(U_initial)
         rodrigues_vec = u_rot.as_rotvec()
