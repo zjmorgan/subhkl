@@ -2741,27 +2741,32 @@ class ImageBasedFindUB:
 
         # --- PREPARE STATIC INJECTION ARRAY FOR JIT ---
         n_inject = population_size // 4
-        static_injected_rots = jnp.zeros((n_inject, 3))
         use_injection = False
 
         if injected_rotations is not None and len(injected_rotations) > 0:
-            actual_inject = min(len(injected_rotations), n_inject)
-            if actual_inject > 0:
-                rots = injected_rotations[:actual_inject]
-                pad_size = n_inject - actual_inject
-                if pad_size > 0:
-                    pad_rots = jnp.zeros((pad_size, 3))
-                    static_injected_rots = jnp.concatenate([rots, pad_rots], axis=0)
-                else:
-                    static_injected_rots = rots
-                use_injection = True
+            base_rot = injected_rotations[0]
+            
+            # Generate a local cloud of seeds instead of padding with zeros
+            key = jax.random.PRNGKey(seed)
+            # 0.02 rad is ~1.1 degrees of local scatter
+            noise = jax.random.normal(key, (n_inject, 3)) * 0.02 
+            static_injected_rots = base_rot + noise
+            
+            # Guarantee the exact unperturbed seed is in slot 0
+            static_injected_rots = static_injected_rots.at[0].set(base_rot)
+            use_injection = True
+        else:
+            static_injected_rots = jnp.zeros((n_inject, 3))
 
         def init_single_run(rng, _):
             rng, rng_pop, rng_init = jax.random.split(rng, 3)
-            # Let the shim layer initialize its random noise natively
+            # Set initial exploration radius (0.05 rad is ~2.8 degrees)
             target_sigma = 0.05
-            population_init = target_sigma * jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+            
+            # Fix: Multiply by target_sigma only once
+            population_init = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
             fitness_init = objective(population_init)
+            
             return strategy.init(rng_init, population_init, fitness_init, es_params)
 
         try:
