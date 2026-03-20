@@ -1449,6 +1449,7 @@ def zone_axis_search(
         from subhkl.optimization import rotation_matrix_from_rodrigues_jax
         U_matrix = np.array(rotation_matrix_from_rodrigues_jax(best_rot))
         f.create_dataset("sample/U", data=U_matrix)
+        f.create_dataset("sample/B", data=B_mat)
 
         f.create_dataset("sample/a", data=a)
         f.create_dataset("sample/b", data=b)
