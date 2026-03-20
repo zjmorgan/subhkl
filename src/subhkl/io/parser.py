@@ -1488,7 +1488,7 @@ def index_images(
 ):
     with h5py.File(merged_h5_filename, 'r') as f_in:
         U_initial = f_in["sample/U"][()] if "sample/U" in f_in else np.eye(3)
-        file_bank_ids = list(f_in["bank_ids"].asstr())
+        file_bank_ids = f_in["bank_ids"][()]
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
 
