@@ -2847,6 +2847,7 @@ class ImageBasedFindUB:
         return opt_U, best_overall_member
 
     def get_reflections(self, U, real_images):
+        from subhkl.search.prior import jax_predict_reflections
         @jax.jit
         def process_all_frames():
             def map_fn(frame_data):
