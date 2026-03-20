@@ -1467,5 +1467,106 @@ def zone_axis_search(
 
     print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
 
+@app.command()
+def rbf_integrator(
+    filename: str = typer.Argument(..., help="Merged HDF5 image stack"),
+    instrument: str = typer.Argument(..., help="Instrument name"),
+    integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
+    output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
+    alpha: float = typer.Option(1.0, "--alpha", help="Sparsity regularization parameter (lambda)"),
+    gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
+    sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
+    max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
+    show_progress: bool = typer.Option(True, "--show-progress"),
+    create_visualizations: bool = False,
+):
+    """
+    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
+    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
+    """
+    import h5py
+    from subhkl.integration import Peaks
+    from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
+
+    sigma_list = [float(s.strip()) for s in sigmas.split(",")]
+
+    print(f"Starting Dense Sparse RBF Integration on {filename}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigmas={sigma_list}, Max Peaks Padding={max_peaks}")
+
+    peak_dict = {}
+
+    with h5py.File(integration_peaks_filename, "r") as f:
+        if "sample/U" in f:
+            U = f["sample/U"][()]
+        if "sample/B" in f:
+            B = f["sample/B"][()]
+        if "goniometer/R" in f:
+            all_R = f["goniometer/R"][()]
+        if "goniometer/angles" in f:
+            angles_stack = f["goniometer/angles"][()]
+            
+        if "sample/offset" in f:
+            sample_offset = f["sample/offset"][()]
+        else:
+            sample_offset = np.zeros(3)
+            
+        for key in f["banks"].keys():
+            img_idx = int(key)
+            grp = f[f"banks/{key}"]
+            peak_dict[img_idx] = [
+                grp["i"][()], grp["j"][()], grp["h"][()],
+                grp["k"][()], grp["l"][()], grp["wavelength"][()]
+            ]
+
+    peaks = Peaks(filename, instrument)
+
+    if all_R is None:
+        all_R = peaks.goniometer.rotation
+    if angles_stack is None:
+        angles_stack = peaks.goniometer.angles_raw
+
+    result = integrate_peaks_rbf_ssn(
+        peak_dict=peak_dict,
+        peaks_obj=peaks,             # Pass the full Peaks object
+        sigmas=sigma_list,
+        alpha=alpha,
+        gamma=gamma,
+        max_peaks=max_peaks,
+        show_progress=show_progress,
+        all_R=all_R,                 # Pass rotation and offset downstream
+        sample_offset=sample_offset,
+        create_visualizations=create_visualizations
+    )
+
+    print(f"Saving RBF integrated peaks to {output_filename}")
+    with h5py.File(output_filename, "w") as f:
+        f["peaks/h"] = result.h
+        f["peaks/k"] = result.k
+        f["peaks/l"] = result.l
+        f["peaks/lambda"] = result.wavelength
+        f["peaks/intensity"] = result.intensity
+        f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
+        f["peaks/two_theta"] = result.tt
+        f["peaks/azimuthal"] = result.az
+        f["peaks/bank"] = result.bank
+        f["peaks/run_index"] = result.run_id
+        
+        # Copy full metadata context from predictor output
+        copy_keys = [
+            "sample/a", "sample/b", "sample/c", 
+            "sample/alpha", "sample/beta", "sample/gamma",
+            "sample/space_group", "sample/U", "sample/B", 
+            "sample/offset", "beam/ki_vec", "instrument/wavelength"
+        ]
+        
+        with h5py.File(integration_peaks_filename, "r") as f_in:
+            for key in copy_keys:
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
+                    
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in:
+                    f_in.copy(f_in[k], f, k)
+
 if __name__ == "__main__":
     app()
