@@ -1594,7 +1594,7 @@ def index_images(
         opt_params = np.zeros(3)
 
     print("Extracting physical intensities from optimal orientation...")
-    c_stars, rows, cols, lams, valids = indexer.get_reflections(jnp.array(opt_U), images_max)
+    c_stars, rows, cols, lams, valids = indexer.get_reflections(np.array(opt_U), images_max)
     c_stars, valids = np.array(c_stars), np.array(valids)
 
     mask = (c_stars >= min_intensity) & valids
