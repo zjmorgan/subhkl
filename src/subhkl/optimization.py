@@ -2725,8 +2725,8 @@ class ImageBasedFindUB:
         self.sample_offset = data_dict['sample_offset']
 
     def minimize_evosax(self, strategy_name, population_size=1000, num_generations=100, seed=0, batch_size=1, n_runs=1, injected_rotations=None):
-        from subhkl.search.prior import ImageBasedObjectiveJAX
-        objective = ImageBasedObjectiveJAX(
+        from subhkl.search.prior import ImageBasedObjective
+        objective = ImageBasedObjective(
             self.images_landscape, self.hkl_pool, self.B_mat, self.R_stack, self.wl_min, self.wl_max,
             self.det_centers, self.uhats, self.vhats, self.widths, self.heights, self.ms, self.ns,
             self.ki_vec, self.sample_offset
