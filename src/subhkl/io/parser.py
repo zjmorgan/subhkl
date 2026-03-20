@@ -1309,6 +1309,7 @@ def zone_axis_search(
     sigma: float = 2.0,
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
+    n_hough: int = typer.Option(15, help="Maximum number of empirical zone axes."),
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
     top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
     grid_range: int = typer.Option(8, help="Maximum hkl index for zone axis search"),
@@ -1409,7 +1410,7 @@ def zone_axis_search(
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution,
-            plot_filename=output_hough)
+            n_hough=n_hough, plot_filename=output_hough)
 
     if len(n_obs) == 0:
         print("Failed to find any zone axes.")

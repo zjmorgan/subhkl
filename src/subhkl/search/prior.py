@@ -91,7 +91,7 @@ class HoughDavenportPrior:
             
         return np.vstack(q_hat_list)
 
-    def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, plot_filename=None):
+    def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, n_hough=15, plot_filename=None):
         """Executes the 3D Combinatorial Hough Transform using Lambert Azimuthal projection."""
         N = len(q_rays)
         if N < 2:
@@ -155,7 +155,7 @@ class HoughDavenportPrior:
             keep_weights.append(w)
 
             # Stop once we have 15 physically diverse, dominant axes
-            if len(keep_rows) >= 15:
+            if len(keep_rows) >= n_hough:
                 break
 
         row_idx = np.array(keep_rows)
