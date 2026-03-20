@@ -1557,7 +1557,7 @@ def index_images(
         'images_landscape': images_landscape,
         'hkl_pool': hkl_pool, 'B_mat': B_mat, 'R_stack': np.array(R_stack),
         'wl_min': wavelength_min, 'wl_max': wavelength_max,
-        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3)
+        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3),
         'detectors': detectors,
     }
 
