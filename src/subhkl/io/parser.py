@@ -1489,7 +1489,7 @@ def index_images(
     from subhkl.config import beamlines, reduction_settings
 
     with h5py.File(merged_h5_filename, 'r') as f_in:
-        U_initial = f_in["sample/U"][()] if "sample/U" in f_in else np.eye(3)
+        U_initial = f_in["sample/U"][()] if "sample/U" in f_in else None
         file_bank_ids = f_in["bank_ids"][()]
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
@@ -1581,12 +1581,26 @@ def index_images(
     # -------------------------------------------------------------------------
     # GLOBAL SEARCH EXECUTION
     # -------------------------------------------------------------------------
+
+    injected_rots = None
+    if U_initial is not None:
+        # 1. Convert the 3x3 U_initial matrix to a Rodrigues rotation vector
+        from scipy.spatial.transform import Rotation as R
+        u_rot = R.from_matrix(U_initial)
+        rodrigues_vec = u_rot.as_rotvec()
+
+        # 2. Format it into an array of shape (N, 3).
+        # You can optionally perturb this vector to seed multiple near-guesses,
+        # but injecting just the exact vector as a 2D array works perfectly.
+        injected_rots = np.array([rodrigues_vec])
+
     if gens > 0:
         print(f"Starting Unified Sparse Laue Optimization over SO(3)...")
         print(f"  Images: {len(images_bg)} | Target HKLs: {hkl_pool.shape[1]}")
         opt_U, opt_params = indexer.minimize_evosax(
             "DE", population_size=population_size, num_generations=gens,
             seed=seed, batch_size=batch_size, n_runs=n_runs,
+            injected_rotations=injected_rots
         )
     else:
         print(f"Skipping SO(3) search. Integrating using provided U matrix...")
