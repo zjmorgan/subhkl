@@ -2735,7 +2735,7 @@ class ImageBasedFindUB:
         sample_solution = jnp.zeros(3)
         target_sigma = 3.14
 
-        from subhkl.utils import DifferentialEvolution, NamedSharding, Mesh, P
+        from subhkl.utils.shim import DifferentialEvolution, NamedSharding, Mesh, P
         strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
         es_params = strategy.default_params
 
