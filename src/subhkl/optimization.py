@@ -2713,13 +2713,7 @@ class ImageBasedFindUB:
         self.wl_min = data_dict['wl_min']
         self.wl_max = data_dict['wl_max']
 
-        self.det_centers = data_dict['det_centers']
-        self.uhats = data_dict['uhats']
-        self.vhats = data_dict['vhats']
-        self.widths = data_dict['widths']
-        self.heights = data_dict['heights']
-        self.ms = data_dict['ms']
-        self.ns = data_dict['ns']
+        self.detectors = data_dict['detectors']
 
         self.ki_vec = data_dict['ki_vec']
         self.sample_offset = data_dict['sample_offset']
@@ -2847,24 +2841,47 @@ class ImageBasedFindUB:
         return opt_U, best_overall_member
 
     def get_reflections(self, U, real_images):
-        @jax.jit
-        def process_all_frames():
-            def map_fn(frame_data):
-                R, center, uhat, vhat, w, h, m, n, real_img = frame_data
-                row, col, lam, valid = jax_predict_reflections(
-                    U, self.B_mat, self.hkl_pool, R, self.ki_vec, self.sample_offset,
-                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max
+        from subhkl.instrument.physics import predict_reflections_on_panel
+
+        # Unpack the static HKL pool (assuming shape is 3 x N)
+        h, k, l = self.hkl_pool[0], self.hkl_pool[1], self.hkl_pool[2]
+
+        frame_results = []
+
+        for i, real_img in enumerate(real_images):
+            R = self.R_stack[i]
+
+            # Construct the dynamic RUB matrix for this specific frame
+            RUB = R @ U @ self.B_mat
+
+            # 1. Use standard physics function (returns ONLY valid reflections)
+            row_valid, col_valid, h_v, k_v, l_v, lam_v = predict_reflections_on_panel(
+                detector=self.detectors[i],
+                h=h, k=k, l=l,
+                RUB=RUB,
+                wavelength_min=self.wl_min,
+                wavelength_max=self.wl_max,
+                sample_offset=self.sample_offset,
+                ki_vec=self.ki_vec
+            )
+
+            # 2. Extract intensities using scipy for the valid peaks
+            if len(row_valid) > 0:
+                coords = np.vstack([row_valid, col_valid])
+                c_star_valid = scipy.ndimage.map_coordinates(
+                    real_img, coords, order=1, mode='constant', cval=0.0
                 )
-                coords = jnp.stack([row, col], axis=0)
+            else:
+                c_star_valid = np.array([])
 
-                # Maps from the newly dilated `images_max`
-                c_star = jax.scipy.ndimage.map_coordinates(real_img, coords, order=1, mode='constant', cval=0.0)
-                c_star = jnp.where(valid, c_star, 0.0)
-                return c_star, row, col, lam, valid
+            frame_results.append({
+                'c_star': c_star_valid,
+                'row': row_valid,
+                'col': col_valid,
+                'lam': lam_v,
+                'h': h_v,
+                'k': k_v,
+                'l': l_v
+            })
 
-            frame_data = (self.R_stack, self.det_centers, self.uhats, self.vhats,
-                          self.widths, self.heights, self.ms, self.ns, jnp.array(real_images))
-            return jax.lax.map(map_fn, frame_data)
-
-        return process_all_frames()
-
+        return frame_results
