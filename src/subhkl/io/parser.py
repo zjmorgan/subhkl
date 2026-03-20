@@ -1486,6 +1486,8 @@ def index_images(
     seed: int = 0,
     create_visualizations: bool = typer.Option(False, "--create-visualizations", help="Output PNG overlays of predicted vs extracted peaks."),
 ):
+    from subhkl.config import beamlines, reduction_settings
+
     with h5py.File(merged_h5_filename, 'r') as f_in:
         U_initial = f_in["sample/U"][()] if "sample/U" in f_in else np.eye(3)
         file_bank_ids = f_in["bank_ids"][()]
@@ -1507,7 +1509,6 @@ def index_images(
             file_names += [f] * (offs - old_offs)
             old_offs = offs
 
-        from subhkl.config import beamlines, reduction_settings
         settings = reduction_settings[instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
 
@@ -1586,7 +1587,6 @@ def index_images(
         opt_U, opt_params = indexer.minimize_evosax(
             "DE", population_size=population_size, num_generations=gens,
             seed=seed, batch_size=batch_size, n_runs=n_runs,
-            injected_rotations=prior_rots
         )
     else:
         print(f"Skipping SO(3) search. Integrating using provided U matrix...")
