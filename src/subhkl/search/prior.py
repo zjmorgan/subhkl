@@ -455,7 +455,15 @@ class HoughDavenportPrior:
         rand_q = rand_q / jnp.linalg.norm(rand_q, axis=1, keepdims=True)
         rand_rots = jax.vmap(quaternion_to_rodrigues)(rand_q)
 
-        rand_scores = np.array(-objective_function(rand_rots))
+        import tqdm
+        rand_scores = []
+        # We use a blocking call (np.array) inside the loop to give tqdm true timings
+        for i in tqdm.tqdm(range(0, len(rand_rots), batch_size), desc="Forward Model Filter (random)"):
+            batch = rand_rots[i:i+batch_size]
+            scores = np.array(-objective_function(batch))
+            rand_scores.append(scores)
+        rand_scores = np.concatenate(rand_scores)
+
         r_mean = np.mean(rand_scores)
         r_std = np.std(rand_scores)
         r_max = np.max(rand_scores)
@@ -467,9 +475,7 @@ class HoughDavenportPrior:
 
         # 1. Evaluate all with an accurate progress bar
         physics_scores = []
-        import tqdm
-        # We use a blocking call (np.array) inside the loop to give tqdm true timings
-        for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter"):
+        for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter (prior)"):
             batch = prior_rots[i:i+batch_size]
             scores = np.array(-objective_function(batch))
             physics_scores.append(scores)
