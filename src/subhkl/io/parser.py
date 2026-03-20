@@ -1507,7 +1507,7 @@ def index_images(
             file_names += [f] * (offs - old_offs)
             old_offs = offs
 
-        from subhkl.config.config import reduction_settings
+        from subhkl.config import beamlines, reduction_settings
         settings = reduction_settings[instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
 
