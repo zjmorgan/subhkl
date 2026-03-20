@@ -1310,7 +1310,9 @@ def zone_axis_search(
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
-    prior_top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
+    top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
+    grid_range: int = typer.Option(8, help="Maximum hkl index for zone axis search"),
+    top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
     num_runs: int = typer.Option(1, help="Number of goniometer runs to use. Set to 0 to use all."),
     output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
     batch_size: int = typer.Option(1024, help="Batch size for validation loop"),
@@ -1403,7 +1405,7 @@ def zone_axis_search(
     q_hat = prior_engine.extract_empirical_rays(images_bg, instrument, file_bank_ids,
                                                 min_intensity=min_intensity,
                                                 sigma=sigma,
-                                                top_k_rays=prior_top_k_rays)
+                                                top_k_rays=top_k_rays)
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution,
@@ -1413,7 +1415,7 @@ def zone_axis_search(
         print("Failed to find any zone axes.")
         return
 
-    n_calc = prior_engine.generate_theoretical_zones()
+    n_calc = prior_engine.generate_theoretical_zones(top_k=top_k, grid_range=grid_range)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
     quats, _ = prior_engine.solve_davenport_permutations(
