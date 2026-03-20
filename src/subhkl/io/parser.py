@@ -1492,7 +1492,7 @@ def index_images(
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
 
-        from subhkl.config import calc_goniometer_rotation_matrix
+        from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
         R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
 
         file_offsets = f_in["file_offsets"][()]
