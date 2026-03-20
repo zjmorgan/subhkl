@@ -1467,5 +1467,232 @@ def zone_axis_search(
 
     print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
 
+@app.command()
+def index_images(
+    merged_h5_filename: str,
+    instrument: str,
+    output_h5_filename: str,
+    a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float,
+    space_group: str,
+    bootstrap: str = typer.Option(None, help="Seed with initial U matrix."),
+    d_min: float = 1.0,
+    sigma: float = 5.0,
+    min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude (photon counts)."),
+    population_size: int = 1000,
+    gens: int = 400,
+    n_runs: int = 1,
+    batch_size: int = typer.Option(None, help="Number of runs to execute in parallel on GPU."),
+    seed: int = 0,
+    create_visualizations: bool = typer.Option(False, "--create-visualizations", help="Output PNG overlays of predicted vs extracted peaks."),
+):
+    with h5py.File(merged_h5_filename, 'r') as f_in:
+        U_initial = f_in["sample/U"][()] if "sample/U" in f_in else np.eye(3)
+        file_bank_ids = list(f_in["bank_ids"].asstr())
+        ax = f_in["goniometer/axes"][()]
+        goniometer_angles = np.array(f_in["goniometer/angles"][()])
+
+        from subhkl.config import calc_goniometer_rotation_matrix
+        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
+
+        file_offsets = f_in["file_offsets"][()]
+        file_names_in = list(f_in["files"].asstr())
+
+        file_names = []
+        if file_offsets[0] != 0:
+            raise ValueError
+        offsets_excl = np.concatenate([file_offsets[1:], [len(file_bank_ids)]])
+        old_offs = 0
+        for offs, f in zip(offsets_excl, file_names_in):
+            file_names += [f] * (offs - old_offs)
+            old_offs = offs
+
+        settings = reduction_settings[instrument]
+        wavelength_min, wavelength_max = settings.get("Wavelength")
+
+        images_raw = np.stack(f_in["images"][()])
+
+    if bootstrap is not None:
+        with h5py.File(bootstrap, 'r') as f_in:
+            U_initial = f_in["sample/U"][()]
+
+    from subhkl.optimization import FindUB
+
+    medians = np.median(images_raw, axis=(1, 2), keepdims=True)
+    images_bg = np.maximum(images_raw - medians, 0)
+
+    import scipy.ndimage
+    images_max = scipy.ndimage.maximum_filter(images_bg, size=3)
+
+    images_landscape = np.zeros_like(images_bg, dtype=np.float32)
+    for i in range(len(images_bg)):
+        smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
+        mask = smoothed > (min_intensity * 0.5)
+        if not np.any(mask):
+            continue
+        dist = scipy.ndimage.distance_transform_edt(~mask)
+        images_landscape[i] = np.exp(-dist / sigma)
+
+    print("Generating theoretical HKL pool...")
+    from subhkl.core.crystallography import generate_reflections
+    h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    hkl_pool = np.vstack([h, k_idx, l])
+
+    ub_helper = FindUB()
+    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    B_mat = ub_helper.reciprocal_lattice_B()
+
+    det_centers, uhats, vhats = [], [], []
+    widths, heights, ms, ns = [], [], [], []
+
+    for i, phys_bank in enumerate(file_bank_ids):
+        from subhkl.instrument.detector import Detector
+        det_config = beamlines[instrument][str(phys_bank)]
+        det = Detector(det_config)
+
+        det_centers.append(det.center)
+        if det.panel_type.value == "flat":
+            uhats.append(det.uhat)
+            vhats.append(det.vhat)
+        else:
+            raise NotImplementedError("Curved panels not yet supported in JAX sparse_laue.")
+
+        widths.append(det.width)
+        heights.append(det.height)
+        ms.append(det.m)
+        ns.append(det.n)
+
+    data_dict = {
+        'images_landscape': images_landscape,
+        'hkl_pool': hkl_pool, 'B_mat': B_mat, 'R_stack': np.array(R_stack),
+        'wl_min': wavelength_min, 'wl_max': wavelength_max,
+        'det_centers': np.array(det_centers), 'uhats': np.array(uhats),
+        'vhats': np.array(vhats), 'widths': np.array(widths), 'heights': np.array(heights),
+        'ms': np.array(ms), 'ns': np.array(ns),
+        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3)
+    }
+
+    from subhkl.optimization import ImageBasedFindUB
+    indexer = ImageBasedFindUB(data_dict)
+
+    # -------------------------------------------------------------------------
+    # GLOBAL SEARCH EXECUTION
+    # -------------------------------------------------------------------------
+    if gens > 0:
+        print(f"Starting Unified Sparse Laue Optimization over SO(3)...")
+        print(f"  Images: {len(images_bg)} | Target HKLs: {hkl_pool.shape[1]}")
+        opt_U, opt_params = indexer.minimize_evosax(
+            "DE", population_size=population_size, num_generations=gens,
+            seed=seed, batch_size=batch_size, n_runs=n_runs,
+            injected_rotations=prior_rots
+        )
+    else:
+        print(f"Skipping SO(3) search. Integrating using provided U matrix...")
+        opt_U = U_initial
+        opt_params = np.zeros(3)
+
+    print("Extracting physical intensities from optimal orientation...")
+    c_stars, rows, cols, lams, valids = indexer.get_reflections(jnp.array(opt_U), images_max)
+    c_stars, valids = np.array(c_stars), np.array(valids)
+
+    mask = (c_stars >= min_intensity) & valids
+    batch_idx, hkl_idx = np.where(mask)
+
+    final_volumes = c_stars[batch_idx, hkl_idx]
+    final_rows = np.array(rows)[batch_idx, hkl_idx]
+    final_cols = np.array(cols)[batch_idx, hkl_idx]
+    final_lams = np.array(lams)[batch_idx, hkl_idx]
+    final_hkls = hkl_pool[:, hkl_idx]
+    final_banks = [file_bank_ids[b] for b in batch_idx]
+    final_filenames = [file_names[b] for b in batch_idx]
+
+    if create_visualizations:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+
+        print("Generating diagnostic visualizations...")
+        for f in range(len(images_raw)):
+            valid_mask = valids[f]
+            if not np.any(valid_mask):
+                continue
+
+            pred_r = np.array(rows)[f, valid_mask]
+            pred_c = np.array(cols)[f, valid_mask]
+
+            ext_mask = (c_stars[f] >= min_intensity) & valid_mask
+            ext_r = np.array(rows)[f, ext_mask]
+            ext_c = np.array(cols)[f, ext_mask]
+
+            phys_bank = file_bank_ids[f]
+            fn_in = file_names[f]
+
+            import os
+            fn_in = os.path.basename(fn_in)
+
+            img_plot = np.maximum(images_bg[f], 1.0)
+            fig, ax = plt.subplots(figsize=(10, 10))
+            vmax = max(10.0, img_plot.max())
+            ax.imshow(img_plot, norm=mcolors.LogNorm(vmin=1.0, vmax=vmax), cmap='binary', origin='lower')
+
+            ax.scatter(pred_c, pred_r, marker='x', color='blue', s=30, alpha=0.5, label='Predicted HKLs')
+            ax.scatter(ext_c, ext_r, facecolors='none', edgecolors='red', marker='o', s=150, linewidths=1.5, label=f'Extracted (>{min_intensity} counts)')
+
+            ax.set_title(f"Sparse Laue - Run {fn_in}, Bank {phys_bank}")
+            ax.legend(loc='upper right')
+
+            fname = f"sparse_laue_run_{fn_in}_bank_{phys_bank}.png"
+            fig.savefig(fname, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+    xyz_out = []
+    for f, (row_idx, col_idx) in enumerate(zip(rows, cols)):
+        from subhkl.detector import Detector
+        phys_bank = file_bank_ids[f]
+        det_config = beamlines[instrument][str(phys_bank)]
+        det = Detector(det_config)
+        valid_mask = valids[f]
+        if not np.any(valid_mask):
+            continue
+
+        xyz_out.append(det.pixel_to_lab(np.array(row_idx)[valid_mask],
+                                        np.array(col_idx)[valid_mask]))
+
+    xyz_det = np.concatenate(xyz_out)
+
+    print(f"Integration complete. Extracted {len(final_volumes)} valid reflections.")
+
+    print(f"Saving to {output_h5_filename}...")
+    with h5py.File(output_h5_filename, "w") as f:
+        f["sample/U"] = np.array(opt_U)
+        f["sample/B"] = B_mat
+
+        f["sample/a"], f["sample/b"], f["sample/c"] = a, b, c
+        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = alpha, beta, gamma
+        f["sample/space_group"] = space_group.encode('utf-8')
+        f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
+        f["goniometer/R"] = R_stack
+        f["beam/ki_vec"] = np.array([0.0, 0.0, 1.0])
+        f["sample/offset"] = np.zeros(3)
+
+        f["optimization/best_params"] = np.array(opt_params)
+
+        if len(final_volumes) > 0:
+            f["peaks/h"], f["peaks/k"], f["peaks/l"] = final_hkls[0], final_hkls[1], final_hkls[2]
+            f["peaks/lambda"] = final_lams
+            f["peaks/intensity"] = final_volumes
+            f["peaks/sigma"] = np.full_like(final_volumes, sigma)
+            f["peaks/xyz"] = xyz_det
+            f["bank"] = final_banks
+            f["filename"] = final_filenames
+            f["peaks/pixel_r"] = final_rows
+            f["peaks/pixel_c"] = final_cols
+
+    print("Done.")
+
+
 if __name__ == "__main__":
     app()

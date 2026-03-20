@@ -2703,3 +2703,168 @@ class FindUB:
         )
 
         return num_peaks_soft, np.array(hkl[0]), np.array(lamb[0]), np.array(U)
+
+class ImageBasedFindUB:
+    def __init__(self, data_dict):
+        self.images_landscape = data_dict['images_landscape']
+        self.hkl_pool = data_dict['hkl_pool']
+        self.B_mat = data_dict['B_mat']
+        self.R_stack = data_dict['R_stack']
+        self.wl_min = data_dict['wl_min']
+        self.wl_max = data_dict['wl_max']
+
+        self.det_centers = data_dict['det_centers']
+        self.uhats = data_dict['uhats']
+        self.vhats = data_dict['vhats']
+        self.widths = data_dict['widths']
+        self.heights = data_dict['heights']
+        self.ms = data_dict['ms']
+        self.ns = data_dict['ns']
+
+        self.ki_vec = data_dict['ki_vec']
+        self.sample_offset = data_dict['sample_offset']
+
+    def minimize_evosax(self, strategy_name, population_size=1000, num_generations=100, seed=0, batch_size=1, n_runs=1, injected_rotations=None):
+        from subhkl.search.prior import ImageBasedObjectiveJAX
+        objective = ImageBasedObjectiveJAX(
+            self.images_landscape, self.hkl_pool, self.B_mat, self.R_stack, self.wl_min, self.wl_max,
+            self.det_centers, self.uhats, self.vhats, self.widths, self.heights, self.ms, self.ns,
+            self.ki_vec, self.sample_offset
+        )
+
+        sample_solution = jnp.zeros(3)
+        target_sigma = 3.14
+
+        from subhkl.utils import DifferentialEvolution, NamedSharding, Mesh, P
+        strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
+        es_params = strategy.default_params
+
+        # --- PREPARE STATIC INJECTION ARRAY FOR JIT ---
+        n_inject = population_size // 4
+        static_injected_rots = jnp.zeros((n_inject, 3))
+        use_injection = False
+
+        if injected_rotations is not None and len(injected_rotations) > 0:
+            actual_inject = min(len(injected_rotations), n_inject)
+            if actual_inject > 0:
+                rots = injected_rotations[:actual_inject]
+                pad_size = n_inject - actual_inject
+                if pad_size > 0:
+                    pad_rots = jnp.zeros((pad_size, 3))
+                    static_injected_rots = jnp.concatenate([rots, pad_rots], axis=0)
+                else:
+                    static_injected_rots = rots
+                use_injection = True
+
+        def init_single_run(rng, _):
+            rng, rng_pop, rng_init = jax.random.split(rng, 3)
+            # Let the shim layer initialize its random noise natively
+            target_sigma = 0.05
+            population_init = target_sigma * jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+            fitness_init = objective(population_init)
+            return strategy.init(rng_init, population_init, fitness_init, es_params)
+
+        try:
+            mesh = NamedSharding(Mesh(np.array(jax.devices()), ('i')), P('i'))
+        except:
+            mesh = None
+
+        def step_single_run(rng, state, gen):
+            rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+
+            # 1. Ask the GA for candidates (will be random on Gen 0)
+            x, state_ask = strategy.ask(rng_ask, state, es_params)
+
+            # 2. THE HIJACK: On Generation 0, forcefully overwrite top slots with Elites
+            def inject_fn(x_cands):
+                return jax.lax.dynamic_update_slice(x_cands, static_injected_rots, (0, 0))
+
+            if use_injection:
+                x = jax.lax.cond(gen == 0, inject_fn, lambda x_c: x_c, x)
+
+            # 3. Evaluate the true physics score
+            fitness = objective(x)
+
+            if mesh is not None:
+                try:
+                    x = jax.lax.with_sharding_constraint(x, mesh)
+                except:
+                    pass
+
+            # 4. Tell the GA. The 128.3 score is permanently injected into the gene pool!
+            state_tell, metrics = strategy.tell(rng_tell, x, fitness, state_ask, es_params)
+            return rng, state_tell, metrics
+
+        init_batch_jit = jax.jit(jax.vmap(init_single_run, in_axes=(0, None)))
+
+        # Notice `in_axes` now expects `gen` as a static scalar input (None)
+        step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0, None)))
+
+        exec_batch_size = batch_size if batch_size is not None else n_runs
+        batch_keys_list = []
+        batch_states_list = []
+        seeds = jnp.arange(seed, seed + n_runs)
+
+        for b_i in range(int(np.ceil(n_runs / exec_batch_size))):
+            start_idx = b_i * exec_batch_size
+            end_idx = min((b_i + 1) * exec_batch_size, n_runs)
+            chunk_keys = jax.vmap(jax.random.PRNGKey)(seeds[start_idx:end_idx])
+            b_state = init_batch_jit(chunk_keys, None)
+            batch_keys_list.append(chunk_keys)
+            batch_states_list.append(b_state)
+
+        pbar = range(num_generations)
+        from tqdm import trange
+        if trange is not None:
+            pbar = trange(num_generations, desc="Sparse Laue Optimization")
+
+        for gen in pbar:
+            current_gen_best = float('inf')
+            for b_i in range(len(batch_keys_list)):
+                # Pass `gen` directly into the JIT step!
+                chunk_keys, b_state, _ = step_batch_jit(batch_keys_list[b_i], batch_states_list[b_i], gen)
+                batch_keys_list[b_i] = chunk_keys
+                batch_states_list[b_i] = b_state
+                current_gen_best = min(current_gen_best, float(jnp.min(b_state.best_fitness)))
+
+            if trange is not None:
+                pbar.set_description(f"Gen {gen+1} | Score (Peaks Hit): {-current_gen_best:.1f}")
+
+        all_fitness_list = []
+        all_solutions_list = []
+        for b_state in batch_states_list:
+            all_fitness_list.append(b_state.best_fitness)
+            all_solutions_list.append(b_state.best_solution)
+
+        all_fitness = jnp.concatenate(all_fitness_list, axis=0)
+        all_solutions = jnp.concatenate(all_solutions_list, axis=0)
+
+        best_idx = np.argmin(all_fitness)
+        best_overall_member = all_solutions[best_idx]
+
+        opt_U = rotation_matrix_from_rodrigues_jax(best_overall_member)
+
+        return opt_U, best_overall_member
+
+    def get_reflections(self, U, real_images):
+        @jax.jit
+        def process_all_frames():
+            def map_fn(frame_data):
+                R, center, uhat, vhat, w, h, m, n, real_img = frame_data
+                row, col, lam, valid = jax_predict_reflections(
+                    U, self.B_mat, self.hkl_pool, R, self.ki_vec, self.sample_offset,
+                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max
+                )
+                coords = jnp.stack([row, col], axis=0)
+
+                # Maps from the newly dilated `images_max`
+                c_star = jax.scipy.ndimage.map_coordinates(real_img, coords, order=1, mode='constant', cval=0.0)
+                c_star = jnp.where(valid, c_star, 0.0)
+                return c_star, row, col, lam, valid
+
+            frame_data = (self.R_stack, self.det_centers, self.uhats, self.vhats,
+                          self.widths, self.heights, self.ms, self.ns, jnp.array(real_images))
+            return jax.lax.map(map_fn, frame_data)
+
+        return process_all_frames()
+
