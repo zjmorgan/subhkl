@@ -1545,20 +1545,34 @@ def index_images(
     ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
     B_mat = ub_helper.reciprocal_lattice_B()
 
-    detectors = []
+    det_centers, uhats, vhats = [], [], []
+    widths, heights, ms, ns = [], [], [], []
 
     for i, phys_bank in enumerate(file_bank_ids):
         from subhkl.instrument.detector import Detector
         det_config = beamlines[instrument][str(phys_bank)]
         det = Detector(det_config)
-        detectors.append(det)
+
+        det_centers.append(det.center)
+        if det.panel_type.value == "flat":
+            uhats.append(det.uhat)
+            vhats.append(det.vhat)
+        else:
+            raise NotImplementedError("Curved panels not yet supported in JAX sparse_laue.")
+
+        widths.append(det.width)
+        heights.append(det.height)
+        ms.append(det.m)
+        ns.append(det.n)
 
     data_dict = {
         'images_landscape': images_landscape,
         'hkl_pool': hkl_pool, 'B_mat': B_mat, 'R_stack': np.array(R_stack),
         'wl_min': wavelength_min, 'wl_max': wavelength_max,
+        'det_centers': np.array(det_centers), 'uhats': np.array(uhats),
+        'vhats': np.array(vhats), 'widths': np.array(widths), 'heights': np.array(heights),
+        'ms': np.array(ms), 'ns': np.array(ns),
         'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3)
-        'detectors': detectors,
     }
 
     from subhkl.optimization import ImageBasedFindUB
