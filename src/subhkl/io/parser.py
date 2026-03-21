@@ -1371,7 +1371,11 @@ def zone_axis_search(
     print("Generating continuous image landscapes...")
     for i in range(len(images_bg)):
         smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
-        mask = smoothed > (min_intensity * 0.5)
+
+        # Only allow true peaks (local maxima) to form catchment basins
+        local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
+        mask = local_max & (smoothed > (min_intensity * 0.5))
+
         if not np.any(mask): continue
         dist = scipy.ndimage.distance_transform_edt(~mask)
         images_landscape[i] = np.exp(-dist / sigma)
@@ -1632,7 +1636,8 @@ def index_images(
     images_landscape = np.zeros_like(images_bg, dtype=np.float32)
     for i in range(len(images_bg)):
         smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
-        mask = smoothed > (min_intensity * 0.5)
+        local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
+        mask = local_max & (smoothed > (min_intensity * 0.5))
         if not np.any(mask):
             continue
         dist = scipy.ndimage.distance_transform_edt(~mask)
