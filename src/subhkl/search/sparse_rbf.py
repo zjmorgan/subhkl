@@ -149,62 +149,71 @@ class SparseRBFPeakFinder:
         """
         Primal-Dual Active Set (Semi-Smooth Newton) solver for tiny sub-matrices.
         Enforces exact L1 sparsity (NN-Lasso) on amplitudes.
+        Strictly typed to float32 to prevent lax.while_loop cast errors.
         """
+        # 1. Force all incoming matrices to 32-bit
+        Ht = Ht.astype(jnp.float32)
+        At_y = At_y.astype(jnp.float32)
+        alpha_vec = alpha_vec.astype(jnp.float32)
+        
         N = Ht.shape[0]
-
+        
         def obj(u):
-            quad = 0.5 * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y)
+            quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y)
             return quad + jnp.sum(alpha_vec * u)
-
+            
         u_init = jnp.zeros(N, dtype=jnp.float32)
-        q_init = At_y
-        # Safe initialization: start below the active threshold
-        q_clamped = jnp.minimum(q_init, (1.0 - 1e-14) * alpha_vec)
-
+        
+        # 2. Safe float32 init: Start just below active threshold
+        # (1e-14 is too small for float32 precision, using 1e-6)
+        q_clamped = jnp.minimum(At_y, jnp.float32(1.0 - 1e-6) * alpha_vec).astype(jnp.float32)
+        
         def cond_fun(state):
             step, _, _, Gq_norm = state
-            return (step < max_iter) & (Gq_norm > 1e-5)
-
+            return (step < max_iter) & (Gq_norm > jnp.float32(1e-5))
+            
         def body_fun(state):
             step, q, u, _ = state
-
+            
             Gq = (q - u) + (Ht @ u) - At_y
-
+            
             # PDAS Active Set Mask
             D = (q > alpha_vec).astype(jnp.float32)
-
+            
             # Semi-Smooth Newton Step
             I = jnp.eye(N, dtype=jnp.float32)
             DP_mat = jnp.diag(D)
-            DG = (I - DP_mat) + Ht @ DP_mat + 1e-5 * I
-
-            dq = jnp.linalg.solve(DG, -Gq)
-
+            DG = (I - DP_mat) + Ht @ DP_mat + jnp.float32(1e-5) * I
+            
+            # Force solver output back to 32-bit
+            dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
+            
             # Line Search
             def bt_cond(bt_state):
                 bt_i, tau, _, _, j_test, j_curr = bt_state
-                return (bt_i < 5) & (j_test > j_curr * (1.0 + 1e-10))
-
+                return (bt_i < 5) & (j_test > j_curr * jnp.float32(1.0 + 1e-7))
+                
             def bt_body(bt_state):
                 bt_i, tau, _, _, _, j_curr = bt_state
-                tau = tau * 0.5
+                tau = jnp.float32(tau * 0.5)
                 q_test = q + tau * dq
-                c_test = jnp.maximum(0.0, q_test - alpha_vec)
+                c_test = jnp.maximum(jnp.float32(0.0), q_test - alpha_vec)
                 j_test = obj(c_test)
                 return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
-
+                
             q_init_test = q + dq
-            c_init_test = jnp.maximum(0.0, q_init_test - alpha_vec)
-
+            c_init_test = jnp.maximum(jnp.float32(0.0), q_init_test - alpha_vec)
+            
             bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, c_init_test, obj(c_init_test), obj(u))
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, u_final, _, _ = bt_final
-
-            return (step + 1, q_final, u_final, jnp.linalg.norm(Gq))
-
+            
+            return (step + 1, q_final, u_final, jnp.linalg.norm(Gq).astype(jnp.float32))
+            
         init_state = (jnp.int32(0), q_clamped, u_init, jnp.float32(1e9))
         final_state = lax.while_loop(cond_fun, body_fun, init_state)
         _, _, u_prime, _ = final_state
+        
         return u_prime
 
     # =========================================================================
