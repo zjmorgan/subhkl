@@ -1587,6 +1587,7 @@ def index_images(
     batch_size: int = typer.Option(None, help="Number of runs to execute in parallel on GPU."),
     seed: int = 0,
     create_visualizations: bool = typer.Option(False, "--create-visualizations", help="Output PNG overlays of predicted vs extracted peaks."),
+    border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
 ):
     from subhkl.config import beamlines, reduction_settings
 
@@ -1674,7 +1675,8 @@ def index_images(
         'det_centers': np.array(det_centers), 'uhats': np.array(uhats),
         'vhats': np.array(vhats), 'widths': np.array(widths), 'heights': np.array(heights),
         'ms': np.array(ms), 'ns': np.array(ns),
-        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3)
+        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3),
+        'border_frac': border_frac,
     }
 
     from subhkl.optimization import ImageBasedFindUB
