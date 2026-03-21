@@ -1491,7 +1491,7 @@ def rbf_integrator(
     """
     import h5py
     from subhkl.integration import Peaks
-    from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
+    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
 
     sigma_list = [float(s.strip()) for s in sigmas.split(",")]
 
