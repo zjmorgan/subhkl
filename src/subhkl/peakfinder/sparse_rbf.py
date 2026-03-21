@@ -139,7 +139,7 @@ class SparseRBFPeakFinder:
         
         # Besov Norm (L1 of coeffs in normalized basis)
         sigma_ratio = sigmas / ref_s
-        reg_weight = 1.0 / (sigma_ratio ** gamma + 1e-6)
+        reg_weight = sigma_ratio ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
         return nll + reg
@@ -261,7 +261,7 @@ class SparseRBFPeakFinder:
                 
                 # 5. Apply Prior Weighting
                 # Adjust selection order based on Besov prior preference
-                prior_weight = (s / self.ref_sigma) ** self.gamma
+                prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = proj_score * prior_weight
 
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
