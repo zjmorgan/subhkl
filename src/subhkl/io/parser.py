@@ -1426,7 +1426,7 @@ def zone_axis_search(
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution,
-            n_hough=n_hough, plot_filename=output_hough, border_frac)
+            n_hough=n_hough, plot_filename=output_hough, border_frac=border_frac)
 
     if len(n_obs) == 0:
         print("Failed to find any zone axes.")
