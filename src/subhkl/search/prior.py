@@ -124,7 +124,7 @@ class HoughDavenportPrior:
         local_max = scipy.ndimage.maximum_filter(H_smooth, size=3) == H_smooth
         peak_mask = local_max & (H_smooth >= min_pairs)
 
-        H, W = img.shape
+        H, W = peak_mask.shape
         margin_r = int(H * border_frac)
         margin_c = int(W * border_frac)
         peak_mask[:margin_r, :] = False
