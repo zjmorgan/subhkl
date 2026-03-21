@@ -259,10 +259,15 @@ def finder(
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
+    mask_file: str | None = None,
+    mask_rel_erosion_radius: float = None,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
+<<<<<<< Updated upstream
     thresholding_mask_file: str | None = None,
     thresholding_mask_rel_erosion_radius: float = 0.05,
+=======
+>>>>>>> Stashed changes
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
     wavelength_min: float | None = None,
@@ -308,8 +313,6 @@ def finder(
             {
                 "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
                 "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-                "mask_file": thresholding_mask_file,
-                "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
                 "blur_kernel_sigma": thresholding_blur_kernel_sigma,
                 "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
                 "show_steps": show_steps,
@@ -332,6 +335,13 @@ def finder(
         )
     else:
         raise ValueError("Invalid finder algorithm")
+
+    peak_kwargs.update(
+        {
+            "mask_file": mask_file,
+            "mask_rel_erosion_radius": mask_rel_erosion_radius,
+        }
+    )
 
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
