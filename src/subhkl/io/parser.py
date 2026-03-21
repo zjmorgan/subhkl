@@ -277,7 +277,7 @@ def finder(
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
     sparse_rbf_alpha: float = 0.1,  # Regularization (Higher = fewer, stronger peaks)
-    sparse_rbf_gamma: float = 2.0,  # Besov space coefficient (shape prior)
+    sparse_rbf_gamma: float = 1.0,  # Besov space coefficient (shape prior)
     sparse_rbf_min_sigma: float = 0.5,  # Min spot size (pixels)
     sparse_rbf_max_sigma: float = 10.0,  # Max spot size (pixels)
     sparse_rbf_max_peaks: int = 500,  # Max peaks per bank
