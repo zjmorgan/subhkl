@@ -470,7 +470,6 @@ def integrate_single_bank(
         lab_coords = lab_coords[np.newaxis, :]
 
     # --- VISUALIZATION ---
-    # UPDATED: Use viz_label for filename
     do_viz, viz_prefix, viz_label = viz_info
     if do_viz:
         import matplotlib.pyplot as plt
@@ -479,7 +478,25 @@ def integrate_single_bank(
             plt.switch_backend("Agg")
         plt.rc("font", size=8)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+
+        # --- Dynamic Colorscale Compression ---
+        # Extract valid pixels using the mask to calculate robust statistics
+        valid_pixels = image[mask.astype(bool)] if mask is not None else image
+
+        median_bg = np.median(valid_pixels)
+        std_bg = np.std(valid_pixels)
+
+        # Compress lower edge: pin vmin just above the noise floor (e.g., +2 sigma)
+        vmin = max(1.0, 1.0 + median_bg + 2.0 * std_bg) 
+
+        # Compress upper edge: pin vmax to the brightest signal
+        vmax = np.percentile(1.0 + valid_pixels, 99.8)
+
+        # Safety fallback for flat/empty images
+        if vmax <= vmin:
+            vmax = vmin + 10.0
+
+        axes[0].imshow(1 + image, norm="log", cmap="viridis", vmin=vmin, vmax=vmax, origin="lower")
         axes[0].set_title(f"{viz_label}")
 
         label_pred = f"Predicted{metrics_str}"
@@ -496,7 +513,7 @@ def integrate_single_bank(
         axes[0].legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.15),
-            fancybox=True,
+            frameon=False,
             shadow=False,
             ncol=1,
         )
