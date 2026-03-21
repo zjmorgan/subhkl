@@ -263,11 +263,6 @@ def finder(
     mask_rel_erosion_radius: float = None,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
-<<<<<<< Updated upstream
-    thresholding_mask_file: str | None = None,
-    thresholding_mask_rel_erosion_radius: float = 0.05,
-=======
->>>>>>> Stashed changes
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
     wavelength_min: float | None = None,
