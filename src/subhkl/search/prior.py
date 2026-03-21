@@ -530,7 +530,7 @@ class HoughDavenportPrior:
         print(f"\n  -> Davenport Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
         print(f"  -> Top 5 Prior Scores: {physics_scores_np[physics_sort_idx[:5]]}")
 
-        if best_score > r_max and z_score >= z_score_threshold:
+        if z_score >= z_score_threshold:
             print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
             return prior_rots[physics_sort_idx]
         else:
