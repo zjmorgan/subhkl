@@ -144,6 +144,69 @@ class SparseRBFPeakFinder:
         
         return nll + reg
 
+    @staticmethod
+    def _solve_pdas_mini(Ht, At_y, alpha_vec, max_iter=15):
+        """
+        Primal-Dual Active Set (Semi-Smooth Newton) solver for tiny sub-matrices.
+        Enforces exact L1 sparsity (NN-Lasso) on amplitudes.
+        """
+        N = Ht.shape[0]
+
+        def obj(u):
+            quad = 0.5 * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y)
+            return quad + jnp.sum(alpha_vec * u)
+
+        u_init = jnp.zeros(N, dtype=jnp.float32)
+        q_init = At_y
+        # Safe initialization: start below the active threshold
+        q_clamped = jnp.minimum(q_init, (1.0 - 1e-14) * alpha_vec)
+
+        def cond_fun(state):
+            step, _, _, Gq_norm = state
+            return (step < max_iter) & (Gq_norm > 1e-5)
+
+        def body_fun(state):
+            step, q, u, _ = state
+
+            Gq = (q - u) + (Ht @ u) - At_y
+
+            # PDAS Active Set Mask
+            D = (q > alpha_vec).astype(jnp.float32)
+
+            # Semi-Smooth Newton Step
+            I = jnp.eye(N, dtype=jnp.float32)
+            DP_mat = jnp.diag(D)
+            DG = (I - DP_mat) + Ht @ DP_mat + 1e-5 * I
+
+            dq = jnp.linalg.solve(DG, -Gq)
+
+            # Line Search
+            def bt_cond(bt_state):
+                bt_i, tau, _, _, j_test, j_curr = bt_state
+                return (bt_i < 5) & (j_test > j_curr * (1.0 + 1e-10))
+
+            def bt_body(bt_state):
+                bt_i, tau, _, _, _, j_curr = bt_state
+                tau = tau * 0.5
+                q_test = q + tau * dq
+                c_test = jnp.maximum(0.0, q_test - alpha_vec)
+                j_test = obj(c_test)
+                return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
+
+            q_init_test = q + dq
+            c_init_test = jnp.maximum(0.0, q_init_test - alpha_vec)
+
+            bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, c_init_test, obj(c_init_test), obj(u))
+            bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
+            _, _, q_final, u_final, _, _ = bt_final
+
+            return (step + 1, q_final, u_final, jnp.linalg.norm(Gq))
+
+        init_state = (jnp.int32(0), q_clamped, u_init, jnp.float32(1e9))
+        final_state = lax.while_loop(cond_fun, body_fun, init_state)
+        _, _, u_prime, _ = final_state
+        return u_prime
+
     # =========================================================================
     # KERNEL: DENSE SOLVER
     # =========================================================================
@@ -207,7 +270,9 @@ class SparseRBFPeakFinder:
             # Coordinate Descent / BFGS Refinement
             params = jnp_update_set(params, idx, new_peak)
 
+            # Coordinate Descent / BCD Refinement
             def run_opt(p):
+                # Step 1: Smooth Continuous Refinement (BFGS)
                 p_raw = self._to_unconstrained(p, *bounds)
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
@@ -216,7 +281,27 @@ class SparseRBFPeakFinder:
                     method='BFGS',
                     options={'maxiter': 5}
                 )
-                return self._to_physical(res.x, *bounds)
+                p_refined = self._to_physical(res.x, *bounds)
+                
+                # Step 2: PDAS Active Set Pruning (Semi-Smooth L1)
+                c, r, col, sigma = p_refined.T
+                
+                def eval_one(ri, ci_col, si):
+                    return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si)
+                
+                # Build local dictionary A for the active shapes
+                A = vmap(eval_one)(r, col, sigma).T
+                Ht = A.T @ A
+                At_y = A.T @ image.flatten()
+                
+                # Besov regularized penalty weights
+                weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
+                alpha_vec = self.alpha * weights
+                
+                # Solve strictly for sparse amplitudes
+                c_sparse = self._solve_pdas_mini(Ht, At_y, alpha_vec)
+                
+                return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
             params = run_opt(params)
             return (params, idx + 1), None
