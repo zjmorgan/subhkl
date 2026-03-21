@@ -558,10 +558,7 @@ def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, v
     # 2. Calculate Wavelength using the exact subhkl formula
     lamda = -4.0 * jnp.pi * Q_dot_ki / (Q_sq + 1e-9)
 
-    # We only enforce the high-energy (wl_min) limit. 
-    # If the fundamental is too low-energy (lamda > wl_max), 
-    # we assume a higher-order harmonic would naturally fall into the valid bandwidth.
-    valid_wl = (lamda >= wl_min)
+    valid_wl = (lamda >= wl_min) & (lamda <= wl_max)
 
     # 3. Calculate kf direction
     k_mag = 2.0 * jnp.pi / (lamda + 1e-9)

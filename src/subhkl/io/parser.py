@@ -1380,21 +1380,6 @@ def zone_axis_search(
     h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
     hkl_pool = np.vstack([h, k_idx, l])
 
-    # 1. Sort by magnitude so we keep the lowest-order allowed harmonic
-    hkl_sq = np.sum(hkl_pool**2, axis=0)
-    sort_idx = np.argsort(hkl_sq)
-    hkl_pool_sorted = hkl_pool[:, sort_idx]
-
-    # 2. Extract fundamental ray direction using GCD
-    g = np.gcd.reduce(np.abs(hkl_pool_sorted), axis=0)
-    g = np.maximum(g, 1)  # Prevent div-by-zero for origin
-    fund_hkl = hkl_pool_sorted // g
-
-    # 3. Filter down to unique rays
-    _, unique_idx = np.unique(fund_hkl, axis=1, return_index=True)
-    hkl_pool = hkl_pool_sorted[:, unique_idx]
-    print(f"  -> Reduced HKL pool to {hkl_pool.shape[1]} unique zone axes.")
-
     ub_helper = FindUB()
     ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
     ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
