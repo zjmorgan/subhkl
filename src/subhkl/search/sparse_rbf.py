@@ -287,13 +287,14 @@ class SparseRBFPeakFinder:
                 c, r, col, sigma = p_refined.T
                 
                 def eval_one(ri, ci_col, si):
-                    return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si)
+                    # FLATTEN is required to convert the 2D image shape into a 1D column vector!
+                    return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
                 
                 # Build local dictionary A for the active shapes
                 A = vmap(eval_one)(r, col, sigma).T
                 Ht = A.T @ A
-                At_y = A.T @ image.flatten()
-                
+                At_y = A.T @ image.flatten() 
+
                 # Besov regularized penalty weights
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec = self.alpha * weights
