@@ -91,7 +91,8 @@ class HoughDavenportPrior:
             
         return np.vstack(q_hat_list)
 
-    def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, n_hough=15, plot_filename=None):
+    def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, n_hough=15,
+                                  plot_filename=None, border_frac=0.1):
         """Executes the 3D Combinatorial Hough Transform using Lambert Azimuthal projection."""
         N = len(q_rays)
         if N < 2:
@@ -122,7 +123,15 @@ class HoughDavenportPrior:
         H_smooth = scipy.ndimage.gaussian_filter(H, sigma=blur_sigma)
         local_max = scipy.ndimage.maximum_filter(H_smooth, size=3) == H_smooth
         peak_mask = local_max & (H_smooth >= min_pairs)
-        
+
+        H, W = peak_mask.shape
+        margin_r = int(H * border_frac)
+        margin_c = int(W * border_frac)
+        peak_mask[:margin_r, :] = False
+        peak_mask[-margin_r:, :] = False
+        peak_mask[:, :margin_c] = False
+        peak_mask[:, -margin_c:] = False
+
         row_idx, col_idx = np.where(peak_mask)
         weights = H_smooth[row_idx, col_idx]
         
@@ -529,7 +538,8 @@ class HoughDavenportPrior:
             return None
 
 @jax.jit
-def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, vhat, width, height, m, n, wl_min, wl_max):
+def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, vhat, width, height, m, n, wl_min, wl_max,
+                            border_frac=0.1):
     """
     Pure JAX 3D-to-2D Laue Detector Projection.
     Strictly parallels predict_reflections_on_panel and lab_to_pixel.
@@ -578,8 +588,11 @@ def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, v
     dot_u = jnp.sum(vec * uhat[:, None], axis=0)
     col_f = dot_u / dw
 
-    valid_row = (row_f >= 0) & (row_f < n)
-    valid_col = (col_f >= 0) & (col_f < m)
+    margin_row = n * border_frac
+    margin_col = m * border_frac
+
+    valid_row = (row_f >= margin_row) & (row_f < n - margin_row)
+    valid_col = (col_f >= margin_col) & (col_f < m - margin_col)
 
     valid = valid_wl & valid_t & valid_row & valid_col
 
@@ -601,7 +614,8 @@ def quaternion_to_rodrigues(q):
 
 class ImageBasedObjective:
     def __init__(self, images_landscape, hkl_pool, B_mat, R_stack, wl_min, wl_max,
-                 det_centers, uhats, vhats, widths, heights, ms, ns, ki_vec, sample_offset):
+                 det_centers, uhats, vhats, widths, heights, ms, ns, ki_vec, sample_offset,
+                 border_frac=0.1):
         self.images_landscape = jnp.array(images_landscape)
         self.hkl = jnp.array(hkl_pool)
         self.B_mat = jnp.array(B_mat)
@@ -619,6 +633,7 @@ class ImageBasedObjective:
 
         self.ki_vec = jnp.array(ki_vec)
         self.sample_offset = jnp.array(sample_offset)
+        self.border_frac = border_frac
 
     @partial(jax.jit, static_argnames='self')
     def __call__(self, x):
@@ -629,7 +644,7 @@ class ImageBasedObjective:
                 R, center, uhat, vhat, w, h, m, n, img_land = frame_data
                 row, col, lam, valid = jax_predict_reflections(
                     U, self.B_mat, self.hkl, R, self.ki_vec, self.sample_offset,
-                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max
+                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max, self.border_frac
                 )
                 coords = jnp.stack([row, col], axis=0)
                 b_i = jax.scipy.ndimage.map_coordinates(img_land, coords, order=1, mode='constant', cval=0.0)

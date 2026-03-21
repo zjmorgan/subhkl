@@ -1307,6 +1307,7 @@ def zone_axis_search(
     space_group: str,
     d_min: float = 1.0,
     sigma: float = 2.0,
+    border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
     n_hough: int = typer.Option(15, help="Maximum number of empirical zone axes."),
@@ -1410,7 +1411,7 @@ def zone_axis_search(
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution,
-            n_hough=n_hough, plot_filename=output_hough)
+            n_hough=n_hough, plot_filename=output_hough, border_frac=border_frac)
 
     if len(n_obs) == 0:
         print("Failed to find any zone axes.")
@@ -1432,7 +1433,7 @@ def zone_axis_search(
     physics_evaluator = ImageBasedObjective(
         images_landscape, hkl_pool, B_mat, np.array(R_stack), wavelength_min, wavelength_max,
         np.array(det_centers), np.array(uhats), np.array(vhats), np.array(widths), np.array(heights), np.array(ms), np.array(ns),
-        np.array([0., 0., 1.]), np.zeros(3)
+        np.array([0., 0., 1.]), np.zeros(3), border_frac
     )
 
     prior_rots = prior_engine.physics_filter(quats, physics_evaluator, batch_size=batch_size)
