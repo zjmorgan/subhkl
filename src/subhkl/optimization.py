@@ -1709,6 +1709,16 @@ class FindUB:
             if "optimization/goniometer_offsets" in f:
                 b_gonio_offsets = f["optimization/goniometer_offsets"][()]
 
+            if "sample/U" in f:
+                U_initial = f["sample/U"][()]
+                from scipy.spatial.transform import Rotation as R
+                u_rot = R.from_matrix(U_initial)
+                rodrigues_vec = u_rot.as_rotvec()
+                if raw_x is None:
+                    raw_x = rodrigues_vec
+                else:
+                    raw_x[:3] = rodrigues_vec
+
         new_params = []
         if raw_x is not None:
             new_params.append(raw_x[:3])
