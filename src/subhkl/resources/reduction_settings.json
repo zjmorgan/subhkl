@@ -33,7 +33,7 @@
         "Name": "IMAGINE-X",
         "InstrumentName": "IMAGINE-X",
         "FancyName": "IMAGINE-X",
-        "Wavelength": [2, 4],
+        "Wavelength": [2.8, 10],
         "Goniometer": {
             "CG4D:Mot:DGONRa": [0, 1, 0, 1]
         },
@@ -52,7 +52,7 @@
         "BankPixels": [512, 512],
         "DeltaTheta": 0.0420,
         "Processes": 8,
-	"YAxisIsFastVaryingIndex": true
+        "YAxisIsFastVaryingIndex": true
     },
     "SNAP": {
         "Facility": "SNS",
