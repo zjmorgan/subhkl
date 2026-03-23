@@ -32,7 +32,7 @@ class SparseRBFPeakFinder:
     - Dyadic Scale Hierarchy (Powers of 2)
     - Halo Context Extraction (Prevents boundary truncation).
     - Upward Macro-Merge (Besov Pursuit via SSN L1 Projection).
-    - Unified Semi-Smooth Newton Solver with Fisher Scoring for Poisson NLL.
+    - Unified Semi-Smooth Newton Solver with Debiased Fisher Scoring.
     """
     def __init__(
         self,
@@ -58,7 +58,7 @@ class SparseRBFPeakFinder:
         self.base_window_size = 32      
         self.refine_patch_size = 15
         self.halo = 5  
-        self.max_local_peaks = 5  # Expanded capacity for dense strings
+        self.max_local_peaks = 5  
         
         dyadic_scales = []
         current_s = max_sigma
@@ -118,15 +118,15 @@ class SparseRBFPeakFinder:
         return final_image
 
     @staticmethod
-    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple, mask):
+    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple, opt_mask):
         H, W, min_s, max_s = bounds_tuple
         params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         
-        # Mask severes the gradient for all undiscovered dummy peaks
-        recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, mask)
+        # MASKING: Completely severs dummy peaks from the loss and geometric gradients
+        recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask)
         nll = 0.5 * jnp.sum((recon - target)**2)
         
-        intensities = jnp.abs(params_phys[:, 0]) * mask
+        intensities = jnp.abs(params_phys[:, 0]) * opt_mask
         sigmas = params_phys[:, 3]
         
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
@@ -206,7 +206,43 @@ class SparseRBFPeakFinder:
 
         init_state = (0, q_init, c_init, 1e9)
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
-        _, _, c_final, _ = final_state
+        _, _, c_l1, _ = final_state
+
+        # =========================================================================
+        # DEBIASING PHASE: Unregularized MLE to eliminate Soft-Thresholding Bias!
+        # =========================================================================
+        active_mask = c_l1 > 1e-5
+        if loss_type == 1:
+            active_mask = active_mask.at[-1].set(True) # Background scalar is always active
+
+        def debias_cond(state):
+            step, _, _, G_norm = state
+            return (step < 5) & (G_norm > 1e-4)
+
+        def debias_body(state):
+            step, q, c, _ = state
+            u = A_use @ c
+            if loss_type == 1:
+                u_safe = jnp.maximum(u, 1e-5)
+                grad = A_use.T @ (1.0 - y / u_safe)
+                W = 1.0 / jnp.maximum(u_safe, 1e-5)
+                hess = A_use.T @ (W[:, None] * A_use)
+            else:
+                grad = A_use.T @ (u - y)
+                hess = A_use.T @ A_use
+            
+            I = jnp.eye(N)
+            D_mat = jnp.diag(active_mask.astype(jnp.float32))
+            # Hessian optimized only on active parameters
+            DG = (I - D_mat) + hess @ D_mat + 1e-3 * I 
+            
+            dq = jnp.linalg.solve(DG, -grad)
+            q_new = q + dq * active_mask
+            c_new = jnp.maximum(0.0, q_new) * active_mask
+            return (step + 1, q_new, c_new, jnp.linalg.norm(grad * active_mask))
+
+        debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1, c_l1, 1e9))
+        _, _, c_final, _ = debias_state
 
         if loss_type == 1:
             return c_final[:-1] 
@@ -230,7 +266,7 @@ class SparseRBFPeakFinder:
         def step_fn(state, _):
             params, idx = state
             
-            # Mask to prevent undiscovered ghost atoms from interfering with gradients
+            # Mask to prevent uninitialized atoms from contributing
             current_mask = jnp.arange(max_peaks_local) < idx
             recon = self._predict_batch_physical(params, x_grid, current_mask)
             residual = patch_geom - recon 
@@ -256,8 +292,8 @@ class SparseRBFPeakFinder:
             is_strong = best_score > eff_alpha_scout
             new_peak = jnp.where(is_strong, new_peak, jnp.zeros(4))
             params = jnp_update_set(params, idx, new_peak)
-            
-            # The active mask for optimization includes the newly added peak
+
+            # Active mask includes the newly added peak
             opt_mask = jnp.arange(max_peaks_local) <= idx
 
             def run_opt(p):
@@ -277,7 +313,7 @@ class SparseRBFPeakFinder:
                 
                 A = vmap(eval_one)(r, col, sigma).T
                 
-                # Apply mask to strictly zero out columns of uninitialized dummy atoms
+                # Mask to completely secure uninitialized gradients
                 A_masked = A * opt_mask
                 
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
@@ -287,8 +323,9 @@ class SparseRBFPeakFinder:
                 c_sparse_stat = self._solve_ssn_unified(A_masked, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm)
                 c_sparse_norm = jnp.where(loss_code == 1, c_sparse_stat / global_max, c_sparse_stat)
                 
-                # Resecure the physical amplitudes
+                # Protect dummy zeroes
                 c_sparse_norm = c_sparse_norm * opt_mask
+                
                 return jnp.stack([c_sparse_norm, r, col, sigma], axis=1)
 
             params = run_opt(params)
@@ -319,7 +356,6 @@ class SparseRBFPeakFinder:
             
             augmented_dict = jnp.vstack([final_params, macro_atom])
             
-            # Combine the previous active mask with the new macro atom
             aug_mask = jnp.append(active_mask, True)
             
             c_warm_norm, r_aug, col_aug, sigma_aug = augmented_dict.T
@@ -568,7 +604,6 @@ class SparseRBFPeakFinder:
                 in_bounds = (global_rs > MARGIN) & (global_rs < H - MARGIN) & \
                             (global_cs > MARGIN) & (global_cs < W - MARGIN)
                             
-                # SSN implicitly enforces absolute L1 sparsity. We just drop unphysical boundaries.
                 final_mask = (valid_peaks[:, 0] > 1e-5) & in_bounds
                 
                 for k in range(len(final_mask)):
@@ -660,8 +695,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_init = jnp.max(patch) + 1e-6
                 init_phys = jnp.array([[c_init, float(half_p), float(half_p), 2.0]])
                 init_raw = self._to_unconstrained(init_phys, *bounds)
-
-                # Mask is unused here because we only fit 1 peak
                 opt_mask = jnp.ones(1, dtype=bool)
 
                 res = jax.scipy.optimize.minimize(
