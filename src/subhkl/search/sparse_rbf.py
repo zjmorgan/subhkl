@@ -339,7 +339,12 @@ class SparseRBFPeakFinder:
                     peaks_padded[b, n:, 3] = 1.0 
             counts_per_image[b] = n
 
-        loss_code = 1 if self.loss == 'poisson' else 0
+        if self.loss == 'poisson':
+            loss_code = 1
+        elif self.loss == 'gaussian':
+            loss_code = 0
+        else:
+            raise ValueError("Unsupported loss. Not 'gaussian' or 'poisson'")
 
         @jit
         def process_one_image(peaks, target, k_val):
