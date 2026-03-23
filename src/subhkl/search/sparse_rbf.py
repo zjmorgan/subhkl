@@ -116,7 +116,7 @@ class SparseRBFPeakFinder:
         return final_image
 
     @staticmethod
-    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple, loss_type):
+    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple):
         # Coordinate refinement ALWAYS utilizes Gaussian L2 on the normalized target 
         # to guarantee geometric stability against explosive Poisson NLL gradients.
         H, W, min_s, max_s = bounds_tuple
@@ -127,7 +127,7 @@ class SparseRBFPeakFinder:
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
         
-        # CORRECT PENALTY: Penalty scales directly with volume (broad peaks cost more)
+        # DIRECT PENALTY (Crystallography convention): Broad peaks get heavily penalized
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
@@ -143,9 +143,9 @@ class SparseRBFPeakFinder:
         # 1. Statistical Routing: Only append background atom for raw Poisson data
         if loss_type == 1:
             A_use = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
-            alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background atom
+            alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
             c_init = jnp.append(c_warm, jnp.maximum(jnp.mean(y), 1e-2))
-        else: # Gaussian
+        else:
             A_use = A
             alpha_pad = alpha_vec
             c_init = c_warm
@@ -161,7 +161,6 @@ class SparseRBFPeakFinder:
                 grad = A_use.T @ (1.0 - y / u_safe)
                 
                 # Fisher Scoring: Expected Hessian = A^T diag(1/u) A
-                # This mathematically cures the singular Hessian problem where y=0
                 W = 1.0 / jnp.maximum(u_safe, 1e-5)
                 hess = A_use.T @ (W[:, None] * A_use)
             else: # Gaussian L2
@@ -248,10 +247,12 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                # BESOV HEURISTIC: Compare correlation against the volume penalty.
-                # Since penalty scales as s**gamma, the comparable score is raw_dot / s**gamma.
+                atom_norm = s * jnp.sqrt(jnp.pi)
+                proj_score = raw_dot / (atom_norm + 1e-9)
+                
+                # INVERSE SCORE: Discount broad peaks heavily to favor sharp peaks
                 prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
-                final_score = raw_dot * prior_weight
+                final_score = proj_score * prior_weight
                 
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
@@ -270,7 +271,7 @@ class SparseRBFPeakFinder:
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, patch_geom, eff_alpha_scout, self.gamma, self.ref_sigma, bounds, 0),
+                    args=(x_grid, patch_geom, eff_alpha_scout, self.gamma, self.ref_sigma, bounds),
                     method='BFGS',
                     options={'maxiter': 5}
                 )
@@ -285,7 +286,7 @@ class SparseRBFPeakFinder:
                 # Scale warm-start amplitudes to raw counts if Poisson
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
                 
-                # CORRECT PENALTY: Penalty scales directly with volume
+                # DIRECT PENALTY (Crystallography convention)
                 weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
@@ -316,7 +317,7 @@ class SparseRBFPeakFinder:
         
         A = vmap(eval_one)(r, col, sigma).T
         
-        # CORRECT PENALTY: Penalty scales directly with volume
+        # DIRECT PENALTY (Crystallography convention)
         weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
         alpha_vec_stat = eff_alpha_stat * weights
         
@@ -566,6 +567,11 @@ class SparseRBFPeakFinder:
                 for atom in active_atoms:
                     intensity_norm, local_r, local_c, sigma = atom
                     
+                    # Restored: Manual Score Filter to rigorously drop low-intensity noise spikes
+                    vol_factor = (sigma / self.ref_sigma) ** 2
+                    besov_factor = (sigma / self.ref_sigma) ** self.gamma
+                    score = intensity_norm * vol_factor * besov_factor
+                    
                     global_r = r_center_int - (P // 2) - self.halo + local_r
                     global_c = c_center_int - (P // 2) - self.halo + local_c
                     
@@ -573,8 +579,7 @@ class SparseRBFPeakFinder:
                     in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
                                 (global_c > MARGIN) & (global_c < W - MARGIN)
 
-                    # SSN solver natively asserts L1 projection rigorously, no manual score check needed
-                    if intensity_norm > 1e-5 and in_bounds:
+                    if score > eff_alpha_norm and in_bounds:
                         refined_peaks_by_bank[b_id].append(np.array([intensity_norm, global_r, global_c, sigma]))
 
         final_coords_output = []
