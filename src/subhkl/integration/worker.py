@@ -159,8 +159,8 @@ def process_single_image(
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]
                 axes[1].imshow(overlay, origin="lower")
-            for _, hull, _, _ in hulls:
-                if hull is not None:
+            for valid, (_, hull, _, _) in zip(keep, hulls):
+                if valid:
                     for simplex in hull.simplices:
                         axes[1].plot(
                             hull.points[simplex, 1],
