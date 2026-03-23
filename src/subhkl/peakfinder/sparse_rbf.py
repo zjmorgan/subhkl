@@ -137,56 +137,71 @@ class SparseRBFPeakFinder:
         return nll + reg
 
     @staticmethod
-    def _solve_pdas_mini(Ht, At_y, alpha_vec, max_iter=15):
-        Ht = Ht.astype(jnp.float32)
-        At_y = At_y.astype(jnp.float32)
-        alpha_vec = alpha_vec.astype(jnp.float32)
-        N = Ht.shape[0]
-        
-        def obj(u):
-            quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y)
-            return quad + jnp.sum(alpha_vec * u)
-            
-        u_init = jnp.zeros(N, dtype=jnp.float32)
-        q_clamped = jnp.minimum(At_y, jnp.float32(1.0 - 1e-6) * alpha_vec).astype(jnp.float32)
-        
-        def cond_fun(state):
-            step, _, _, Gq_norm = state
-            return (step < max_iter) & (Gq_norm > jnp.float32(1e-5))
-            
-        def body_fun(state):
-            step, q, u, _ = state
-            Gq = (q - u) + (Ht @ u) - At_y
-            D = (q > alpha_vec).astype(jnp.float32)
-            I = jnp.eye(N, dtype=jnp.float32)
-            DP_mat = jnp.diag(D)
-            DG = (I - DP_mat) + Ht @ DP_mat + jnp.float32(1e-5) * I
-            dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
-            
-            def bt_cond(bt_state):
-                bt_i, tau, _, _, j_test, j_curr = bt_state
-                return (bt_i < 5) & (j_test > j_curr * jnp.float32(1.0 + 1e-7))
-                
-            def bt_body(bt_state):
-                bt_i, tau, _, _, _, j_curr = bt_state
-                tau = jnp.float32(tau * 0.5)
-                q_test = q + tau * dq
-                c_test = jnp.maximum(jnp.float32(0.0), q_test - alpha_vec)
-                j_test = obj(c_test)
-                return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
-                
-            q_init_test = q + dq
-            c_init_test = jnp.maximum(jnp.float32(0.0), q_init_test - alpha_vec)
-            bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, c_init_test, obj(c_init_test), obj(u))
-            bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
-            _, _, q_final, u_final, _, _ = bt_final
-            
-            return (step + 1, q_final, u_final, jnp.linalg.norm(Gq).astype(jnp.float32))
-            
-        init_state = (jnp.int32(0), q_clamped, u_init, jnp.float32(1e9))
-        final_state = lax.while_loop(cond_fun, body_fun, init_state)
-        _, _, u_prime, _ = final_state
-        return u_prime
+    @partial(jit, static_argnames=['max_iter'])
+    def _solve_pgd_poisson(A, y, alpha_vec, max_iter=200):
+        """
+        Proximal Gradient Descent (with Nesterov Acceleration) for L1-regularized Poisson NLL.
+
+        Args:
+            A: Basis matrix of shape (N_pixels, N_atoms)
+            y: Raw photon counts of shape (N_pixels,)
+            alpha_vec: Besov penalty vector of shape (N_atoms,)
+        """
+        N_atoms = A.shape[1]
+
+        # We add a dummy column of 1s to A to act as the Local Background Atom.
+        # It will not have an L1 penalty, so it can freely absorb the noise floor.
+        A_bg = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
+
+        # Initialize amplitudes (c) and background (bg)
+        c_init = jnp.zeros(N_atoms + 1)
+
+        # FISTA variables
+        t_init = jnp.float32(1.0)
+
+        def body_fn(state):
+            step, c_curr, c_prev, t_curr = state
+
+            # 1. Nesterov Momentum step
+            c_y = c_curr + ((t_curr - 1.0) / t_curr) * (c_curr - c_prev)
+
+            # 2. Forward Model
+            recon = A_bg @ c_y
+            recon_safe = jnp.maximum(recon, 1e-6) # Prevent division by zero
+
+            # 3. Poisson Gradient: A^T * (1 - target/recon)
+            grad = A_bg.T @ (1.0 - y / recon_safe)
+
+            # Dynamic learning rate (Backtracking line search is safer, but 1/Lipshitz works)
+            # The Lipshitz constant for Poisson is roughly bounded by max(A) / min(recon)
+            lr = 0.5
+
+            # 4. Gradient Descent Step
+            c_next_unproxed = c_y - lr * grad
+
+            # 5. Proximal Step (Soft Thresholding for L1 + Non-Negativity)
+            # We do NOT apply the L1 penalty to the background atom (the last index)
+            alpha_padded = jnp.append(alpha_vec, 0.0)
+            c_next = jnp.maximum(0.0, c_next_unproxed - lr * alpha_padded)
+
+            # 6. Update Momentum
+            t_next = (1.0 + jnp.sqrt(1.0 + 4.0 * t_curr**2)) / 2.0
+
+            return (step + 1, c_next, c_curr, t_next)
+
+        def cond_fn(state):
+            step, c_curr, c_prev, _ = state
+            # Stop if max_iter is reached OR if the change is below tolerance
+            diff = jnp.linalg.norm(c_curr - c_prev)
+            return (step < max_iter) & ((step < 5) | (diff > 1e-4))
+
+        init_state = (0, c_init, c_init, t_init)
+        final_state = lax.while_loop(cond_fn, body_fn, init_state)
+
+        _, c_final, _, _ = final_state
+
+        # Return only the Gaussian atom amplitudes (discard the background scalar)
+        return c_final[:-1]
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local'])
     def _solve_dense(self, image, H, W, max_peaks_local):
@@ -245,14 +260,12 @@ class SparseRBFPeakFinder:
                 c, r, col, sigma = p_refined.T
                 def eval_one(ri, ci_col, si):
                     return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
-                
+
                 A = vmap(eval_one)(r, col, sigma).T
-                Ht = A.T @ A
-                At_y = A.T @ image.flatten() 
 
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec = self.alpha * weights
-                c_sparse = self._solve_pdas_mini(Ht, At_y, alpha_vec)
+                c_sparse = self._solve_pgd_poisson(A, patch.flatten(), alpha_vec)
                 return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
             params = run_opt(params)
@@ -271,18 +284,15 @@ class SparseRBFPeakFinder:
         c_init, r, col, sigma = augmented_dict.T
         yy, xx = jnp.indices((window_size, window_size))
         x_grid = jnp.array([yy, xx])
-        
+
         def eval_one(ri, ci_col, si):
             return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
-        
+
         A = vmap(eval_one)(r, col, sigma).T
-        Ht = A.T @ A
-        At_y = A.T @ patch.flatten() 
 
         weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
         alpha_vec = self.alpha * weights
-        
-        c_sparse = self._solve_pdas_mini(Ht, At_y, alpha_vec)
+        c_sparse = self._solve_pgd_poisson(A, patch.flatten(), alpha_vec)
         return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
     def compute_metrics(self, images_norm, peaks_list, global_max):
@@ -355,11 +365,7 @@ class SparseRBFPeakFinder:
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
-        medians = np.median(images_batch, axis=(1, 2), keepdims=True)
-        images_bg_corr = np.maximum(images_batch - medians, 0)
-        global_max = images_bg_corr.max() + 1e-9
-        images_norm = images_bg_corr / global_max
-        img_jax = jnp.array(images_norm)
+        img_jax = jnp.array(images_batch)
         
         if self.show_steps:
             print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
