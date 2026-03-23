@@ -386,7 +386,8 @@ class SparseRBFPeakFinder:
             print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
 
         PAD_GLOBAL = 32
-        img_jax_scout = jnp.pad(jnp.array(images_norm), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+        # FIX: Explicitly name the padded arrays
+        img_jax_scout_padded = jnp.pad(jnp.array(images_norm), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
         # 2. Target Routing and Alpha scaling
         # We ensure user's alpha acts universally regardless of underlying scale or loss
@@ -399,10 +400,10 @@ class SparseRBFPeakFinder:
         eff_alpha_scout = eff_alpha_norm * 0.1 
 
         if self.loss == 'poisson':
-            img_jax_sniper = jnp.pad(jnp.array(images_batch), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+            img_jax_sniper_padded = jnp.pad(jnp.array(images_batch), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
             eff_alpha_stat = self.alpha if self.alpha >= 1.0 else self.alpha * global_max
         else:
-            img_jax_sniper = img_jax_scout
+            img_jax_sniper_padded = img_jax_scout_padded
             eff_alpha_stat = eff_alpha_norm
 
         # =====================================================================
@@ -433,7 +434,8 @@ class SparseRBFPeakFinder:
         scout_results = []
         for i in range(0, total_scout_wins, self.chunk_size):
             chunk = window_coords_arr[i:i+self.chunk_size]
-            wins_geom = extract_scout_window(img_jax_scout, chunk[:, 0], chunk[:, 1], chunk[:, 2])
+            # FIX: Use the properly named padded array
+            wins_geom = extract_scout_window(img_jax_scout_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
             res = scout_solver(wins_geom, wins_geom)
             res.block_until_ready()
             
@@ -508,6 +510,7 @@ class SparseRBFPeakFinder:
         for i in range(0, total_seeds, self.chunk_size):
             chunk = all_seeds[i:i+self.chunk_size]
             
+            # FIX: Extracted from the properly named padded arrays
             patches_geom = extract_patch_with_halo(img_jax_scout_padded, jnp.array(chunk))
             patches_stat = extract_patch_with_halo(img_jax_sniper_padded, jnp.array(chunk))
             
@@ -594,10 +597,10 @@ class SparseRBFPeakFinder:
                 final_peaks_full.append(np.empty((0, 4)))
                 final_coords_output.append(np.empty((0, 3)))
         
-        self.compute_metrics(img_jax_scout, final_peaks_full, global_max)
+        # FIX: The original raw array should be passed here to correctly calculate deviance
+        self.compute_metrics(images_norm, final_peaks_full, global_max)
         
         return final_coords_output
-
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
