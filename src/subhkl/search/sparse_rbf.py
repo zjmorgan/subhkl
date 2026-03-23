@@ -479,11 +479,15 @@ class SparseRBFPeakFinder:
             # Upward: Dense-to-Coarse Merging (The Besov Pursuit)
             for batch_idx in range(len(chunk)):
                 b_id = int(chunk[batch_idx, 0])
+                
+                # FIX: Capture the exact integer grid coordinates used for the slice
+                r_center_int = int(chunk[batch_idx, 1])
+                c_center_int = int(chunk[batch_idx, 2])
+                
                 local_peaks = res_cpu[batch_idx] 
                 
                 active_mask = local_peaks[:, 0] > 1e-9
-                active_atoms = local_peaks[active_mask]
-                
+                active_atoms = local_peaks[active_mask]                
                 if len(active_atoms) == 0:
                     continue
                     
@@ -515,18 +519,19 @@ class SparseRBFPeakFinder:
                 # Map surviving atoms back to global coordinates
                 for atom in active_atoms:
                     intensity, local_r, local_c, sigma = atom
-                    
+
                     vol_factor = (sigma / self.ref_sigma) ** 2
                     besov_factor = (sigma / self.ref_sigma) ** self.gamma
                     score = intensity * vol_factor * besov_factor
-                    
-                    global_r = chunk[batch_idx, 1] - (P // 2) - self.halo + local_r
-                    global_c = chunk[batch_idx, 2] - (P // 2) - self.halo + local_c
-                    
+
+                    # FIX: Reconstruct using the integer anchor, NOT the float seed
+                    global_r = r_center_int - (P // 2) - self.halo + local_r
+                    global_c = c_center_int - (P // 2) - self.halo + local_c
+
                     MARGIN = 10
                     in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
                                 (global_c > MARGIN) & (global_c < W - MARGIN)
-                                
+
                     if score > self.alpha and in_bounds:
                         refined_peaks_by_bank[b_id].append(np.array([intensity, global_r, global_c, sigma]))
 
