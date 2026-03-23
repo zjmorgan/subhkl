@@ -95,6 +95,7 @@ def prepare_harvest_tasks(
         alg = SparseRBFPeakFinder(
             alpha=harvest_peaks_kwargs.get("alpha", 0.1),
             gamma=harvest_peaks_kwargs.get("gamma", 2.0),
+            loss=harvest_peaks_kwargs.get("loss", "gaussian"),
             min_sigma=harvest_peaks_kwargs.get("min_sigma", 1.0),
             max_sigma=harvest_peaks_kwargs.get("max_sigma", 10.0),
             max_peaks=harvest_peaks_kwargs.get("max_peaks", 500),

@@ -284,6 +284,7 @@ def finder(
     sparse_rbf_chunk_size: int = 4096,  # reduce if OOM
     sparse_rbf_tile_rows: int = 2,  # NEW: Number of row divisions for tiling
     sparse_rbf_tile_cols: int = 2,  # NEW: Number of col divisions for tiling
+    sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
     max_workers: int = 16,
 ):
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -326,6 +327,7 @@ def finder(
                 "show_steps": show_steps,
                 "show_scale": "linear",
                 "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
+                "loss": sparse_rbf_loss,
             }
         )
     else:
