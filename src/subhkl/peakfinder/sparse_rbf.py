@@ -58,7 +58,7 @@ class SparseRBFPeakFinder:
         self.base_window_size = 32      
         self.refine_patch_size = 15
         self.halo = 5  
-        self.max_local_peaks = 5
+        self.max_local_peaks = 5  # Expanded capacity for dense clusters
         
         dyadic_scales = []
         current_s = max_sigma
@@ -125,7 +125,7 @@ class SparseRBFPeakFinder:
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
         
-        # DIRECT PENALTY (Cost)
+        # DIRECT PENALTY
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
@@ -236,8 +236,6 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                # INVERSE HEURISTIC: Cost is proportional to sigma**gamma, 
-                # so the L1 admission score divides by sigma**gamma to discount expensive broad peaks.
                 weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = raw_dot * weight
                 
@@ -271,8 +269,6 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T
                 
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
-                
-                # DIRECT PENALTY
                 weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
@@ -487,7 +483,9 @@ class SparseRBFPeakFinder:
             if len(cands_sorted) > 1:
                 dists = squareform(pdist(cands_sorted))
                 np.fill_diagonal(dists, 9999.0)
-                radius = 3.0
+                
+                # FIX 1: Allow dense seeds to pass to the Sniper phase! SSN handles pruning.
+                radius = 1.5
                 for i in range(len(cands_sorted)):
                     if keep[i]:
                         neighbors = np.where(dists[i] < radius)[0]
@@ -552,7 +550,6 @@ class SparseRBFPeakFinder:
                 in_bounds = (global_rs > MARGIN) & (global_rs < H - MARGIN) & \
                             (global_cs > MARGIN) & (global_cs < W - MARGIN)
                             
-                # SSN implicitly enforces exact sparsity. We just drop boundary artifacts.
                 final_mask = (valid_peaks[:, 0] > 1e-5) & in_bounds
                 
                 for k in range(len(final_mask)):
@@ -573,16 +570,20 @@ class SparseRBFPeakFinder:
                 peaks_sorted = peaks[order]
                 keep = np.ones(len(peaks_sorted), dtype=bool)
                 coords = peaks_sorted[:, 1:3]
-                sigmas = peaks_sorted[:, 3]
+                
                 if len(coords) > 1:
                     dists = squareform(pdist(coords))
                     np.fill_diagonal(dists, 9999.0)
+                    
+                    # FIX 2: Only merge exact sub-pixel duplicates created by overlapping sliding windows. 
+                    # Do NOT kill distinct peaks just because they are broad!
+                    r = 1.5 
                     for i in range(len(coords)):
                         if keep[i]:
-                            r = max(2.0, sigmas[i])
                             neighbors = np.where(dists[i] < r)[0]
                             neighbors = neighbors[neighbors > i]
                             keep[neighbors] = False
+                            
                 unique_peaks = peaks_sorted[keep]
                 final_peaks_full.append(unique_peaks)
                 final_coords_output.append(unique_peaks) 
