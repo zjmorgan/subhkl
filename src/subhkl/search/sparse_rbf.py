@@ -138,29 +138,33 @@ class SparseRBFPeakFinder:
         Unified Semi-Smooth Newton Solver using the Robinson Normal Map.
         Utilizes Fisher Scoring for Poisson NLL to prevent zero-curvature explosion.
         """
-        # Append the Local Background Atom (A column of 1s to safely absorb noise floor)
-        A_bg = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
-        alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
-        N = A_bg.shape[1]
+        # 1. Statical Routing: Only append background atom for raw Poisson data
+        if loss_type == 1:
+            A_use = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
+            alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
+            c_init = jnp.append(c_warm, jnp.maximum(jnp.mean(y), 1e-2))
+        else:
+            A_use = A
+            alpha_pad = alpha_vec
+            c_init = c_warm
 
-        # Warm start the amplitudes to bypass Poisson initialization explosion
-        c_init = jnp.append(c_warm, jnp.maximum(jnp.mean(y), 1e-2))
+        N = A_use.shape[1]
         q_init = c_init
 
         def get_loss_grad_hess(c):
-            u = A_bg @ c
+            u = A_use @ c
             if loss_type == 1: # Poisson NLL
                 u_safe = jnp.maximum(u, 1e-5)
                 nll = jnp.sum(u_safe - y * jnp.log(u_safe))
-                grad = A_bg.T @ (1.0 - y / u_safe)
+                grad = A_use.T @ (1.0 - y / u_safe)
+                
                 # Fisher Scoring: Expected Hessian = A^T diag(1/u) A
-                # This mathematically cures the singular Hessian problem where y=0
                 W = 1.0 / jnp.maximum(u_safe, 1e-5)
-                hess = A_bg.T @ (W[:, None] * A_bg)
+                hess = A_use.T @ (W[:, None] * A_use)
             else: # Gaussian L2
                 nll = 0.5 * jnp.sum((u - y)**2)
-                grad = A_bg.T @ (u - y)
-                hess = A_bg.T @ A_bg
+                grad = A_use.T @ (u - y)
+                hess = A_use.T @ A_use
                 
             reg = jnp.sum(alpha_pad * c)
             return nll + reg, grad, hess
@@ -209,7 +213,11 @@ class SparseRBFPeakFinder:
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
         _, _, c_final, _ = final_state
 
-        return c_final[:-1] # Strip background scalar, return RBF amplitudes
+        # 2. Re-Route Output
+        if loss_type == 1:
+            return c_final[:-1] # Strip background scalar
+        else:
+            return c_final      # Return all RBF amplitudes
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code'])
     def _solve_dense(self, patch_geom, patch_stat, global_max, eff_alpha_scout, eff_alpha_stat, H, W, max_peaks_local, loss_code):
