@@ -5,11 +5,9 @@ from jax import jit, vmap, lax
 from functools import partial
 import jax.scipy.optimize
 import jax.scipy.signal
-import sys
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
-# Import JAX with fallback from utils (centralized)
 from subhkl.utils.shim import (
     HAS_JAX,
     jax,
@@ -25,33 +23,26 @@ if HAS_JAX:
     import jax.scipy.optimize
     import jax.scipy.signal
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    tqdm = lambda x, **kwargs: x
-
 class SparseRBFPeakFinder:
     """
-    JAX-Native 2-Stage Sparse RBF Peak Finder.
+    Hierarchical Sparse RBF Peak Finder with Symmetric V-Cycle Basis Pursuit.
     
     Features:
-    - Scout-Sniper 2-stage detection.
-    - L2-Normalized Greedy Selection (Corrects sigma bias).
-    - Chunked Reconstruction (Fixes compiler hang & OOM).
-    - Besov Regularization (sigma^gamma penalty).
+    - Dyadic Scale Hierarchy (Powers of 2)
+    - Scout-Sniper multi-atom detection.
+    - Halo Context Extraction (Prevents boundary truncation).
+    - Upward Macro-Merge (Besov Pursuit via PDAS L1 Projection).
     """
     def __init__(
         self,
         alpha: float = 0.05,            
         gamma: float = 2.0,             
-        min_sigma: float = 0.2,         
-        max_sigma: float = 10.0,
+        min_sigma: float = 0.5,         
+        max_sigma: float = 8.0,
         max_peaks: int = 500,           
         chunk_size: int = 1024,
         loss: str = 'gaussian',
-        show_steps: bool = False,
-        show_scale: str = "linear",
-        tiles: tuple = None 
+        show_steps: bool = False
     ):
         self.alpha = alpha
         self.gamma = gamma
@@ -64,20 +55,25 @@ class SparseRBFPeakFinder:
         self.show_steps = show_steps
         
         self.base_window_size = 32      
-        self.refine_patch_size = 15     
+        self.refine_patch_size = 15
+        self.halo = 5  # Context buffer for boundary-safe optimization
+        self.max_local_peaks = 3  # Capacity for the bottom of the V-cycle
         
-        # Log-spaced sigmas for search
-        self.candidate_sigmas = jnp.geomspace(min_sigma, max_sigma, num=10)
+        # Dyadic scale progression (powers of two) for hierarchical evaluation
+        dyadic_scales = []
+        current_s = max_sigma
+        while current_s >= min_sigma:
+            dyadic_scales.append(current_s)
+            current_s /= 2.0
+        self.candidate_sigmas = jnp.array(dyadic_scales)
 
     @staticmethod
     def _rbf_basis(x_grid, y, sigma):
-        """Gaussian Radial Basis Function (Height=1)."""
         dist_sq = (x_grid[0] - y[0])**2 + (x_grid[1] - y[1])**2
         return jnp.exp(-dist_sq / (2.0 * sigma**2 + 1e-6))
 
     @staticmethod
     def _to_physical(params_raw, H, W, min_s, max_s):
-        """Unconstrained -> Physical Parameters."""
         params_reshaped = params_raw.reshape((-1, 4))
         c_raw, r_raw, c_col_raw, s_raw = params_reshaped.T
         c = jax.nn.softplus(c_raw)
@@ -88,7 +84,6 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _to_unconstrained(params_phys, H, W, min_s, max_s):
-        """Physical -> Unconstrained Parameters."""
         c, r, col, sigma = params_phys.T
         c_safe = jnp.maximum(c, 1e-9)
         c_raw = jnp.log(jnp.expm1(c_safe))
@@ -103,7 +98,6 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _predict_batch_physical(params_phys, x_grid):
-        """Reconstruction for small batches (Solver)."""
         c, r, c_col, sigma = params_phys.T
         def eval_one(ci, ri, ci_col, si):
             return ci * SparseRBFPeakFinder._rbf_basis(x_grid, jnp.array([ri, ci_col]), si)
@@ -112,7 +106,6 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _predict_batch_scan(params_phys, x_grid):
-        """Memory-efficient scan reconstruction (for full image metrics)."""
         def body(carry, param):
             c, r, col, sigma = param
             term = c * SparseRBFPeakFinder._rbf_basis(x_grid, jnp.array([r, col]), sigma)
@@ -128,16 +121,15 @@ class SparseRBFPeakFinder:
         params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid)
         
-        if loss_type == 1: # Poisson
+        if loss_type == 1: 
             recon_safe = jnp.maximum(recon, 1e-9)
             nll = jnp.sum(recon_safe - target * jnp.log(recon_safe))
-        else: # Gaussian
+        else: 
             nll = 0.5 * jnp.sum((recon - target)**2)
         
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
         
-        # Besov Norm (L1 of coeffs in normalized basis)
         sigma_ratio = sigmas / ref_s
         reg_weight = sigma_ratio ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
@@ -146,16 +138,9 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _solve_pdas_mini(Ht, At_y, alpha_vec, max_iter=15):
-        """
-        Primal-Dual Active Set (Semi-Smooth Newton) solver for tiny sub-matrices.
-        Enforces exact L1 sparsity (NN-Lasso) on amplitudes.
-        Strictly typed to float32 to prevent lax.while_loop cast errors.
-        """
-        # 1. Force all incoming matrices to 32-bit
         Ht = Ht.astype(jnp.float32)
         At_y = At_y.astype(jnp.float32)
         alpha_vec = alpha_vec.astype(jnp.float32)
-        
         N = Ht.shape[0]
         
         def obj(u):
@@ -163,9 +148,6 @@ class SparseRBFPeakFinder:
             return quad + jnp.sum(alpha_vec * u)
             
         u_init = jnp.zeros(N, dtype=jnp.float32)
-        
-        # 2. Safe float32 init: Start just below active threshold
-        # (1e-14 is too small for float32 precision, using 1e-6)
         q_clamped = jnp.minimum(At_y, jnp.float32(1.0 - 1e-6) * alpha_vec).astype(jnp.float32)
         
         def cond_fun(state):
@@ -174,21 +156,13 @@ class SparseRBFPeakFinder:
             
         def body_fun(state):
             step, q, u, _ = state
-            
             Gq = (q - u) + (Ht @ u) - At_y
-            
-            # PDAS Active Set Mask
             D = (q > alpha_vec).astype(jnp.float32)
-            
-            # Semi-Smooth Newton Step
             I = jnp.eye(N, dtype=jnp.float32)
             DP_mat = jnp.diag(D)
             DG = (I - DP_mat) + Ht @ DP_mat + jnp.float32(1e-5) * I
-            
-            # Force solver output back to 32-bit
             dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
             
-            # Line Search
             def bt_cond(bt_state):
                 bt_i, tau, _, _, j_test, j_curr = bt_state
                 return (bt_i < 5) & (j_test > j_curr * jnp.float32(1.0 + 1e-7))
@@ -203,7 +177,6 @@ class SparseRBFPeakFinder:
                 
             q_init_test = q + dq
             c_init_test = jnp.maximum(jnp.float32(0.0), q_init_test - alpha_vec)
-            
             bt_init = (jnp.int32(0), jnp.float32(1.0), q_init_test, c_init_test, obj(c_init_test), obj(u))
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, u_final, _, _ = bt_final
@@ -213,12 +186,8 @@ class SparseRBFPeakFinder:
         init_state = (jnp.int32(0), q_clamped, u_init, jnp.float32(1e9))
         final_state = lax.while_loop(cond_fun, body_fun, init_state)
         _, _, u_prime, _ = final_state
-        
         return u_prime
 
-    # =========================================================================
-    # KERNEL: DENSE SOLVER
-    # =========================================================================
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local'])
     def _solve_dense(self, image, H, W, max_peaks_local):
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
@@ -239,31 +208,17 @@ class SparseRBFPeakFinder:
             recon = self._predict_batch_physical(params, x_grid)
             residual = image - recon
             
-            # --- GREEDY SELECTION (OMP Style) ---
             def check_sigma(s):
-                # 1. Unnormalized kernel (matches basis function shape)
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
-                
-                # 2. Correlate (Compute inner product <Resid, Phi>)
                 corr = jax.scipy.signal.correlate2d(residual, kernel_raw, mode='same')
-                
-                # 3. Find Max Correlation
                 flat_idx = jnp.argmax(jnp.abs(corr))
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                # 4. Normalize Projection (L2 Norm of Atom)
-                # Norm_L2 = s * sqrt(pi) (approx for 2D Gaussian)
-                # This ensures we pick the atom that best explains the residual *energy*
-                # irrespective of scale. Removes bias towards large sigma.
                 atom_norm = s * jnp.sqrt(jnp.pi)
                 proj_score = raw_dot / (atom_norm + 1e-9)
-                
-                # 5. Apply Prior Weighting
-                # Adjust selection order based on Besov prior preference
                 prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = proj_score * prior_weight
-
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
 
@@ -272,16 +227,11 @@ class SparseRBFPeakFinder:
             best_score = vals[best_idx]
             new_peak = candidates[best_idx]
             
-            # Admission Gate
             is_strong = best_score > self.alpha
             new_peak = jnp.where(is_strong, new_peak, jnp.zeros(4))
-        
-            # Coordinate Descent / BFGS Refinement
             params = jnp_update_set(params, idx, new_peak)
 
-            # Coordinate Descent / BCD Refinement
             def run_opt(p):
-                # Step 1: Smooth Continuous Refinement (BFGS)
                 p_raw = self._to_unconstrained(p, *bounds)
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
@@ -292,25 +242,17 @@ class SparseRBFPeakFinder:
                 )
                 p_refined = self._to_physical(res.x, *bounds)
                 
-                # Step 2: PDAS Active Set Pruning (Semi-Smooth L1)
                 c, r, col, sigma = p_refined.T
-                
                 def eval_one(ri, ci_col, si):
-                    # FLATTEN is required to convert the 2D image shape into a 1D column vector!
                     return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
                 
-                # Build local dictionary A for the active shapes
                 A = vmap(eval_one)(r, col, sigma).T
                 Ht = A.T @ A
                 At_y = A.T @ image.flatten() 
 
-                # Besov regularized penalty weights
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec = self.alpha * weights
-                
-                # Solve strictly for sparse amplitudes
                 c_sparse = self._solve_pdas_mini(Ht, At_y, alpha_vec)
-                
                 return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
             params = run_opt(params)
@@ -320,19 +262,36 @@ class SparseRBFPeakFinder:
         final_params, _ = final_state
         return final_params
 
-    # =========================================================================
-    # METRICS
-    # =========================================================================
+    @partial(jit, static_argnames=['self', 'window_size'])
+    def _run_pdas_merge_eval(self, patch, augmented_dict, window_size):
+        """
+        Takes an augmented dictionary (fine atoms + macro atom) and evaluates them 
+        against the patch residual using the exact Semi-Smooth Newton L1 projection.
+        """
+        c_init, r, col, sigma = augmented_dict.T
+        yy, xx = jnp.indices((window_size, window_size))
+        x_grid = jnp.array([yy, xx])
+        
+        def eval_one(ri, ci_col, si):
+            return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
+        
+        A = vmap(eval_one)(r, col, sigma).T
+        Ht = A.T @ A
+        At_y = A.T @ patch.flatten() 
+
+        weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
+        alpha_vec = self.alpha * weights
+        
+        c_sparse = self._solve_pdas_mini(Ht, At_y, alpha_vec)
+        return jnp.stack([c_sparse, r, col, sigma], axis=1)
+
     def compute_metrics(self, images_norm, peaks_list, global_max):
-        """
-        Computes metrics using a Python loop over the batch, running a JIT 
-        kernel per image. This prevents the XLA input_reduce_fusion compilation hang.
-        """
         B, H, W = images_norm.shape
         yy, xx = np.indices((H, W))
         x_grid = jnp.array([yy, xx])
         
-        print("\n  [Metrics] Calculating goodness-of-fit...")
+        if self.show_steps:
+            print("\n  [Metrics] Calculating goodness-of-fit...")
 
         max_k = max([len(p) for p in peaks_list] + [1])
         peaks_padded = np.zeros((B, max_k, 4), dtype=np.float32)
@@ -344,16 +303,14 @@ class SparseRBFPeakFinder:
                 peaks_padded[b, :n, :] = peaks_list[b]
                 peaks_padded[b, :n, 0] *= global_max
                 if n < max_k:
-                    peaks_padded[b, n:, 3] = 1.0 # Safe sigma
+                    peaks_padded[b, n:, 3] = 1.0 
             counts_per_image[b] = n
 
         loss_code = 1 if self.loss == 'poisson' else 0
 
-        # JIT compile for a SINGLE image. Extremely fast compilation.
         @jit
         def process_one_image(peaks, target, k_val):
             recon = self._predict_batch_scan(peaks, x_grid) 
-            
             recon = jnp.maximum(recon, 1e-9)
             target = jnp.maximum(target, 1e-9)
             
@@ -371,18 +328,14 @@ class SparseRBFPeakFinder:
             bic = n_params * jnp.log(n_pix) + 2 * nll
             return nll, bic, dev
 
-        nll_total = 0.0
-        bic_total = 0.0
-        deviance_total = 0.0
+        nll_total, bic_total, deviance_total = 0.0, 0.0, 0.0
         
-        # Python loop completely isolates the batch dimension from XLA fusion
         for b in range(B):
             nll, bic, dev = process_one_image(
                 jnp.array(peaks_padded[b]), 
                 jnp.array(images_norm[b] * global_max), 
                 jnp.array(counts_per_image[b])
             )
-            # Casting to float auto-blocks until ready
             nll_total += float(nll)
             bic_total += float(bic)
             deviance_total += float(dev)
@@ -392,32 +345,31 @@ class SparseRBFPeakFinder:
         dof = max(pixels_total - params_total, 1)
         dev_per_dof = deviance_total / dof
         
-        print(f"  > Total NLL: {nll_total:.2e}")
-        print(f"  > Total BIC: {bic_total:.2e}")
-        print(f"  > Deviance/DoF: {dev_per_dof:.4f} (Target ~ 1.0)")
+        if self.show_steps:
+            print(f"  > Total NLL: {nll_total:.2e}")
+            print(f"  > Total BIC: {bic_total:.2e}")
+            print(f"  > Deviance/DoF: {dev_per_dof:.4f} (Target ~ 1.0)")
         
         return {"nll": nll_total, "bic": bic_total, "deviance_nu": dev_per_dof}
 
-    # =========================================================================
-    # MAIN PIPELINE
-    # =========================================================================
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
-        # Pre-process
         medians = np.median(images_batch, axis=(1, 2), keepdims=True)
         images_bg_corr = np.maximum(images_batch - medians, 0)
         global_max = images_bg_corr.max() + 1e-9
         images_norm = images_bg_corr / global_max
         img_jax = jnp.array(images_norm)
         
-        print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
-        print(f"  > Loss Function: {self.loss.upper()}")
+        if self.show_steps:
+            print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
 
         PAD_GLOBAL = 32
         img_jax_padded = jnp.pad(img_jax, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
-        # Phase 1: Scout
+        # =====================================================================
+        # PHASE 1: SCOUT (Generic Seed Discovery)
+        # =====================================================================
         w_scout = self.base_window_size
         stride = w_scout // 2
         
@@ -426,15 +378,9 @@ class SparseRBFPeakFinder:
         grid_w = list(range(0, W - w_scout + 1, stride))
         if grid_w[-1] + w_scout < W: grid_w.append(W - w_scout)
         
-        window_coords = []
-        for b in range(B):
-            for r in grid_h:
-                for c in grid_w:
-                    window_coords.append((b, r, c))
-        
+        window_coords = [(b, r, c) for b in range(B) for r in grid_h for c in grid_w]
         window_coords_arr = np.array(window_coords, dtype=np.int32)
         total_scout_wins = len(window_coords)
-        print(f"\n[Phase 1] Scout: Scanning {total_scout_wins} windows ({w_scout}x{w_scout})...")
 
         @jit
         def extract_scout_window(img, b_idx, r_idx, c_idx):
@@ -447,36 +393,33 @@ class SparseRBFPeakFinder:
         scout_solver = jit(vmap(lambda w: self._solve_dense(w, w_scout, w_scout, 5)))
         
         scout_results = []
-        with tqdm(total=total_scout_wins, desc="Scout", unit="win") as pbar:
-            for i in range(0, total_scout_wins, self.chunk_size):
-                chunk = window_coords_arr[i:i+self.chunk_size]
-                wins = extract_scout_window(img_jax_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
-                res = scout_solver(wins)
-                res.block_until_ready()
-                
-                global_res = np.array(res)
-                offsets_r = chunk[:, 1][:, None]
-                offsets_c = chunk[:, 2][:, None]
-                
-                valid_mask = global_res[:, :, 0] > 1e-9
-                for k in range(len(chunk)):
-                    if np.any(valid_mask[k]):
-                        peaks = global_res[k][valid_mask[k]]
-                        peaks[:, 1] += offsets_r[k]
-                        peaks[:, 2] += offsets_c[k]
-                        bank_idx = chunk[k, 0]
-                        peaks_with_bank = np.column_stack([np.full(len(peaks), bank_idx), peaks])
-                        scout_results.append(peaks_with_bank)
-                pbar.update(len(chunk))
+        for i in range(0, total_scout_wins, self.chunk_size):
+            chunk = window_coords_arr[i:i+self.chunk_size]
+            wins = extract_scout_window(img_jax_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
+            res = scout_solver(wins)
+            res.block_until_ready()
+            
+            global_res = np.array(res)
+            offsets_r = chunk[:, 1][:, None]
+            offsets_c = chunk[:, 2][:, None]
+            
+            valid_mask = global_res[:, :, 0] > 1e-9
+            for k in range(len(chunk)):
+                if np.any(valid_mask[k]):
+                    peaks = global_res[k][valid_mask[k]]
+                    peaks[:, 1] += offsets_r[k]
+                    peaks[:, 2] += offsets_c[k]
+                    bank_idx = chunk[k, 0]
+                    peaks_with_bank = np.column_stack([np.full(len(peaks), bank_idx), peaks])
+                    scout_results.append(peaks_with_bank)
 
         if not scout_results:
-            print("  > No candidates found.")
             return [np.empty((0, 3)) for _ in range(B)]
 
         all_candidates = np.vstack(scout_results)
         unique_candidates = []
-        print("  > Deduplicating candidates...")
         
+        # Deduplication
         for b in range(B):
             bank_mask = (all_candidates[:, 0] == b)
             if not np.any(bank_mask): continue
@@ -503,57 +446,89 @@ class SparseRBFPeakFinder:
             
         all_seeds = np.vstack(unique_candidates)
         total_seeds = len(all_seeds)
-        print(f"\n[Phase 2] Sniper: Refining {total_seeds} unique seeds...")
 
+        # =====================================================================
+        # PHASE 2: SYMMETRIC V-CYCLE (Multi-Atom Sniper + Halo + Macro-Merge)
+        # =====================================================================
         P = self.refine_patch_size
-        half_p = P // 2
+        P_EXT = P + 2 * self.halo
        
         @jit
-        def extract_patch_at_peak(img, centers):
+        def extract_patch_with_halo(img, centers):
             b_idx = centers[:, 0].astype(int)
             r_center = centers[:, 1].astype(int)
             c_center = centers[:, 2].astype(int)
-            r_start = r_center + PAD_GLOBAL - half_p
-            c_start = c_center + PAD_GLOBAL - half_p
+            r_start = r_center + PAD_GLOBAL - (P // 2) - self.halo
+            c_start = c_center + PAD_GLOBAL - (P // 2) - self.halo
             def slice_one(bi, ri, ci):
-                return lax.dynamic_slice(img[bi], (ri, ci), (P, P))
+                return lax.dynamic_slice(img[bi], (ri, ci), (P_EXT, P_EXT))
             return vmap(slice_one)(b_idx, r_start, c_start)
 
-        sniper_solver = jit(vmap(lambda w: self._solve_dense(w, P, P, 1)))
-        
+        sniper_solver = jit(vmap(lambda w: self._solve_dense(w, P_EXT, P_EXT, self.max_local_peaks)))
         refined_peaks_by_bank = [[] for _ in range(B)]
         
-        with tqdm(total=total_seeds, desc="Sniper", unit="seed") as pbar:
-            for i in range(0, total_seeds, self.chunk_size):
-                chunk = all_seeds[i:i+self.chunk_size]
-                patches = extract_patch_at_peak(img_jax_padded, jnp.array(chunk))
-                res = sniper_solver(patches) 
-                res.block_until_ready()
-                res_cpu = np.array(res[:, 0, :])
+        for i in range(0, total_seeds, self.chunk_size):
+            chunk = all_seeds[i:i+self.chunk_size]
+            patches = extract_patch_with_halo(img_jax_padded, jnp.array(chunk))
+            
+            # Downward: Multi-Atom Optimization
+            res = sniper_solver(patches) 
+            res.block_until_ready()
+            res_cpu = np.array(res)
+            
+            # Upward: Dense-to-Coarse Merging (The Besov Pursuit)
+            for batch_idx in range(len(chunk)):
+                b_id = int(chunk[batch_idx, 0])
+                local_peaks = res_cpu[batch_idx] 
                 
-                intensities = res_cpu[:, 0]
-                local_r = res_cpu[:, 1]
-                local_c = res_cpu[:, 2]
-                sigmas = res_cpu[:, 3]
+                active_mask = local_peaks[:, 0] > 1e-9
+                active_atoms = local_peaks[active_mask]
                 
-                vol_factor = (sigmas / self.ref_sigma) ** 2
-                besov_factor = (sigmas / self.ref_sigma) ** self.gamma
-                score = intensities * vol_factor * besov_factor
-                
-                global_r = chunk[:, 1] - half_p + local_r
-                global_c = chunk[:, 2] - half_p + local_c
-                
-                MARGIN = 10
-                in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
-                            (global_c > MARGIN) & (global_c < W - MARGIN)
-                valid = (score > self.alpha) & in_bounds
-                
-                valid_indices = np.where(valid)[0]
-                for idx in valid_indices:
-                    b_id = int(chunk[idx, 0])
-                    peak_data = np.array([intensities[idx], global_r[idx], global_c[idx], sigmas[idx]])
-                    refined_peaks_by_bank[b_id].append(peak_data)
-                pbar.update(len(chunk))
+                if len(active_atoms) == 0:
+                    continue
+                    
+                if len(active_atoms) > 1:
+                    # Construct Center of Mass and Spatial Variance
+                    total_amp = np.sum(active_atoms[:, 0])
+                    com_r = np.sum(active_atoms[:, 0] * active_atoms[:, 1]) / total_amp
+                    com_c = np.sum(active_atoms[:, 0] * active_atoms[:, 2]) / total_amp
+                    
+                    var_r = np.sum(active_atoms[:, 0] * (active_atoms[:, 1] - com_r)**2) / total_amp
+                    var_c = np.sum(active_atoms[:, 0] * (active_atoms[:, 2] - com_c)**2) / total_amp
+                    macro_sigma = np.sqrt(var_r + var_c) + np.mean(active_atoms[:, 3])
+                    
+                    macro_atom = np.array([total_amp, com_r, com_c, macro_sigma])
+                    
+                    # Pad dictionary to a fixed size for JIT compilation
+                    dict_size = self.max_local_peaks + 1
+                    augmented_dict = np.zeros((dict_size, 4))
+                    augmented_dict[:len(active_atoms)] = active_atoms
+                    augmented_dict[-1] = macro_atom
+                    
+                    # Rigorously evaluate macro vs micro through the L1 PDAS projection
+                    augmented_dict = self._run_pdas_merge_eval(
+                        patches[batch_idx], jnp.array(augmented_dict), P_EXT
+                    )
+                    augmented_dict = np.array(augmented_dict)
+                    active_atoms = augmented_dict[augmented_dict[:, 0] > 1e-9]
+
+                # Map surviving atoms back to global coordinates
+                for atom in active_atoms:
+                    intensity, local_r, local_c, sigma = atom
+                    
+                    vol_factor = (sigma / self.ref_sigma) ** 2
+                    besov_factor = (sigma / self.ref_sigma) ** self.gamma
+                    score = intensity * vol_factor * besov_factor
+                    
+                    global_r = chunk[batch_idx, 1] - (P // 2) - self.halo + local_r
+                    global_c = chunk[batch_idx, 2] - (P // 2) - self.halo + local_c
+                    
+                    MARGIN = 10
+                    in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
+                                (global_c > MARGIN) & (global_c < W - MARGIN)
+                                
+                    if score > self.alpha and in_bounds:
+                        refined_peaks_by_bank[b_id].append(np.array([intensity, global_r, global_c, sigma]))
 
         final_coords_output = []
         final_peaks_full = [] 
