@@ -124,6 +124,8 @@ class SparseRBFPeakFinder:
         
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
+        
+        # DIRECT PENALTY (Cost)
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
@@ -234,6 +236,8 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
+                # INVERSE HEURISTIC: Cost is proportional to sigma**gamma, 
+                # so the L1 admission score divides by sigma**gamma to discount expensive broad peaks.
                 weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = raw_dot * weight
                 
@@ -267,6 +271,8 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T
                 
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
+                
+                # DIRECT PENALTY
                 weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
@@ -280,7 +286,6 @@ class SparseRBFPeakFinder:
         final_state, _ = lax.scan(step_fn, init_state, None, length=max_peaks_local)
         final_params, _ = final_state
         
-        # --- ALL-IN-ONE JAX V-CYCLE (Macro Merge inside the GPU Kernel) ---
         if do_merge:
             c, r, col, sigma = final_params.T
             active_mask = c > 1e-9
@@ -294,12 +299,9 @@ class SparseRBFPeakFinder:
             var_r = jnp.sum(c_active * (r - com_r)**2) / total_amp
             var_c = jnp.sum(c_active * (col - com_c)**2) / total_amp
             
-            # Use mean of active sigmas
             mean_sigma = jnp.sum(jnp.where(active_mask, sigma, 0.0)) / jnp.maximum(num_active, 1)
             macro_sigma = jnp.sqrt(var_r + var_c) + mean_sigma
             
-            # THE FIX: Place the dummy atom 100 pixels away so it strictly evaluates to 0.0
-            # This prevents the dummy atom from absorbing residual noise in the patch!
             dummy_atom = jnp.array([0.0, -100.0, -100.0, 1.0])
             macro_atom = jnp.stack([0.0, com_r, com_c, macro_sigma])
             macro_atom = jnp.where(num_active > 1, macro_atom, dummy_atom)
@@ -550,12 +552,8 @@ class SparseRBFPeakFinder:
                 in_bounds = (global_rs > MARGIN) & (global_rs < H - MARGIN) & \
                             (global_cs > MARGIN) & (global_cs < W - MARGIN)
                             
-                # Restore the manual heuristic score check to strictly filter out Newton convergence noise
-                vol_factors = (valid_peaks[:, 3] / self.ref_sigma) ** 2
-                besov_factors = (valid_peaks[:, 3] / self.ref_sigma) ** self.gamma
-                scores = valid_peaks[:, 0] * vol_factors * besov_factors
-                
-                final_mask = (scores > eff_alpha_norm) & in_bounds
+                # SSN implicitly enforces exact sparsity. We just drop boundary artifacts.
+                final_mask = (valid_peaks[:, 0] > 1e-5) & in_bounds
                 
                 for k in range(len(final_mask)):
                     if final_mask[k]:
