@@ -58,7 +58,7 @@ class SparseRBFPeakFinder:
         self.base_window_size = 32      
         self.refine_patch_size = 15
         self.halo = 5  
-        self.max_local_peaks = 3  
+        self.max_local_peaks = 5
         
         dyadic_scales = []
         current_s = max_sigma

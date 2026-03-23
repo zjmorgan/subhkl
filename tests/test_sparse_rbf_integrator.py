@@ -352,66 +352,64 @@ def test_poisson_vs_gaussian_sparse_flux():
             f"Poisson Flux: {flux_pois:.1f}, L2 Flux: {flux_l2:.1f}, True Flux: {gt_flux:.1f}"
         )
 
+
 def test_poisson_overlapping_string():
-    """
-    Tests the solver's ability to resolve a closely packed string of peaks
-    (like a streaked reflection or multiple adjacent Bragg peaks)
-    under Poisson noise, without artificially dropping or over-merging them.
-    """
-    try:
-        from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
-    except ImportError:
-        from subhkl.search.sparse_rbf import SparseRBFPeakFinder
+        """
+        Tests the solver's ability to resolve a closely packed string of peaks
+        (like a streaked reflection or multiple adjacent Bragg peaks)
+        under Poisson noise, without artificially dropping or over-merging them.
+        """
+        try:
+            from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
+        except ImportError:
+            from subhkl.search.sparse_rbf import SparseRBFPeakFinder
 
-    import numpy as np
+        import numpy as np
 
-    H, W = 40, 80
-    np.random.seed(123)
-    bg_level = 20.0
+        H, W = 40, 80
+        np.random.seed(123)
+        bg_level = 20.0
 
-    # Base Poisson noise
-    image = np.random.poisson(bg_level, size=(H, W)).astype(np.float32)
-    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+        # Start with a flat expected background rate to prevent double-sampling variance
+        image = np.full((H, W), bg_level, dtype=np.float32)
+        y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
 
-    # Inject 4 sharp peaks in a line, separated by just 3 pixels (sigma=1.0)
-    # This creates a "streak" of heavily overlapping signal.
-    true_peaks = [
-        (20.0, 30.0, 1.0, 150.0),
-        (20.0, 33.0, 1.0, 160.0),
-        (20.0, 36.0, 1.0, 140.0),
-        (20.0, 39.0, 1.0, 150.0),
-    ]
+        # Inject 4 sharp peaks in a line, separated by just 3 pixels (sigma=1.0)
+        true_peaks = [
+            (20.0, 30.0, 1.0, 150.0),
+            (20.0, 33.0, 1.0, 160.0),
+            (20.0, 36.0, 1.0, 140.0),
+            (20.0, 39.0, 1.0, 150.0),
+        ]
 
-    for r, c, sig, amp in true_peaks:
-        r2 = (x_coords - c)**2 + (y_coords - r)**2
-        image += amp * np.exp(-r2 / (2 * sig**2))
+        for r, c, sig, amp in true_peaks:
+            r2 = (x_coords - c)**2 + (y_coords - r)**2
+            image += amp * np.exp(-r2 / (2 * sig**2))
 
-    # Re-apply Poisson sampling to make the overlapping peaks truly noisy
-    image = np.random.poisson(image).astype(np.float32)
-    image_batch = image[np.newaxis, ...]
+        # Apply true Poisson noise exactly ONCE
+        image = np.random.poisson(image).astype(np.float32)
+        image_batch = image[np.newaxis, ...]
 
-    finder = SparseRBFPeakFinder(
-        alpha=5.0, # Realistic alpha for ~150 photon peaks
-        gamma=2.0,
-        min_sigma=0.5,
-        max_sigma=5.0,
-        loss='poisson',
-        show_steps=False
-    )
+        finder = SparseRBFPeakFinder(
+            alpha=5.0,
+            gamma=2.0,
+            min_sigma=0.5,
+            max_sigma=5.0,
+            loss='poisson',
+            show_steps=False
+        )
 
-    results = finder.find_peaks_batch(image_batch)
-    peaks = results[0]
+        results = finder.find_peaks_batch(image_batch)
+        peaks = results[0]
 
-    # Filter to the region of interest
-    roi_mask = (peaks[:, 1] > 15) & (peaks[:, 1] < 25) & (peaks[:, 2] > 25) & (peaks[:, 2] < 45)
-    roi_peaks = peaks[roi_mask]
+        roi_mask = (peaks[:, 1] > 15) & (peaks[:, 1] < 25) & (peaks[:, 2] > 25) & (peaks[:, 2] < 45)
+        roi_peaks = peaks[roi_mask]
 
-    # It must decouple the streak into at least 3 distinct peaks
-    assert len(roi_peaks) >= 3, f"Expected to resolve at least 3 peaks in the streak, found {len(roi_peaks)}"
+        # It must decouple the streak into at least 3 distinct peaks
+        assert len(roi_peaks) >= 3, f"Expected to resolve at least 3 peaks in the streak, found {len(roi_peaks)}"
 
-    # Check Deviance: If it merged them or dropped them, deviance will explode > 2.0
-    medians = np.array([bg_level])[np.newaxis, ...]
-    metrics = finder.compute_metrics(image_batch, medians, [peaks], global_max=1.0)
-    deviance = metrics['deviance_nu']
+        medians = np.array([bg_level])[np.newaxis, ...]
+        metrics = finder.compute_metrics(image_batch, medians, [peaks], global_max=1.0)
+        deviance = metrics['deviance_nu']
 
-    assert deviance < 1.5, f"Poisson Deviance/DoF is too high ({deviance:.2f}), model is severely underfitting!"
+        assert deviance < 1.5, f"Poisson Deviance/DoF is too high ({deviance:.2f}), model is severely underfitting!"
