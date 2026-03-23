@@ -335,7 +335,6 @@ class SparseRBFPeakFinder:
             n = len(peaks_list[b])
             if n > 0:
                 peaks_padded[b, :n, :] = peaks_list[b]
-                peaks_padded[b, :n, 0] *= global_max
                 if n < max_k:
                     peaks_padded[b, n:, 3] = 1.0 
             counts_per_image[b] = n
