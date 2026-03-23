@@ -116,7 +116,7 @@ class SparseRBFPeakFinder:
         return final_image
 
     @staticmethod
-    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple):
+    def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple, loss_type):
         # Coordinate refinement ALWAYS utilizes Gaussian L2 on the normalized target 
         # to guarantee geometric stability against explosive Poisson NLL gradients.
         H, W, min_s, max_s = bounds_tuple
@@ -126,7 +126,9 @@ class SparseRBFPeakFinder:
         
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
-        reg_weight = (sigmas / ref_s) ** gamma + 1e-6
+        
+        # CORRECT INVERSE PENALTY: Broad peaks are cheaper.
+        reg_weight = 1.0 / ((sigmas / ref_s) ** gamma + 1e-6)
         reg = alpha * jnp.sum(intensities * reg_weight)
         
         return nll + reg
@@ -138,12 +140,11 @@ class SparseRBFPeakFinder:
         Unified Semi-Smooth Newton Solver using the Robinson Normal Map.
         Utilizes Fisher Scoring for Poisson NLL to prevent zero-curvature explosion.
         """
-        # 1. Statistical Routing: Only append background atom for raw Poisson data
-        if loss_type == 1:
+        if loss_type == 1: # Poisson
             A_use = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
-            alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
+            alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background atom
             c_init = jnp.append(c_warm, jnp.maximum(jnp.mean(y), 1e-2))
-        else:
+        else: # Gaussian
             A_use = A
             alpha_pad = alpha_vec
             c_init = c_warm
@@ -153,7 +154,7 @@ class SparseRBFPeakFinder:
 
         def get_loss_grad_hess(c):
             u = A_use @ c
-            if loss_type == 1: # Poisson NLL
+            if loss_type == 1: 
                 u_safe = jnp.maximum(u, 1e-5)
                 nll = jnp.sum(u_safe - y * jnp.log(u_safe))
                 grad = A_use.T @ (1.0 - y / u_safe)
@@ -161,7 +162,7 @@ class SparseRBFPeakFinder:
                 # Fisher Scoring: Expected Hessian = A^T diag(1/u) A
                 W = 1.0 / jnp.maximum(u_safe, 1e-5)
                 hess = A_use.T @ (W[:, None] * A_use)
-            else: # Gaussian L2
+            else: 
                 nll = 0.5 * jnp.sum((u - y)**2)
                 grad = A_use.T @ (u - y)
                 hess = A_use.T @ A_use
@@ -182,7 +183,6 @@ class SparseRBFPeakFinder:
             DP_mat = jnp.diag(D)
             I = jnp.eye(N)
             
-            # Tikhonov damping to prevent singular matrices
             DG = (I - DP_mat) + hess @ DP_mat + 1e-3 * I
             dq = jnp.linalg.solve(DG, -Gq)
 
@@ -213,11 +213,10 @@ class SparseRBFPeakFinder:
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
         _, _, c_final, _ = final_state
 
-        # 2. Re-Route Output
         if loss_type == 1:
-            return c_final[:-1] # Strip background scalar
+            return c_final[:-1] 
         else:
-            return c_final      # Return all RBF amplitudes
+            return c_final      
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code'])
     def _solve_dense(self, patch_geom, patch_stat, global_max, eff_alpha_scout, eff_alpha_stat, H, W, max_peaks_local, loss_code):
@@ -245,12 +244,10 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                atom_norm = s * jnp.sqrt(jnp.pi)
-                proj_score = raw_dot / (atom_norm + 1e-9)
+                # Directly proportional score: Rewards broad peaks to counteract the inverse penalty
+                weight = (s / self.ref_sigma) ** self.gamma
+                final_score = raw_dot * weight
                 
-                # BUGFIX: The heuristic score needs the INVERSE penalty weight
-                prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
-                final_score = proj_score * prior_weight
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
 
@@ -268,7 +265,7 @@ class SparseRBFPeakFinder:
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, patch_geom, eff_alpha_scout, self.gamma, self.ref_sigma, bounds),
+                    args=(x_grid, patch_geom, eff_alpha_scout, self.gamma, self.ref_sigma, bounds, 0),
                     method='BFGS',
                     options={'maxiter': 5}
                 )
@@ -280,17 +277,13 @@ class SparseRBFPeakFinder:
                 
                 A = vmap(eval_one)(r, col, sigma).T
                 
-                # Scale warm-start amplitudes to raw counts if Poisson
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
                 
-                # BUGFIX: The direct penalty weight is DIRECTLY proportional to sigma^gamma
-                weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
+                # CORRECT INVERSE PENALTY
+                weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec_stat = eff_alpha_stat * weights
                 
-                # Statistical Projection via SSN on the Target (Raw or Norm)
                 c_sparse_stat = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm)
-                
-                # Project surviving atoms back to normalized space for geometric tracking
                 c_sparse_norm = jnp.where(loss_code == 1, c_sparse_stat / global_max, c_sparse_stat)
                 return jnp.stack([c_sparse_norm, r, col, sigma], axis=1)
 
@@ -314,8 +307,8 @@ class SparseRBFPeakFinder:
         
         A = vmap(eval_one)(r, col, sigma).T
         
-        # BUGFIX: Direct penalty weight! 
-        weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
+        # CORRECT INVERSE PENALTY
+        weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
         alpha_vec_stat = eff_alpha_stat * weights
         
         c_sparse_stat = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm_stat)
@@ -571,7 +564,6 @@ class SparseRBFPeakFinder:
                     in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
                                 (global_c > MARGIN) & (global_c < W - MARGIN)
 
-                    # SSN solver natively asserts L1 projection rigorously, no manual score check needed
                     if intensity_norm > 1e-5 and in_bounds:
                         refined_peaks_by_bank[b_id].append(np.array([intensity_norm, global_r, global_c, sigma]))
 
@@ -598,7 +590,7 @@ class SparseRBFPeakFinder:
                             keep[neighbors] = False
                 unique_peaks = peaks_sorted[keep]
                 final_peaks_full.append(unique_peaks)
-                final_coords_output.append(unique_peaks) # Outputs [intensity_raw, r, c, sigma]
+                final_coords_output.append(unique_peaks) 
             else:
                 final_peaks_full.append(np.empty((0, 4)))
                 final_coords_output.append(np.empty((0, 4)))
@@ -659,7 +651,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=init_raw.ravel(),
-                    args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds), 
+                    args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds, 0), 
                     method='BFGS',
                     options={'maxiter': 10}
                 )
