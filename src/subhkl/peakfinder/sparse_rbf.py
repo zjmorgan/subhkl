@@ -265,7 +265,7 @@ class SparseRBFPeakFinder:
 
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec = self.alpha * weights
-                c_sparse = self._solve_pgd_poisson(A, patch.flatten(), alpha_vec)
+                c_sparse = self._solve_pgd_poisson(A, image.flatten(), alpha_vec)
                 return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
             params = run_opt(params)
