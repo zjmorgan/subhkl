@@ -271,8 +271,8 @@ def test_peak_finder_multiscale_subpixel_recovery():
     assert broad_idx != sharp_idx, "Failed to decouple the broad and sharp peaks."
 
     # Broad Peak bounds (Relaxed due to Poisson shift on a wide flat top)
-    assert np.isclose(broad_peak[0], gt_r1, atol=1.5), f"Broad peak R failed: {broad_peak[0]}"
-    assert np.isclose(broad_peak[1], gt_c1, atol=1.5), f"Broad peak C failed: {broad_peak[1]}"
+    assert np.isclose(broad_peak[0], gt_r1, atol=1.0), f"Broad peak R failed: {broad_peak[0]}"
+    assert np.isclose(broad_peak[1], gt_c1, atol=1.0), f"Broad peak C failed: {broad_peak[1]}"
     assert broad_peak[2] > 2.0, "Broad peak failed to resolve as a large feature"
 
     # Sharp Peak bounds (Ultra-tight to prove sub-pixel accuracy)
