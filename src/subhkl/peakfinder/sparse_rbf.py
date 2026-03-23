@@ -138,7 +138,7 @@ class SparseRBFPeakFinder:
         Unified Semi-Smooth Newton Solver using the Robinson Normal Map.
         Utilizes Fisher Scoring for Poisson NLL to prevent zero-curvature explosion.
         """
-        # 1. Statical Routing: Only append background atom for raw Poisson data
+        # 1. Statistical Routing: Only append background atom for raw Poisson data
         if loss_type == 1:
             A_use = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
             alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
@@ -247,6 +247,8 @@ class SparseRBFPeakFinder:
                 
                 atom_norm = s * jnp.sqrt(jnp.pi)
                 proj_score = raw_dot / (atom_norm + 1e-9)
+                
+                # BUGFIX: The heuristic score needs the INVERSE penalty weight
                 prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = proj_score * prior_weight
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
@@ -280,7 +282,9 @@ class SparseRBFPeakFinder:
                 
                 # Scale warm-start amplitudes to raw counts if Poisson
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
-                weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
+                
+                # BUGFIX: The direct penalty weight is DIRECTLY proportional to sigma^gamma
+                weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
                 # Statistical Projection via SSN on the Target (Raw or Norm)
@@ -309,7 +313,9 @@ class SparseRBFPeakFinder:
             return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
         
         A = vmap(eval_one)(r, col, sigma).T
-        weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
+        
+        # BUGFIX: Direct penalty weight! 
+        weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
         alpha_vec_stat = eff_alpha_stat * weights
         
         c_sparse_stat = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm_stat)
