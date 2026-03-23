@@ -12,6 +12,7 @@ from subhkl.instrument.physics import (
     predict_reflections_on_panel,
 )
 from subhkl.core.crystallography import generate_reflections
+from subhkl.utils.viz import plot_detector_data
 
 
 def _run_harvest_local_max(

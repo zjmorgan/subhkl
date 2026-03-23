@@ -1,6 +1,6 @@
 """Visualization utilities"""
 
-def plt_detector_data(ax, data, perc_low=1, perc_high=99.9, cmap='viridis'):
+def plot_detector_data(ax, data, perc_low=1, perc_high=99.9, cmap='viridis'):
     from skimage.exposure import equalize_adapthist
 
     data_clipped = np.clip(data, np.percentile(image_array, perc_low), np.percentile(image_array, perc_high))
