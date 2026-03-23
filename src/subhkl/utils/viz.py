@@ -1,5 +1,8 @@
 """Visualization utilities"""
 
+import numpy as np
+from skimage.exposure import equalize_adapthist
+
 def plot_detector_data(ax, data, perc_low=1, perc_high=99.9, cmap='viridis'):
     from skimage.exposure import equalize_adapthist
 
