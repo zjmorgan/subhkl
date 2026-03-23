@@ -136,10 +136,6 @@ def process_single_image(
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
 
-    # 5. Refine centers (DEPRECATED: Keep predicted centers for finder)
-    # i, j = refined_centers[keep, 0], refined_centers[keep, 1]
-    i, j = i[keep], j[keep]
-
     # 6. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
@@ -175,6 +171,9 @@ def process_single_image(
             plt.close(fig)
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
+
+    # Keep integrated centers centers for finder
+    i, j = i[keep], j[keep]
 
     # 6. Gather Results
     if sum(keep) > 0:
