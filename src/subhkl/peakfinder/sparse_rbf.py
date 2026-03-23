@@ -319,8 +319,8 @@ class SparseRBFPeakFinder:
         else:
             return final_params
 
-    def compute_metrics(self, images_norm, peaks_list, global_max):
-        B, H, W = images_norm.shape
+    def compute_metrics(self, images_raw, medians, peaks_list, global_max):
+        B, H, W = images_raw.shape
         yy, xx = np.indices((H, W))
         x_grid = jnp.array([yy, xx])
         
@@ -335,31 +335,31 @@ class SparseRBFPeakFinder:
             n = len(peaks_list[b])
             if n > 0:
                 peaks_padded[b, :n, :] = peaks_list[b]
+                # No scaling needed here; peaks_list contains physical photon counts
                 if n < max_k:
                     peaks_padded[b, n:, 3] = 1.0 
             counts_per_image[b] = n
 
-        if self.loss == 'poisson':
-            loss_code = 1
-        elif self.loss == 'gaussian':
-            loss_code = 0
-        else:
-            raise ValueError("Unsupported loss. Not 'gaussian' or 'poisson'")
+        loss_code = 1 if self.loss == 'poisson' else 0
 
         @jit
-        def process_one_image(peaks, target, k_val):
-            recon = self._predict_batch_scan(peaks, x_grid) 
-            recon = jnp.maximum(recon, 1e-9)
-            target = jnp.maximum(target, 1e-9)
+        def process_one_image(peaks, target_raw, median_val, k_val):
+            # Reconstruct the physical peak counts and add the median background
+            recon_peaks = self._predict_batch_scan(peaks, x_grid) 
+            recon_total = jnp.maximum(recon_peaks + median_val, 1e-9)
+            target = jnp.maximum(target_raw, 1e-9)
             
             if loss_code == 1: 
-                nll = jnp.sum(recon - target * jnp.log(recon))
-                term = target * jnp.log(target / recon) - (target - recon)
+                # Poisson Deviance
+                nll = jnp.sum(recon_total - target * jnp.log(recon_total))
+                term = target * jnp.log(target / recon_total) - (target - recon_total)
                 dev = 2 * jnp.sum(term)
             else: 
-                diff = recon - target
+                # Gaussian L2 (Pearson Chi-Squared)
+                diff = recon_total - target
                 nll = 0.5 * jnp.sum(diff**2)
-                dev = jnp.sum(diff**2)
+                # Scale the squared error by the variance (recon_total) to normalize the metric to ~1.0
+                dev = jnp.sum((diff**2) / recon_total)
             
             n_pix = target.size
             n_params = k_val * 4
@@ -371,7 +371,8 @@ class SparseRBFPeakFinder:
         for b in range(B):
             nll, bic, dev = process_one_image(
                 jnp.array(peaks_padded[b]), 
-                jnp.array(images_norm[b] * global_max), 
+                jnp.array(images_raw[b]), 
+                jnp.array(medians[b]),
                 jnp.array(counts_per_image[b])
             )
             nll_total += float(nll)
@@ -384,12 +385,11 @@ class SparseRBFPeakFinder:
         dev_per_dof = deviance_total / dof
         
         if self.show_steps:
-            target_str = "(Target ~ 1.0)" if loss_code == 1 else "(MSE of remaining noise)"
             print(f"  > Total NLL: {nll_total:.2e}")
             print(f"  > Total BIC: {bic_total:.2e}")
-            print(f"  > Deviance/DoF: {dev_per_dof:.4f} {target_str}")
+            print(f"  > Deviance/DoF: {dev_per_dof:.4f} (Target ~ 1.0)")
 
-        return {"nll": nll_total, "bic": bic_total, "deviance_nu": dev_per_dof}
+        return {"nll": nll_total, "bic": bic_total, "deviance_nu": dev_per_dof} 
 
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
@@ -586,8 +586,8 @@ class SparseRBFPeakFinder:
                 final_peaks_full.append(np.empty((0, 4)))
                 final_coords_output.append(np.empty((0, 4)))
         
-        self.compute_metrics(img_jax_scout, final_peaks_full, global_max)
-        
+        self.compute_metrics(images_batch, medians, final_peaks_full, global_max) 
+
         return final_coords_output
 
 
