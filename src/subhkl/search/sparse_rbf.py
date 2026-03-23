@@ -384,10 +384,11 @@ class SparseRBFPeakFinder:
         dev_per_dof = deviance_total / dof
         
         if self.show_steps:
+            target_str = "(Target ~ 1.0)" if loss_code == 1 else "(MSE of remaining noise)"
             print(f"  > Total NLL: {nll_total:.2e}")
             print(f"  > Total BIC: {bic_total:.2e}")
-            print(f"  > Deviance/DoF: {dev_per_dof:.4f} (Target ~ 1.0)")
-        
+            print(f"  > Deviance/DoF: {dev_per_dof:.4f} {target_str}")
+
         return {"nll": nll_total, "bic": bic_total, "deviance_nu": dev_per_dof}
 
     def find_peaks_batch(self, images_batch):
