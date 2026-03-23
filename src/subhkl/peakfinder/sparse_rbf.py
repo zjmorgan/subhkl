@@ -30,10 +30,9 @@ class SparseRBFPeakFinder:
     
     Features:
     - Dyadic Scale Hierarchy (Powers of 2)
-    - Scout-Sniper multi-atom detection.
     - Halo Context Extraction (Prevents boundary truncation).
     - Upward Macro-Merge (Besov Pursuit via SSN L1 Projection).
-    - Unified Semi-Smooth Newton Solver (Supports Gaussian and Poisson NLL).
+    - Unified Semi-Smooth Newton Solver with Fisher Scoring for Poisson NLL.
     """
     def __init__(
         self,
@@ -118,7 +117,8 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple):
-        # BFGS always utilizes Gaussian L2 on the normalized target for geometric stability
+        # Coordinate refinement ALWAYS utilizes Gaussian L2 on the normalized target 
+        # to guarantee geometric stability against explosive Poisson NLL gradients.
         H, W, min_s, max_s = bounds_tuple
         params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid)
@@ -136,24 +136,26 @@ class SparseRBFPeakFinder:
     def _solve_ssn_unified(A, y, alpha_vec, loss_type, c_warm, max_iter=20):
         """
         Unified Semi-Smooth Newton Solver using the Robinson Normal Map.
-        Takes Gaussian amplitudes (c_warm) to bypass Poisson initialization explosion.
+        Utilizes Fisher Scoring for Poisson NLL to prevent zero-curvature explosion.
         """
         # Append the Local Background Atom (A column of 1s to safely absorb noise floor)
         A_bg = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
         alpha_pad = jnp.append(alpha_vec, 0.0) # Zero penalty on background
         N = A_bg.shape[1]
 
-        # Warm start the amplitudes and guess the background
+        # Warm start the amplitudes to bypass Poisson initialization explosion
         c_init = jnp.append(c_warm, jnp.maximum(jnp.mean(y), 1e-2))
         q_init = c_init
 
         def get_loss_grad_hess(c):
             u = A_bg @ c
             if loss_type == 1: # Poisson NLL
-                u_safe = jnp.maximum(u, 1e-3)
+                u_safe = jnp.maximum(u, 1e-5)
                 nll = jnp.sum(u_safe - y * jnp.log(u_safe))
                 grad = A_bg.T @ (1.0 - y / u_safe)
-                W = jnp.minimum(y / (u_safe ** 2), 1e6) 
+                # Fisher Scoring: Expected Hessian = A^T diag(1/u) A
+                # This mathematically cures the singular Hessian problem where y=0
+                W = 1.0 / jnp.maximum(u_safe, 1e-5)
                 hess = A_bg.T @ (W[:, None] * A_bg)
             else: # Gaussian L2
                 nll = 0.5 * jnp.sum((u - y)**2)
@@ -273,10 +275,11 @@ class SparseRBFPeakFinder:
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec_stat = eff_alpha_stat * weights
                 
-                c_sparse = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm)
+                # Statistical Projection via SSN on the Target (Raw or Norm)
+                c_sparse_stat = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm)
                 
                 # Project surviving atoms back to normalized space for geometric tracking
-                c_sparse_norm = jnp.where(loss_code == 1, c_sparse / global_max, c_sparse)
+                c_sparse_norm = jnp.where(loss_code == 1, c_sparse_stat / global_max, c_sparse_stat)
                 return jnp.stack([c_sparse_norm, r, col, sigma], axis=1)
 
             params = run_opt(params)
@@ -386,25 +389,19 @@ class SparseRBFPeakFinder:
             print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
 
         PAD_GLOBAL = 32
-        # FIX: Explicitly name the padded arrays
-        img_jax_scout_padded = jnp.pad(jnp.array(images_norm), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+        img_jax_scout = jnp.array(images_norm)
+        img_jax_scout_padded = jnp.pad(img_jax_scout, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
         # 2. Target Routing and Alpha scaling
-        # We ensure user's alpha acts universally regardless of underlying scale or loss
-        if self.alpha >= 1.0:
-            eff_alpha_norm = self.alpha / global_max
-        else:
-            eff_alpha_norm = self.alpha
-        
-        # Scout is extremely permissive to ensure candidates pass to Sniper
+        eff_alpha_norm = self.alpha / global_max
         eff_alpha_scout = eff_alpha_norm * 0.1 
 
         if self.loss == 'poisson':
             img_jax_sniper_padded = jnp.pad(jnp.array(images_batch), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
-            eff_alpha_stat = self.alpha if self.alpha >= 1.0 else self.alpha * global_max
+            eff_alpha_stat = self.alpha # Raw Alpha for Raw Counts
         else:
             img_jax_sniper_padded = img_jax_scout_padded
-            eff_alpha_stat = eff_alpha_norm
+            eff_alpha_stat = eff_alpha_norm # Normalized Alpha for Normalized Counts
 
         # =====================================================================
         # PHASE 1: SCOUT (Generic Seed Discovery)
@@ -434,7 +431,6 @@ class SparseRBFPeakFinder:
         scout_results = []
         for i in range(0, total_scout_wins, self.chunk_size):
             chunk = window_coords_arr[i:i+self.chunk_size]
-            # FIX: Use the properly named padded array
             wins_geom = extract_scout_window(img_jax_scout_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
             res = scout_solver(wins_geom, wins_geom)
             res.block_until_ready()
@@ -454,7 +450,7 @@ class SparseRBFPeakFinder:
                     scout_results.append(peaks_with_bank)
 
         if not scout_results:
-            return [np.empty((0, 3)) for _ in range(B)]
+            return [np.empty((0, 4)) for _ in range(B)]
 
         all_candidates = np.vstack(scout_results)
         unique_candidates = []
@@ -481,7 +477,7 @@ class SparseRBFPeakFinder:
             unique_candidates.append(np.hstack([bank_col, valid_seeds]))
 
         if not unique_candidates:
-            return [np.empty((0, 3)) for _ in range(B)]
+            return [np.empty((0, 4)) for _ in range(B)]
             
         all_seeds = np.vstack(unique_candidates)
         total_seeds = len(all_seeds)
@@ -510,16 +506,13 @@ class SparseRBFPeakFinder:
         for i in range(0, total_seeds, self.chunk_size):
             chunk = all_seeds[i:i+self.chunk_size]
             
-            # FIX: Extracted from the properly named padded arrays
             patches_geom = extract_patch_with_halo(img_jax_scout_padded, jnp.array(chunk))
             patches_stat = extract_patch_with_halo(img_jax_sniper_padded, jnp.array(chunk))
             
-            # Downward: Multi-Atom Optimization
             res = sniper_solver(patches_geom, patches_stat) 
             res.block_until_ready()
             res_cpu = np.array(res)
             
-            # Upward: Dense-to-Coarse Merging (The Besov Pursuit)
             for batch_idx in range(len(chunk)):
                 b_id = int(chunk[batch_idx, 0])
                 r_center_int = int(chunk[batch_idx, 1])
@@ -555,10 +548,7 @@ class SparseRBFPeakFinder:
                     active_atoms = augmented_dict[augmented_dict[:, 0] > 1e-9]
 
                 for atom in active_atoms:
-                    intensity, local_r, local_c, sigma = atom
-                    vol_factor = (sigma / self.ref_sigma) ** 2
-                    besov_factor = (sigma / self.ref_sigma) ** self.gamma
-                    score = intensity * vol_factor * besov_factor
+                    intensity_norm, local_r, local_c, sigma = atom
                     
                     global_r = r_center_int - (P // 2) - self.halo + local_r
                     global_c = c_center_int - (P // 2) - self.halo + local_c
@@ -567,8 +557,9 @@ class SparseRBFPeakFinder:
                     in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
                                 (global_c > MARGIN) & (global_c < W - MARGIN)
 
-                    if score > eff_alpha_norm and in_bounds:
-                        refined_peaks_by_bank[b_id].append(np.array([intensity, global_r, global_c, sigma]))
+                    # SSN solver natively asserts L1 projection rigorously, no manual score check needed
+                    if intensity_norm > 1e-5 and in_bounds:
+                        refined_peaks_by_bank[b_id].append(np.array([intensity_norm, global_r, global_c, sigma]))
 
         final_coords_output = []
         final_peaks_full = [] 
@@ -576,6 +567,7 @@ class SparseRBFPeakFinder:
         for b in range(B):
             peaks = np.array(refined_peaks_by_bank[b])
             if len(peaks) > 0:
+                peaks[:, 0] *= global_max # Scale to physical raw counts
                 order = np.argsort(peaks[:, 0])[::-1]
                 peaks_sorted = peaks[order]
                 keep = np.ones(len(peaks_sorted), dtype=bool)
@@ -592,15 +584,15 @@ class SparseRBFPeakFinder:
                             keep[neighbors] = False
                 unique_peaks = peaks_sorted[keep]
                 final_peaks_full.append(unique_peaks)
-                final_coords_output.append(unique_peaks[:, 1:4])
+                final_coords_output.append(unique_peaks) # Outputs [intensity_raw, r, c, sigma]
             else:
                 final_peaks_full.append(np.empty((0, 4)))
-                final_coords_output.append(np.empty((0, 3)))
+                final_coords_output.append(np.empty((0, 4)))
         
-        # FIX: The original raw array should be passed here to correctly calculate deviance
-        self.compute_metrics(images_norm, final_peaks_full, global_max)
+        self.compute_metrics(img_jax_scout, final_peaks_full, global_max)
         
         return final_coords_output
+
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
