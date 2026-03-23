@@ -124,6 +124,8 @@ class SparseRBFPeakFinder:
         
         intensities = jnp.abs(params_phys[:, 0])
         sigmas = params_phys[:, 3]
+        
+        # DIRECT PENALTY
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
@@ -234,7 +236,8 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                weight = (s / self.ref_sigma) ** self.gamma
+                # CORRECT HEURISTIC INVERSE: Divides by sigma**gamma to match L1 admission requirement
+                weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
                 final_score = raw_dot * weight
                 
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
@@ -267,6 +270,8 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T
                 
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
+                
+                # DIRECT PENALTY
                 weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
@@ -384,7 +389,7 @@ class SparseRBFPeakFinder:
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
-        # 1. Background subtraction 
+        # 1. Background subtraction
         medians = np.median(images_batch, axis=(1, 2), keepdims=True)
         images_bg_corr = np.maximum(images_batch - medians, 0)
         global_max = images_bg_corr.max() + 1e-9
@@ -444,7 +449,6 @@ class SparseRBFPeakFinder:
             
             global_res = np.array(res)
             
-            # Fast vectorized parsing
             valid_mask = global_res[:, :, 0] > 1e-9
             b_indices, peak_indices = np.where(valid_mask)
             if len(b_indices) > 0:
@@ -535,15 +539,12 @@ class SparseRBFPeakFinder:
                 global_rs = valid_r_centers - (P // 2) - self.halo + valid_peaks[:, 1]
                 global_cs = valid_c_centers - (P // 2) - self.halo + valid_peaks[:, 2]
                 
-                vol_factors = (valid_peaks[:, 3] / self.ref_sigma) ** 2
-                besov_factors = (valid_peaks[:, 3] / self.ref_sigma) ** self.gamma
-                scores = valid_peaks[:, 0] * vol_factors * besov_factors
-                
                 MARGIN = 10
                 in_bounds = (global_rs > MARGIN) & (global_rs < H - MARGIN) & \
                             (global_cs > MARGIN) & (global_cs < W - MARGIN)
                             
-                final_mask = (scores > eff_alpha_norm) & in_bounds
+                # SSN implicitly enforces sparsity; we just drop boundary artifacts
+                final_mask = (valid_peaks[:, 0] > 1e-5) & in_bounds
                 
                 for k in range(len(final_mask)):
                     if final_mask[k]:
@@ -636,7 +637,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=init_raw.ravel(),
-                    args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds), 
+                    args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds, 0), 
                     method='BFGS',
                     options={'maxiter': 10}
                 )
