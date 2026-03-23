@@ -248,7 +248,7 @@ def test_peak_finder_multiscale_subpixel_recovery():
     image_batch = image[np.newaxis, ...]
 
     finder = SparseRBFPeakFinder(
-        alpha=0.08,
+        alpha=5,
         gamma=2.0,
         min_sigma=0.5,
         max_sigma=5.0,
@@ -279,3 +279,74 @@ def test_peak_finder_multiscale_subpixel_recovery():
     assert np.isclose(sharp_peak[0], gt_r2, atol=0.5), f"Sharp R mismatch: {sharp_peak[0]:.2f} vs {gt_r2}"
     assert np.isclose(sharp_peak[1], gt_c2, atol=0.5), f"Sharp C mismatch: {sharp_peak[1]:.2f} vs {gt_c2}"
     assert sharp_peak[2] < 2.0, "Sharp peak failed to resolve as a narrow feature"
+
+def test_poisson_vs_gaussian_sparse_flux():
+    """
+    Evaluates the difference between Gaussian (L2) and Poisson loss
+    in a highly sparse regime. Poisson MLE strictly conserves total flux
+    (counts), whereas L2 biases the amplitude downwards due to the
+    heavy squared penalty on zero-count pixels near the peak center.
+    """
+    try:
+        from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
+    except ImportError:
+        from subhkl.search.sparse_rbf import SparseRBFPeakFinder
+
+    import numpy as np
+
+    H, W = 40, 40
+    np.random.seed(101) # Deterministic noise floor for consistent testing
+
+    # Ground truth: A very faint, sparse peak
+    gt_c, gt_r = 20.5, 20.5
+    gt_sig = 2.0
+    gt_amp = 5.0 # Max expected photons is 5. Highly sparse.
+    gt_flux = gt_amp * 2 * np.pi * gt_sig**2 # ~62.8 total photons
+
+    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+    r2 = (x_coords - gt_c)**2 + (y_coords - gt_r)**2
+
+    # Background = 0.1 to ensure many true 0s surround the weak peak
+    true_rate = 0.1 + gt_amp * np.exp(-r2 / (2 * gt_sig**2))
+    image = np.random.poisson(true_rate).astype(np.float32)
+
+    image_batch = image[np.newaxis, ...]
+
+    # Use low alpha to ensure both solvers admit the weak peak
+    finder_l2 = SparseRBFPeakFinder(
+        alpha=0.5, min_sigma=1.0, max_sigma=4.0, loss='gaussian', show_steps=False
+    )
+    finder_pois = SparseRBFPeakFinder(
+        alpha=0.5, min_sigma=1.0, max_sigma=4.0, loss='poisson', show_steps=False
+    )
+
+    peaks_l2 = finder_l2.find_peaks_batch(image_batch)[0]
+    peaks_pois = finder_pois.find_peaks_batch(image_batch)[0]
+
+    def get_target_peak(peaks):
+        if len(peaks) == 0: return None
+        # peaks format: [intensity, global_r, global_c, sigma]
+        dists = np.sqrt((peaks[:, 1] - gt_r)**2 + (peaks[:, 2] - gt_c)**2)
+        idx = np.argmin(dists)
+        if dists[idx] > 3.0: return None
+        return peaks[idx]
+
+    p_l2 = get_target_peak(peaks_l2)
+    p_pois = get_target_peak(peaks_pois)
+
+    assert p_pois is not None, "Poisson finder completely missed the sparse peak."
+
+    if p_l2 is not None:
+        # Calculate recovered total flux: Amplitude * 2 * pi * sigma^2
+        flux_l2 = p_l2[0] * 2 * np.pi * p_l2[3]**2
+        flux_pois = p_pois[0] * 2 * np.pi * p_pois[3]**2
+
+        error_l2 = abs(flux_l2 - gt_flux)
+        error_pois = abs(flux_pois - gt_flux)
+
+        # The Poisson flux error should be significantly smaller because
+        # L2 collapses the amplitude to minimize squared distance to 0-count pixels.
+        assert error_pois < error_l2, (
+            f"Poisson flux error ({error_pois:.1f}) was worse than L2 error ({error_l2:.1f}). "
+            f"Poisson Flux: {flux_pois:.1f}, L2 Flux: {flux_l2:.1f}, True Flux: {gt_flux:.1f}"
+        )

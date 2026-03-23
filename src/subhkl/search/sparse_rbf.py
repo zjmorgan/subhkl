@@ -23,6 +23,7 @@ if HAS_JAX:
     import jax.scipy.optimize
     import jax.scipy.signal
 
+
 class SparseRBFPeakFinder:
     """
     Hierarchical Sparse RBF Peak Finder with Symmetric V-Cycle Basis Pursuit.
@@ -32,6 +33,7 @@ class SparseRBFPeakFinder:
     - Scout-Sniper multi-atom detection.
     - Halo Context Extraction (Prevents boundary truncation).
     - Upward Macro-Merge (Besov Pursuit via PDAS L1 Projection).
+    - Unified Semi-Smooth Newton Solver (Supports Gaussian and Poisson NLL).
     """
     def __init__(
         self,
@@ -122,7 +124,7 @@ class SparseRBFPeakFinder:
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid)
         
         if loss_type == 1: 
-            recon_safe = jnp.maximum(recon, 1e-9)
+            recon_safe = jnp.maximum(recon, 1e-5)
             nll = jnp.sum(recon_safe - target * jnp.log(recon_safe))
         else: 
             nll = 0.5 * jnp.sum((recon - target)**2)
@@ -137,74 +139,87 @@ class SparseRBFPeakFinder:
         return nll + reg
 
     @staticmethod
-    @partial(jit, static_argnames=['max_iter'])
-    def _solve_pgd_poisson(A, y, alpha_vec, max_iter=200):
+    @partial(jit, static_argnames=['max_iter', 'loss_type'])
+    def _solve_ssn_unified(A, y, alpha_vec, loss_type, max_iter=20):
         """
-        Proximal Gradient Descent (with Nesterov Acceleration) for L1-regularized Poisson NLL.
-
-        Args:
-            A: Basis matrix of shape (N_pixels, N_atoms)
-            y: Raw photon counts of shape (N_pixels,)
-            alpha_vec: Besov penalty vector of shape (N_atoms,)
+        Unified Semi-Smooth Newton Solver using the Robinson Normal Map.
+        Dynamically computes Gradients and Hessians based on the Likelihood.
         """
-        N_atoms = A.shape[1]
-
-        # We add a dummy column of 1s to A to act as the Local Background Atom.
-        # It will not have an L1 penalty, so it can freely absorb the noise floor.
+        # Append the Local Background Atom (A column of 1s to safely absorb noise floor)
         A_bg = jnp.hstack([A, jnp.ones((A.shape[0], 1))])
+        
+        # Pad the penalty vector (The background scalar gets 0.0 penalty)
+        alpha_pad = jnp.append(alpha_vec, 0.0)
+        N = A_bg.shape[1]
 
-        # Initialize amplitudes (c) and background (bg)
-        c_init = jnp.zeros(N_atoms + 1)
+        q_init = jnp.zeros(N)
+        c_init = jnp.zeros(N).at[-1].set(jnp.where(loss_type == 1, 1.0, 0.0))
 
-        # FISTA variables
-        t_init = jnp.float32(1.0)
-
-        def body_fn(state):
-            step, c_curr, c_prev, t_curr = state
-
-            # 1. Nesterov Momentum step
-            c_y = c_curr + ((t_curr - 1.0) / t_curr) * (c_curr - c_prev)
-
-            # 2. Forward Model
-            recon = A_bg @ c_y
-            recon_safe = jnp.maximum(recon, 1e-6) # Prevent division by zero
-
-            # 3. Poisson Gradient: A^T * (1 - target/recon)
-            grad = A_bg.T @ (1.0 - y / recon_safe)
-
-            # Dynamic learning rate (Backtracking line search is safer, but 1/Lipshitz works)
-            # The Lipshitz constant for Poisson is roughly bounded by max(A) / min(recon)
-            lr = 0.5
-
-            # 4. Gradient Descent Step
-            c_next_unproxed = c_y - lr * grad
-
-            # 5. Proximal Step (Soft Thresholding for L1 + Non-Negativity)
-            # We do NOT apply the L1 penalty to the background atom (the last index)
-            alpha_padded = jnp.append(alpha_vec, 0.0)
-            c_next = jnp.maximum(0.0, c_next_unproxed - lr * alpha_padded)
-
-            # 6. Update Momentum
-            t_next = (1.0 + jnp.sqrt(1.0 + 4.0 * t_curr**2)) / 2.0
-
-            return (step + 1, c_next, c_curr, t_next)
+        def get_loss_grad_hess(c):
+            u = A_bg @ c
+            if loss_type == 1: # Poisson NLL
+                u_safe = jnp.maximum(u, 1e-5)
+                nll = jnp.sum(u_safe - y * jnp.log(u_safe))
+                grad = A_bg.T @ (1.0 - y / u_safe)
+                W = jnp.minimum(y / (u_safe ** 2), 1e6) # Cap curvature to prevent explosion
+                hess = A_bg.T @ (W[:, None] * A_bg)
+            else: # Gaussian L2
+                nll = 0.5 * jnp.sum((u - y)**2)
+                grad = A_bg.T @ (u - y)
+                hess = A_bg.T @ A_bg
+                
+            reg = jnp.sum(alpha_pad * c)
+            return nll + reg, grad, hess
 
         def cond_fn(state):
-            step, c_curr, c_prev, _ = state
-            # Stop if max_iter is reached OR if the change is below tolerance
-            diff = jnp.linalg.norm(c_curr - c_prev)
-            return (step < max_iter) & ((step < 5) | (diff > 1e-4))
+            step, _, _, Gq_norm = state
+            return (step < max_iter) & (Gq_norm > 1e-5)
 
-        init_state = (0, c_init, c_init, t_init)
+        def body_fn(state):
+            step, q, c, _ = state
+            obj_val, grad, hess = get_loss_grad_hess(c)
+
+            # The Robinson Map and its Semi-Smooth Jacobian
+            Gq = (q - c) + grad
+            D = (q > alpha_pad).astype(jnp.float32)
+            DP_mat = jnp.diag(D)
+            I = jnp.eye(N)
+            
+            DG = (I - DP_mat) + hess @ DP_mat + 1e-4 * I
+            dq = jnp.linalg.solve(DG, -Gq)
+
+            # Backtracking Line Search (Armijo condition)
+            def bt_cond(bt_state):
+                bt_i, tau, _, _, j_test, j_curr = bt_state
+                is_valid = jnp.isfinite(j_test)
+                return (bt_i < 6) & ((j_test > j_curr) | ~is_valid)
+
+            def bt_body(bt_state):
+                bt_i, tau, _, _, _, j_curr = bt_state
+                tau = tau * 0.5
+                q_test = q + tau * dq
+                c_test = jnp.maximum(0.0, q_test - alpha_pad) # Proximal threshold
+                j_test, _, _ = get_loss_grad_hess(c_test)
+                return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
+
+            q_test = q + dq
+            c_test = jnp.maximum(0.0, q_test - alpha_pad)
+            j_test, _, _ = get_loss_grad_hess(c_test)
+
+            bt_init = (0, 1.0, q_test, c_test, j_test, obj_val)
+            bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
+            _, _, q_final, c_final, _, _ = bt_final
+
+            return (step + 1, q_final, c_final, jnp.linalg.norm(Gq))
+
+        init_state = (0, q_init, c_init, 1e9)
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
+        _, _, c_final, _ = final_state
 
-        _, c_final, _, _ = final_state
+        return c_final[:-1] # Strip background scalar, return RBF amplitudes
 
-        # Return only the Gaussian atom amplitudes (discard the background scalar)
-        return c_final[:-1]
-
-    @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local'])
-    def _solve_dense(self, image, H, W, max_peaks_local):
+    @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code'])
+    def _solve_dense(self, image_geom, image_stat, global_max, H, W, max_peaks_local, loss_code):
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
         yy, xx = jnp.indices((H, W))
         x_grid = jnp.array([yy, xx])
@@ -216,12 +231,12 @@ class SparseRBFPeakFinder:
         
         init_params = jnp.zeros((max_peaks_local, 4))
         init_state = (init_params, 0)
-        loss_code = 1 if self.loss == 'poisson' else 0
 
         def step_fn(state, _):
             params, idx = state
             recon = self._predict_batch_physical(params, x_grid)
-            residual = image - recon
+            # Use geometric target (bg-subtracted & normalized) for stable correlation
+            residual = image_geom - recon 
             
             def check_sigma(s):
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
@@ -251,21 +266,27 @@ class SparseRBFPeakFinder:
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, image, self.alpha, self.gamma, self.ref_sigma, bounds, loss_code),
+                    # Coordinate refinement ALWAYS uses Gaussian L2 on geom target to prevent NLL explosions
+                    args=(x_grid, image_geom, self.alpha, self.gamma, self.ref_sigma, bounds, 0),
                     method='BFGS',
                     options={'maxiter': 5}
                 )
                 p_refined = self._to_physical(res.x, *bounds)
-                
                 c, r, col, sigma = p_refined.T
+                
                 def eval_one(ri, ci_col, si):
                     return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
-
+                
                 A = vmap(eval_one)(r, col, sigma).T
-
+                
+                # Rigorous Statistical projection uses SSN on the stat target
                 weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
                 alpha_vec = self.alpha * weights
-                c_sparse = self._solve_pgd_poisson(A, image.flatten(), alpha_vec)
+                alpha_vec_stat = jnp.where(loss_code == 1, alpha_vec * global_max, alpha_vec)
+                
+                c_sparse = self._solve_ssn_unified(A, image_stat.flatten(), alpha_vec_stat, loss_code)
+                c_sparse = jnp.where(loss_code == 1, c_sparse / global_max, c_sparse)
+                
                 return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
             params = run_opt(params)
@@ -275,24 +296,24 @@ class SparseRBFPeakFinder:
         final_params, _ = final_state
         return final_params
 
-    @partial(jit, static_argnames=['self', 'window_size'])
-    def _run_pdas_merge_eval(self, patch, augmented_dict, window_size):
-        """
-        Takes an augmented dictionary (fine atoms + macro atom) and evaluates them 
-        against the patch residual using the exact Semi-Smooth Newton L1 projection.
-        """
+    @partial(jit, static_argnames=['self', 'window_size', 'loss_code'])
+    def _run_merge_eval(self, patch_stat, augmented_dict, global_max, window_size, loss_code):
+        """Evaluates merged Macro-Atoms against Micro-Atoms via L1 Projection."""
         c_init, r, col, sigma = augmented_dict.T
         yy, xx = jnp.indices((window_size, window_size))
         x_grid = jnp.array([yy, xx])
-
+        
         def eval_one(ri, ci_col, si):
             return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
-
+        
         A = vmap(eval_one)(r, col, sigma).T
-
         weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
         alpha_vec = self.alpha * weights
-        c_sparse = self._solve_pgd_poisson(A, patch.flatten(), alpha_vec)
+        alpha_vec_stat = jnp.where(loss_code == 1, alpha_vec * global_max, alpha_vec)
+        
+        c_sparse = self._solve_ssn_unified(A, patch_stat.flatten(), alpha_vec_stat, loss_code)
+        c_sparse = jnp.where(loss_code == 1, c_sparse / global_max, c_sparse)
+            
         return jnp.stack([c_sparse, r, col, sigma], axis=1)
 
     def compute_metrics(self, images_norm, peaks_list, global_max):
@@ -365,13 +386,26 @@ class SparseRBFPeakFinder:
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
-        img_jax = jnp.array(images_batch)
+        # 1. Background subtraction (Mandatory for stable geometry mapping)
+        medians = np.median(images_batch, axis=(1, 2), keepdims=True)
+        images_bg_corr = np.maximum(images_batch - medians, 0)
+        global_max = images_bg_corr.max() + 1e-9
+        images_norm = images_bg_corr / global_max
         
         if self.show_steps:
             print(f"  > Pre-processing: Bg Subtracted. Global Max={global_max:.1f}")
 
         PAD_GLOBAL = 32
-        img_jax_padded = jnp.pad(img_jax, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+        img_jax_scout = jnp.array(images_norm)
+        img_jax_scout_padded = jnp.pad(img_jax_scout, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
+
+        # 2. Target Routing (Poisson utilizes Raw counts for statistical accuracy)
+        if self.loss == 'poisson':
+            img_jax_sniper = jnp.array(images_batch) 
+        else:
+            img_jax_sniper = img_jax_scout
+            
+        img_jax_sniper_padded = jnp.pad(img_jax_sniper, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
         # =====================================================================
         # PHASE 1: SCOUT (Generic Seed Discovery)
@@ -396,13 +430,14 @@ class SparseRBFPeakFinder:
                 return lax.dynamic_slice(img[bi], (ri, ci), (w_scout, w_scout))
             return vmap(slice_one)(b_idx, r_pad, c_pad)
 
-        scout_solver = jit(vmap(lambda w: self._solve_dense(w, w_scout, w_scout, 5)))
+        # Scout strictly uses normalized L2 (loss_code=0)
+        scout_solver = jit(vmap(lambda w_geom, w_stat: self._solve_dense(w_geom, w_stat, global_max, w_scout, w_scout, 5, 0)))
         
         scout_results = []
         for i in range(0, total_scout_wins, self.chunk_size):
             chunk = window_coords_arr[i:i+self.chunk_size]
-            wins = extract_scout_window(img_jax_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
-            res = scout_solver(wins)
+            wins_geom = extract_scout_window(img_jax_scout_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
+            res = scout_solver(wins_geom, wins_geom)
             res.block_until_ready()
             
             global_res = np.array(res)
@@ -425,7 +460,6 @@ class SparseRBFPeakFinder:
         all_candidates = np.vstack(scout_results)
         unique_candidates = []
         
-        # Deduplication
         for b in range(B):
             bank_mask = (all_candidates[:, 0] == b)
             if not np.any(bank_mask): continue
@@ -470,35 +504,36 @@ class SparseRBFPeakFinder:
                 return lax.dynamic_slice(img[bi], (ri, ci), (P_EXT, P_EXT))
             return vmap(slice_one)(b_idx, r_start, c_start)
 
-        sniper_solver = jit(vmap(lambda w: self._solve_dense(w, P_EXT, P_EXT, self.max_local_peaks)))
+        loss_code_sniper = 1 if self.loss == 'poisson' else 0
+        sniper_solver = jit(vmap(lambda w_geom, w_stat: self._solve_dense(w_geom, w_stat, global_max, P_EXT, P_EXT, self.max_local_peaks, loss_code_sniper)))
         refined_peaks_by_bank = [[] for _ in range(B)]
         
         for i in range(0, total_seeds, self.chunk_size):
             chunk = all_seeds[i:i+self.chunk_size]
-            patches = extract_patch_with_halo(img_jax_padded, jnp.array(chunk))
+            
+            # Extract independent routing targets
+            patches_geom = extract_patch_with_halo(img_jax_scout_padded, jnp.array(chunk))
+            patches_stat = extract_patch_with_halo(img_jax_sniper_padded, jnp.array(chunk))
             
             # Downward: Multi-Atom Optimization
-            res = sniper_solver(patches) 
+            res = sniper_solver(patches_geom, patches_stat) 
             res.block_until_ready()
             res_cpu = np.array(res)
             
             # Upward: Dense-to-Coarse Merging (The Besov Pursuit)
             for batch_idx in range(len(chunk)):
                 b_id = int(chunk[batch_idx, 0])
-                
-                # FIX: Capture the exact integer grid coordinates used for the slice
                 r_center_int = int(chunk[batch_idx, 1])
                 c_center_int = int(chunk[batch_idx, 2])
                 
                 local_peaks = res_cpu[batch_idx] 
-                
                 active_mask = local_peaks[:, 0] > 1e-9
-                active_atoms = local_peaks[active_mask]                
+                active_atoms = local_peaks[active_mask]
+                
                 if len(active_atoms) == 0:
                     continue
                     
                 if len(active_atoms) > 1:
-                    # Construct Center of Mass and Spatial Variance
                     total_amp = np.sum(active_atoms[:, 0])
                     com_r = np.sum(active_atoms[:, 0] * active_atoms[:, 1]) / total_amp
                     com_c = np.sum(active_atoms[:, 0] * active_atoms[:, 2]) / total_amp
@@ -509,31 +544,27 @@ class SparseRBFPeakFinder:
                     
                     macro_atom = np.array([total_amp, com_r, com_c, macro_sigma])
                     
-                    # Pad dictionary to a fixed size for JIT compilation
                     dict_size = self.max_local_peaks + 1
                     augmented_dict = np.zeros((dict_size, 4))
                     augmented_dict[:len(active_atoms)] = active_atoms
                     augmented_dict[-1] = macro_atom
                     
-                    # Rigorously evaluate macro vs micro through the L1 PDAS projection
-                    augmented_dict = self._run_pdas_merge_eval(
-                        patches[batch_idx], jnp.array(augmented_dict), P_EXT
+                    # Merge rigorously evaluated on the statistical target
+                    augmented_dict = self._run_merge_eval(
+                        patches_stat[batch_idx], jnp.array(augmented_dict), global_max, P_EXT, loss_code_sniper
                     )
                     augmented_dict = np.array(augmented_dict)
                     active_atoms = augmented_dict[augmented_dict[:, 0] > 1e-9]
 
-                # Map surviving atoms back to global coordinates
                 for atom in active_atoms:
                     intensity, local_r, local_c, sigma = atom
-
                     vol_factor = (sigma / self.ref_sigma) ** 2
                     besov_factor = (sigma / self.ref_sigma) ** self.gamma
                     score = intensity * vol_factor * besov_factor
-
-                    # FIX: Reconstruct using the integer anchor, NOT the float seed
+                    
                     global_r = r_center_int - (P // 2) - self.halo + local_r
                     global_c = c_center_int - (P // 2) - self.halo + local_c
-
+                    
                     MARGIN = 10
                     in_bounds = (global_r > MARGIN) & (global_r < H - MARGIN) & \
                                 (global_c > MARGIN) & (global_c < W - MARGIN)
@@ -568,9 +599,10 @@ class SparseRBFPeakFinder:
                 final_peaks_full.append(np.empty((0, 4)))
                 final_coords_output.append(np.empty((0, 3)))
         
-        self.compute_metrics(img_jax, final_peaks_full, global_max)
+        self.compute_metrics(img_jax_scout, final_peaks_full, global_max)
         
         return final_coords_output
+
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
@@ -625,7 +657,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         @jit
         def solve_patches(patches):
             def process_patch(patch):
-                # Initialize exactly at center of patch
                 c_init = jnp.max(patch) + 1e-6
                 init_phys = jnp.array([[c_init, float(half_p), float(half_p), 2.0]])
                 init_raw = self._to_unconstrained(init_phys, *bounds)
@@ -633,11 +664,12 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=init_raw.ravel(),
-                    args=(x_grid, patch, self.alpha, bounds, 0), # 0 = Gaussian Loss
+                    # FIX: Inject gamma and ref_sigma to prevent missing args crash
+                    args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds, 0), 
                     method='BFGS',
                     options={'maxiter': 10}
                 )
-                return self._to_physical(res.x, *bounds)[0] # Return single atom
+                return self._to_physical(res.x, *bounds)[0] 
             return vmap(process_patch)(patches)
 
         # 4. Execute in Chunks
@@ -653,11 +685,8 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
-                # Map back to global coordinates
-                # res_cpu: [Int, Local_R, Local_C, Sigma]
                 res_cpu[:, 1] += rs[i:i+self.chunk_size] - half_p
                 res_cpu[:, 2] += cs[i:i+self.chunk_size] - half_p
-                # Scale intensity back to counts
                 res_cpu[:, 0] *= global_max
 
                 refined_peaks.append(res_cpu)
@@ -668,6 +697,10 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
         return np.vstack(refined_peaks)
 
+
+# =====================================================================
+# [Below: Original GPU integration codes for integrate_peaks_rbf_ssn]
+# =====================================================================
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -676,17 +709,9 @@ from functools import partial
 from tqdm import tqdm
 from subhkl.instrument.detector import Detector
 
-# =====================================================================
-# 1. HYPER-OPTIMIZED GPU KERNELS
-# =====================================================================
-
 @partial(jax.jit, static_argnames=['N_shapes', 'max_peaks'])
 def build_and_reduce_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas: jnp.ndarray,
                          gamma: float, N_shapes: int, max_peaks: int):
-    """
-    Builds the dense matrix virtually, computes A^T A, A^T y, and Fisher Info,
-    then immediately discards A. Returns tiny 9MB matrices instead of 6GB.
-    """
     H, W = image.shape
     K = H * W
     N_c = max_peaks * N_shapes
@@ -714,12 +739,10 @@ def build_and_reduce_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas
     A = jnp.hstack([A_peaks, A_bg])
     y = image.flatten()
 
-    # Condense into tiny matrices to save memory and transport
     Ht = (A.T @ A).astype(jnp.float32)
     At_y = (A.T @ y).astype(jnp.float32)
     y_sq_norm = jnp.float32(jnp.sum(y**2) / 2.0)
 
-    # Compute Fisher Info instantly
     variances = jnp.maximum(y, 1.0)
     W_var_diag = 1.0 / variances
     I_fisher = (A.T @ (W_var_diag[:, None] * A)).astype(jnp.float32)
@@ -729,27 +752,17 @@ def build_and_reduce_gpu(image: jnp.ndarray, padded_centers: jnp.ndarray, sigmas
 @partial(jax.jit, static_argnames=['N_c', 'max_iter'])
 def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32, 
                   N_c: int, alpha: float, max_iter: int = 50, tol: float = 1e-5):
-    """
-    Newton solve using Conjugate Gradient (CG).
-    Enforces Non-Negative L1 (NN-Lasso) constraints so physical intensities cannot drop below zero.
-    """
     N = Ht.shape[0]
     alpha = jnp.float32(alpha)
     tol = jnp.float32(tol)
 
     def obj(u):
         quad = jnp.float32(0.5) * jnp.dot(u, Ht @ u) - jnp.dot(u, At_y) + y_sq_norm
-        # Non-negative constraint means u[:N_c] >= 0, so no jnp.abs() is needed
         return quad + alpha * jnp.sum(u[:N_c])
 
     u_init = jnp.zeros(N, dtype=jnp.float32)
-    
-    # Initialize q = u - grad_f(u). At u=0, q = At_y.
     q_init = At_y
     q_c = q_init[:N_c]
-    
-    # Clamp active variables strictly below alpha to start with an empty active set.
-    # This prevents the solver from activating all highly-collinear shapes at once.
     q_c_clamped = jnp.minimum(q_c, jnp.float32(1.0 - 1e-14) * alpha)
     q_init = jnp.concatenate([q_c_clamped, q_init[N_c:]]).astype(jnp.float32)
 
@@ -759,21 +772,16 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
 
     def body_fun(state):
         step, q, u, Gq_norm, _ = state
-        
         Gq = (q - u) + (Ht @ u) - At_y
-        
-        # Non-negative active set (strictly q > alpha)
         II_c = q[:N_c] > alpha
         II_b = jnp.ones(N - N_c, dtype=jnp.bool_)
         D = jnp.concatenate([II_c, II_b]).astype(jnp.float32)
-        
         epsi = jnp.float32(1e-5)
         
         def matvec(v):
             return D * jnp.dot(Ht, D * v) + (1.0 - D) * v + epsi * v
         
         x, _ = jax.scipy.sparse.linalg.cg(matvec, -Gq, maxiter=30)
-        
         dq_I = D * x
         dq_Ic = (1.0 - D) * (-Gq - jnp.dot(Ht, dq_I))
         dq = dq_I + dq_Ic
@@ -788,17 +796,12 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
             bt_i, tau, _, _, _, j_curr = bt_state
             tau = jnp.float32(tau * 0.5)
             q_test = q + tau * dq
-            
-            # Non-Negative Thresholding Operator: max(0, x - alpha)
             c_test = jnp.maximum(0.0, q_test[:N_c] - alpha)
             u_test = jnp.concatenate([c_test, q_test[N_c:]]).astype(jnp.float32)
-            
             j_test = obj(u_test)
             return (bt_i + 1, tau, q_test, u_test, j_test, j_curr)
             
         q_init_test = q + dq
-        
-        # Non-Negative Thresholding Operator: max(0, x - alpha)
         c_init_test = jnp.maximum(0.0, q_init_test[:N_c] - alpha)
         u_init_test = jnp.concatenate([c_init_test, q_init_test[N_c:]]).astype(jnp.float32)
         
@@ -814,12 +817,7 @@ def solve_ssn_gpu(Ht: jnp.ndarray, At_y: jnp.ndarray, y_sq_norm: jnp.float32,
 
     return u_prime, active_set
 
-# =====================================================================
-# 2. CPU POST-PROCESSING & PYTEST BRIDGES
-# =====================================================================
-
 def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, active_volumes: np.ndarray):
-    """Calculates robust SIGI with NaN guards to prevent OpenBLAS infinite loops."""
     if np.any(np.isnan(I_fisher_active)) or np.any(np.isinf(I_fisher_active)):
         return 0.0, 0.0
 
@@ -835,7 +833,6 @@ def evaluate_fisher_sigi_cpu(I_fisher_active: np.ndarray, c_active: np.ndarray, 
         return float(intensity), 0.0
 
 def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigmas: List[float], gamma: float, max_peaks: int):
-    """Bridge for Pytest Compatibility to reconstruct A on CPU."""
     H, W = image.shape
     y_idx = np.arange(H, dtype=np.float32)
     x_idx = np.arange(W, dtype=np.float32)
@@ -856,7 +853,6 @@ def build_dense_padded_matrix(image: np.ndarray, peak_centers: np.ndarray, sigma
     return jnp.array(np.hstack([A_peaks, A_bg])), jnp.array(weights), jnp.array(volumes), actual_peaks
 
 def solve_ssn(A: np.ndarray, y: jnp.ndarray, N_c: int, alpha: float):
-    """Bridge for Pytest Compatibility."""
     y = jnp.array(y)
     Ht = (A.T @ A).astype(jnp.float32)
     At_y = (A.T @ y).astype(jnp.float32)
@@ -864,16 +860,10 @@ def solve_ssn(A: np.ndarray, y: jnp.ndarray, N_c: int, alpha: float):
     u_prime, active_set = solve_ssn_gpu(Ht, At_y, y_sq_norm, N_c, alpha)
     return np.array(u_prime), np.array(active_set)
 
-
-# =====================================================================
-# 3. SYNCHRONOUS ORCHESTRATOR
-# =====================================================================
-
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
                             create_visualizations: bool = False):
-    """Orchestrator for Dense GPU integration with physical coordinate evaluation and visualization."""
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
@@ -891,10 +881,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration (Dense GPU)"):
 
-
-        # --- 1. HARMONIC DEDUPLICATION (EXACT CRYSTALLOGRAPHIC) ---
-        # Group strictly by the fundamental Miller ray (h/g, k/g, l/g) where g is the GCD.
-        # This is immune to spatial projection jitter and ensures perfect linear independence.
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
         initial_peaks_count = len(i_arr)
         
@@ -908,9 +894,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
             
             if h == 0 and k == 0 and l == 0:
-                continue # Safety skip for origin
+                continue 
                 
-            # Find the fundamental ray using the Greatest Common Divisor
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
             
@@ -923,14 +908,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         
         peak_centers = np.column_stack([i_arr, j_arr])
         actual_peaks_count = len(peak_centers)
-        
-        # Diagnostic Compression Output
-        if show_progress and initial_peaks_count != actual_peaks_count:
-            physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
-            comp_ratio = (1.0 - actual_peaks_count / initial_peaks_count) * 100
-            tqdm.write(f"Bank {physical_b} [Run {peaks_obj.image.get_run_id(img_key)}]: "
-                       f"Harmonics Filtered {initial_peaks_count} -> {actual_peaks_count} "
-                       f"({comp_ratio:.1f}% compression)")
 
         if actual_peaks_count == 0:
             continue
@@ -943,7 +920,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         image_jnp = jnp.array(image_raw, dtype=jnp.float32)
 
-        # --- Context / Physical Angle Mapping ---
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector(img_key)
 
@@ -956,17 +932,14 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
         bank_tt, bank_az = det.pixel_to_angles(p_data[0], p_data[1], sample_offset=s_lab)
 
-        # 1. Condense Memory (Compute Ht and Fisher directly)
         Ht, At_y, y_sq_norm, I_fisher, weights, volumes = build_and_reduce_gpu(
             image_jnp, padded_centers_jnp, sigmas_jnp, gamma, N_shapes, max_peaks
         )
         Ht = Ht.block_until_ready()
 
-        # 2. Conjugate Gradient SSN Solve
         u_prime, active_set = solve_ssn_gpu(Ht, At_y, y_sq_norm, N_c, alpha)
         u_prime = u_prime.block_until_ready()
 
-        # 3. Fast CPU Extraction
         u_prime_cpu = np.array(u_prime)
         active_set_cpu = np.array(active_set)
         I_fisher_cpu = np.array(I_fisher)
@@ -1006,9 +979,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
-        # ---------------------------------------
-        # VISUALIZATION
-        # ---------------------------------------
         if create_visualizations:
             import matplotlib.pyplot as plt
             from matplotlib.patches import Circle
@@ -1019,35 +989,25 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 plt.switch_backend("Agg")
                 
             fig, ax = plt.subplots(figsize=(10, 10))
-            
-            # Show original image with log scaling
             ax.imshow(1 + image_raw, norm="log", cmap="binary", origin="lower")
-            
-            # Strip axis ticks/numbers for a clean, pure-image look
             ax.set_xticks([])
             ax.set_yticks([])
-            
-            # Caption inside the top-left of the frame
             ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})", 
                     transform=ax.transAxes, ha='left', va='top', 
                     fontsize=16, color='black',
                     bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=3))
             
-            # Predicted peaks (blue crosses)
             ax.scatter(peak_centers[:, 1], peak_centers[:, 0], marker='+', color='blue', s=60, label="Predicted")
-            
-            # Generate a dynamic colorscale
             color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
             
-            # Draw 2-sigma ellipses/circles for all ACTIVE shape parameters
             for p_idx in range(actual_peaks_count):
                 start_idx = p_idx * N_shapes
                 end_idx = start_idx + N_shapes
                 
                 active_shapes = active_set_cpu[start_idx:end_idx]
                 if np.any(active_shapes):
-                    cx = peak_centers[p_idx, 0] # row
-                    cy = peak_centers[p_idx, 1] # col
+                    cx = peak_centers[p_idx, 0]
+                    cy = peak_centers[p_idx, 1]
                     
                     for s_idx, is_active in enumerate(active_shapes):
                         if is_active:
@@ -1056,7 +1016,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             circle = Circle((cy, cx), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
                             ax.add_patch(circle)
             
-            # Update Legend
             handles, labels = ax.get_legend_handles_labels()
             for s_idx in range(N_shapes):
                 color = color_map[s_idx]
@@ -1065,18 +1024,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 handles.append(circle_key)
                 labels.append(rf'$2\sigma={2.0 * active_sig}$')
                 
-            # Legend strictly inside the lower center, single row, no frame
             ax.legend(
-                handles=handles, 
-                labels=labels, 
-                loc='lower center', 
-                ncol=len(handles), 
-                frameon=False,
-                fontsize=12
+                handles=handles, labels=labels, loc='lower center', 
+                ncol=len(handles), frameon=False, fontsize=12
             )
-            
             out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
-            # pad_inches=0 trims all exterior matplotlib whitespace
             fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0)
             plt.close(fig)
 
