@@ -244,7 +244,12 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                # Directly proportional score: Rewards broad peaks to counteract the inverse penalty
+                # MATHEMATICAL L1 ADMISSION CONDITION:
+                # A feature enters the active set if: phi^T * y > alpha_vec
+                # Here, phi^T * y = raw_dot
+                # alpha_vec = alpha * (1 / sigma**gamma)
+                # Therefore: raw_dot > alpha / sigma**gamma  =>  raw_dot * sigma**gamma > alpha
+                # We multiply by sigma**gamma so argmax selects the correct scale for the residual
                 weight = (s / self.ref_sigma) ** self.gamma
                 final_score = raw_dot * weight
                 
