@@ -494,13 +494,18 @@ class SparseRBFPeakFinder:
         images_norm = images_bg_corr / global_max
         
         # AUTOTUNING: Convert alpha from arbitrary photons to a local Poisson SNR multiplier
-        median_bg_level = np.median(bg_map[bg_map > 1e-2])
+        valid_bg = bg_map[bg_map > 1e-2]
+        if valid_bg.size == 0:
+            median_bg_level = 1.0
+        else:
+            median_bg_level = np.median(valid_bg)
+            
         if np.isnan(median_bg_level) or median_bg_level <= 0:
             median_bg_level = 1.0
             
         poisson_noise_floor = np.maximum(np.sqrt(median_bg_level), 1.0)
-        autotuned_alpha_raw = self.alpha * poisson_noise_floor
-        
+        autotuned_alpha_raw = self.alpha * poisson_noise_floor 
+
         eff_alpha_norm = autotuned_alpha_raw / global_max
         # Give scout a 50% discount to ensure faint seeds make it to the rigorous SSN phase
         eff_alpha_scout = eff_alpha_norm * 0.5 
