@@ -186,8 +186,9 @@ def process_single_image(
             fname = f"{img_label}_bank{physical_bank}.png"
             if viz_prefix is not None:
                 fname = f"{viz_prefix}_{fname}"
-            fig.savefig(fname)
             fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+            fig.tight_layout()
+            fig.savefig(fname)
             plt.close(fig)
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
@@ -581,6 +582,7 @@ def integrate_single_bank(
         out_name = f"{viz_label}_int.png"
         if viz_prefix:
             out_name = f"{viz_prefix}_{out_name}"
+        fig.tight_layout()
         fig.savefig(out_name, bbox_inches="tight")
         plt.close(fig)
 
