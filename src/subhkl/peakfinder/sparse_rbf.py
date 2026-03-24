@@ -496,22 +496,34 @@ class SparseRBFPeakFinder:
         global_max = images_bg_corr.max() + 1e-9
         images_norm = images_bg_corr / global_max
         
+        # --- NEW AUTOTUNING LOGIC ---
+        # 1. Estimate global background mode (ignoring near-zero dead pixels)
+        median_bg_level = np.median(bg_map[bg_map > 1e-2]) 
+        if np.isnan(median_bg_level) or median_bg_level <= 0:
+            median_bg_level = 1.0
+            
+        # 2. Calculate theoretical Poisson noise floor
+        poisson_noise_floor = np.sqrt(median_bg_level)
+        
         if self.show_steps:
             print(f"  > Pre-processing: Morphological Bg Subtracted. Global Max={global_max:.1f}")
+            print(f"  > Autotuning: Median BG={median_bg_level:.1f}, Noise Floor=~{poisson_noise_floor:.1f} counts")
 
         PAD_GLOBAL = 32
         img_jax_scout = jnp.array(images_norm)
         img_jax_scout_padded = jnp.pad(img_jax_scout, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
-        eff_alpha_norm = self.alpha / global_max
+        # 3. Treat self.alpha as an SNR multiplier (e.g., 3.0 = 3 sigma threshold)
+        autotuned_alpha_raw = self.alpha * poisson_noise_floor
+        eff_alpha_norm = autotuned_alpha_raw / global_max
         eff_alpha_scout = eff_alpha_norm * 0.1 
 
         if self.loss == 'poisson':
             img_jax_sniper_padded = jnp.pad(jnp.array(images_batch), ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
-            eff_alpha_stat = self.alpha 
+            eff_alpha_stat = autotuned_alpha_raw  # <--- Apply autotuned photon threshold
         else:
             img_jax_sniper_padded = img_jax_scout_padded
-            eff_alpha_stat = eff_alpha_norm 
+            eff_alpha_stat = eff_alpha_norm
 
         # =====================================================================
         # PHASE 1: SCOUT (Generic Seed Discovery)
