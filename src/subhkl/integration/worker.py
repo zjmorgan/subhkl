@@ -497,8 +497,9 @@ def integrate_single_bank(
         if vmax <= vmin:
             vmax = vmin + 10.0
 
-        plot_detector_data(axes[0], image)
+        im0 = plot_detector_data(axes[0], image)
         axes[0].set_title(f"{viz_label}")
+        fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
