@@ -12,7 +12,6 @@ from subhkl.instrument.physics import (
     predict_reflections_on_panel,
 )
 from subhkl.core.crystallography import generate_reflections
-from subhkl.utils.viz import plot_detector_data
 
 
 def _run_harvest_local_max(
@@ -165,10 +164,11 @@ def process_single_image(
             plt.switch_backend("Agg")
         try:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            im0 = plot_detector_data(axes[0], image)
+            im0 = axes[0].imshow(image, cmap='viridis', origin='lower')
             axes[0].scatter(j, i, marker="1", c="blue")
             axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            im1 = plot_detector_data(axes[1], image)
+            im1 = axes[1].imshow(image, cmap='viridis', origin='lower')
+
             forbidden = ~mask
             if np.any(forbidden):
                 overlay = np.zeros((*forbidden.shape, 4))
@@ -520,7 +520,7 @@ def integrate_single_bank(
         if vmax <= vmin:
             vmax = vmin + 10.0
 
-        im0 = plot_detector_data(axes[0], image)
+        im0 = axes[0].imshow(image, cmap='viridis', origin='lower')
         axes[0].set_title(f"{viz_label}")
         fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
@@ -561,7 +561,8 @@ def integrate_single_bank(
                     clip_on=True,
                 )
 
-        plot_detector_data(axes[1], image)
+        im1 = axes[1].imshow(image, cmap='viridis', origin='lower')
+
         forbidden = ~mask
         overlay = np.zeros((*forbidden.shape, 4))
         overlay[forbidden] = [0, 1, 1, 0.3]
