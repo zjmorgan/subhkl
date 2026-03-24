@@ -146,10 +146,10 @@ def process_single_image(
             plt.switch_backend("Agg")
         try:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            plot_detector_data(axes[0], image)
+            im0 = plot_detector_data(axes[0], image)
             axes[0].scatter(j, i, marker="1", c="blue")
             axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            plot_detector_data(axes[1], image)
+            im1 = plot_detector_data(axes[1], image)
             forbidden = ~mask
             if np.any(forbidden):
                 overlay = np.zeros((*forbidden.shape, 4))
@@ -168,6 +168,7 @@ def process_single_image(
             if viz_prefix is not None:
                 fname = f"{viz_prefix}_{fname}"
             fig.savefig(fname)
+            fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
             plt.close(fig)
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
