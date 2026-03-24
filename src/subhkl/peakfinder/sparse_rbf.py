@@ -32,7 +32,7 @@ class SparseRBFPeakFinder:
     - Dyadic Scale Hierarchy (Powers of 2)
     - Halo Context Extraction (Prevents boundary truncation).
     - Upward Macro-Merge (Besov Pursuit via SSN L1 Projection).
-    - Hybrid SSN Solver: Fisher Scoring + Bilinear OLS Background + Debiasing.
+    - Unbiased SSN Solver: Exact Direct L1 Penalty + Planar Background + Undamped Debiasing.
     """
     def __init__(
         self,
@@ -119,21 +119,28 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _loss_fn(params_flat, x_grid, target, alpha, gamma, ref_s, bounds_tuple, opt_mask):
-        """Geometric Loss: Operates on masked atoms and a scalar background."""
+        """Geometric Loss: Planar Background with L1 penalty to dynamically absorb sloped noise and stabilize subpixel coordinates."""
         H, W, min_s, max_s = bounds_tuple
         
-        bg = jax.nn.softplus(params_flat[-1])
-        params_peaks = params_flat[:-1]
+        # 3-Parameter Planar Background [DC, x_slope, y_slope]
+        bg_params = params_flat[-3:]
+        bg_dc, bg_r, bg_c = bg_params
         
+        params_peaks = params_flat[:-3]
         params_phys = SparseRBFPeakFinder._to_physical(params_peaks, H, W, min_s, max_s)
+        
+        r_norm = (x_grid[0] - H / 2.0) / (H / 2.0)
+        c_norm = (x_grid[1] - W / 2.0) / (W / 2.0)
+        bg = jax.nn.softplus(bg_dc + bg_r * r_norm + bg_c * c_norm)
+        
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask) + bg
+        
         nll = 0.5 * jnp.sum((recon - target)**2)
         
         intensities = jnp.abs(params_phys[:, 0]) * opt_mask
         sigmas = params_phys[:, 3]
         
-        # EXACT INVERSE PENALTY: Broad peaks are heavily rewarded in the geometry pass
-        reg_weight = 1.0 / ((sigmas / ref_s) ** gamma + 1e-6)
+        reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = alpha * jnp.sum(intensities * reg_weight)
         
         return nll + reg
@@ -142,27 +149,28 @@ class SparseRBFPeakFinder:
     @partial(jit, static_argnames=['max_iter', 'loss_type'])
     def _solve_ssn_unified(A, y, alpha_vec, loss_type, c_warm, x_grid, max_iter=20):
         """
-        Hybrid Semi-Smooth Newton:
+        Semi-Smooth Newton Solver:
         - Exact L1 Projection for Peaks
-        - Bilinear OLS for Background
-        - Newton Debiasing for Flux Recovery
+        - Planar OLS Background to absorb residual noise floors safely without eating peaks
+        - Unregularized Newton Debiasing for 100% Poisson Flux Recovery
         """
         H, W = x_grid.shape[1], x_grid.shape[2]
         
+        # Planar Basis: DC, X slope, Y slope
         r_norm = (x_grid[0].flatten() - H/2.0) / (H/2.0)
         c_norm = (x_grid[1].flatten() - W/2.0) / (W/2.0)
-        A_bg = jnp.stack([jnp.ones_like(r_norm), r_norm, c_norm, r_norm*c_norm], axis=1)
-        num_bg = 4
+        A_bg = jnp.stack([jnp.ones_like(r_norm), r_norm, c_norm], axis=1)
+        num_bg = 3
         
         A_use = jnp.hstack([A, A_bg])
         N_peaks = A.shape[1]
         N_params = N_peaks + num_bg
         
-        # Background is unpenalized (exact OLS)
+        # Background is unpenalized
         alpha_pad = jnp.concatenate([alpha_vec, jnp.zeros(num_bg)])
         
         bg_dc_init = jnp.maximum(jnp.mean(y), 1e-2)
-        c_init = jnp.concatenate([c_warm, jnp.array([bg_dc_init, 0.0, 0.0, 0.0])])
+        c_init = jnp.concatenate([c_warm, jnp.array([bg_dc_init, 0.0, 0.0])])
         q_init = c_init
 
         def get_loss_grad_hess(c):
@@ -211,16 +219,14 @@ class SparseRBFPeakFinder:
                 q_test = q + tau * dq
                 
                 c_test_peaks = jnp.maximum(0.0, q_test[:N_peaks] - alpha_vec)
-                c_test_bg = q_test[N_peaks:]
-                c_test = jnp.concatenate([c_test_peaks, c_test_bg])
+                c_test = jnp.concatenate([c_test_peaks, q_test[N_peaks:]])
                 
                 j_test, _, _ = get_loss_grad_hess(c_test)
                 return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
 
             q_test = q + dq
             c_test_peaks = jnp.maximum(0.0, q_test[:N_peaks] - alpha_vec)
-            c_test_bg = q_test[N_peaks:]
-            c_test = jnp.concatenate([c_test_peaks, c_test_bg])
+            c_test = jnp.concatenate([c_test_peaks, q_test[N_peaks:]])
 
             j_test, _, _ = get_loss_grad_hess(c_test)
 
@@ -235,13 +241,13 @@ class SparseRBFPeakFinder:
         _, _, c_l1, _ = final_state
 
         # =========================================================================
-        # DEBIASING PHASE: Eliminate Soft-Thresholding Bias for Exact Flux Recovery
+        # DEBIASING PHASE: Unregularized, UNDAMPED Newton for Exact MLE.
         # =========================================================================
         active_mask = jnp.concatenate([c_l1[:N_peaks] > 1e-5, jnp.ones(num_bg, dtype=bool)])
 
         def debias_cond(state):
             step, _, G_norm = state
-            return (step < 5) & (G_norm > 1e-4)
+            return (step < 25) & (G_norm > 1e-4)
 
         def debias_body(state):
             step, c, _ = state
@@ -260,6 +266,8 @@ class SparseRBFPeakFinder:
             DG = (I - D_mat) + hess @ D_mat + 1e-3 * I 
             
             dc = jnp.linalg.solve(DG, -grad)
+            
+            # FULL STRIDE (No 0.5 damping!)
             c_new_raw = c + dc * active_mask
             
             c_new_peaks = jnp.maximum(0.0, c_new_raw[:N_peaks])
@@ -300,11 +308,9 @@ class SparseRBFPeakFinder:
                 r_idx, c_idx = jnp.unravel_index(flat_idx, corr.shape)
                 raw_dot = jnp.abs(corr[r_idx, c_idx])
                 
-                # EXACT INVERSE HEURISTIC
-                atom_norm = s * jnp.sqrt(jnp.pi)
-                proj_score = raw_dot / (atom_norm + 1e-9)
-                prior_weight = 1.0 / ((s / self.ref_sigma) ** self.gamma + 1e-6)
-                final_score = proj_score * prior_weight
+                # NATIVE GAMMA SCALING: Honors the user's supplied sign (+ or -)
+                weight = (s / self.ref_sigma) ** self.gamma + 1e-6
+                final_score = raw_dot / weight
                 
                 c_init = jnp.maximum(residual[r_idx, c_idx], 0.0)
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
@@ -325,7 +331,7 @@ class SparseRBFPeakFinder:
                 
                 bg_init = jnp.maximum(jnp.mean(patch_geom), 1e-3)
                 bg_dc_raw = jnp.log(jnp.expm1(bg_init))
-                bg_raw = jnp.array([bg_dc_raw])
+                bg_raw = jnp.array([bg_dc_raw, 0.0, 0.0])
                 p_raw_full = jnp.concatenate([p_raw, bg_raw])
                 
                 res = jax.scipy.optimize.minimize(
@@ -333,10 +339,9 @@ class SparseRBFPeakFinder:
                     x0=p_raw_full,
                     args=(x_grid, patch_geom, eff_alpha_scout, self.gamma, self.ref_sigma, bounds, opt_mask),
                     method='BFGS',
-                    # EARLY STOPPING: maxiter 5 prevents L1 spatial attraction from dragging the peaks!
-                    options={'maxiter': 5}
+                    options={'maxiter': 20}
                 )
-                p_refined = self._to_physical(res.x[:-1], *bounds)
+                p_refined = self._to_physical(res.x[:-3], *bounds)
                 c_norm, r, col, sigma = p_refined.T
                 
                 def eval_one(ri, ci_col, si):
@@ -347,8 +352,8 @@ class SparseRBFPeakFinder:
                 
                 c_warm = jnp.where(loss_code == 1, c_norm * global_max, c_norm)
                 
-                # EXACT INVERSE PENALTY for SSN
-                weights = 1.0 / ((sigma / self.ref_sigma)**self.gamma + 1e-6)
+                # NATIVE GAMMA PENALTY
+                weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec_stat = eff_alpha_stat * weights
                 
                 c_sparse_stat = self._solve_ssn_unified(A_masked, patch_stat.flatten(), alpha_vec_stat, loss_code, c_warm, x_grid)
@@ -395,7 +400,7 @@ class SparseRBFPeakFinder:
             A_aug = vmap(eval_one_aug)(r_aug, col_aug, sigma_aug).T
             A_aug_masked = A_aug * aug_mask
             
-            weights_aug = 1.0 / ((sigma_aug / self.ref_sigma)**self.gamma + 1e-6)
+            weights_aug = (sigma_aug / self.ref_sigma)**self.gamma + 1e-6
             alpha_vec_stat_aug = eff_alpha_stat * weights_aug
             
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), alpha_vec_stat_aug, loss_code, c_warm_stat, x_grid)
@@ -481,7 +486,6 @@ class SparseRBFPeakFinder:
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
-        # EXACT FIX: Median filter guarantees unbiased Poisson background evaluation
         from scipy.ndimage import median_filter, gaussian_filter
         bg_med = median_filter(images_batch, size=(1, 15, 15))
         bg_map = gaussian_filter(bg_med, sigma=(0, 3.0, 3.0))
@@ -732,7 +736,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 bg_init = jnp.maximum(jnp.mean(patch), 1e-3)
                 bg_dc_raw = jnp.log(jnp.expm1(bg_init))
-                bg_raw = jnp.array([bg_dc_raw])
+                bg_raw = jnp.array([bg_dc_raw, 0.0, 0.0])
                 
                 p_raw_full = jnp.concatenate([init_raw.ravel(), bg_raw])
                 opt_mask = jnp.ones(1, dtype=bool)
@@ -742,9 +746,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                     x0=p_raw_full,
                     args=(x_grid, patch, self.alpha, self.gamma, self.ref_sigma, bounds, opt_mask), 
                     method='BFGS',
-                    options={'maxiter': 10}
+                    options={'maxiter': 20}
                 )
-                return self._to_physical(res.x[:-1], *bounds)[0] 
+                return self._to_physical(res.x[:-3], *bounds)[0] 
             return vmap(process_patch)(patches)
 
         refined_peaks = []

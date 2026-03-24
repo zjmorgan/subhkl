@@ -413,3 +413,69 @@ def test_poisson_overlapping_string():
         deviance = metrics['deviance_nu']
 
         assert deviance < 1.5, f"Poisson Deviance/DoF is too high ({deviance:.2f}), model is severely underfitting!"
+
+def test_real_neutron_structured_background():
+    """
+    Tests the solver against 'real-life' neutron conditions:
+    A structured diffuse scattering halo instead of a flat baseline.
+    """
+    try:
+        from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
+    except ImportError:
+        from subhkl.search.sparse_rbf import SparseRBFPeakFinder
+        
+    import numpy as np
+    
+    H, W = 100, 100
+    np.random.seed(42)
+    
+    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+    
+    # 1. Structured Background: A massive diffuse scattering halo
+    halo_amp = 80.0
+    halo_sig = 30.0
+    r2_halo = (x_coords - 50)**2 + (y_coords - 50)**2
+    bg_structured = 15.0 + halo_amp * np.exp(-r2_halo / (2 * halo_sig**2))
+    image = np.copy(bg_structured)
+    
+    # 2. Inject Real-world Bragg Peaks (some strong, some weak)
+    true_peaks = [
+        (25.0, 25.0, 1.2, 300.0), 
+        (75.0, 75.0, 1.0, 80.0),  
+        (50.0, 50.0, 2.0, 400.0), # Peak dead center of the scattering halo
+    ]
+    
+    for r, c, sig, amp in true_peaks:
+        r2 = (x_coords - c)**2 + (y_coords - r)**2
+        image += amp * np.exp(-r2 / (2 * sig**2))
+        
+    # Apply Poisson sampling
+    image = np.random.poisson(image).astype(np.float32)
+    image_batch = image[np.newaxis, ...]
+    
+    finder = SparseRBFPeakFinder(
+        alpha=5.0,
+        gamma=2.0,
+        min_sigma=0.5,
+        max_sigma=5.0,
+        loss='poisson',
+        show_steps=False
+    )
+    
+    results = finder.find_peaks_batch(image_batch)
+    peaks = results[0]
+    
+    # 1. Did it successfully find the peaks despite the halo?
+    assert len(peaks) >= 3, f"Failed to extract Bragg peaks from halo, found {len(peaks)}"
+    
+    # 2. Re-compute the metrics manually to check the deviance
+    # If the algorithm uses a flat median, deviance will be > 3.0.
+    # If the algorithm uses a local background map, deviance will be < 1.5.
+    medians = np.median(image_batch, axis=(1, 2), keepdims=True)
+    # Note: We must reach into the class to get the background map if it exists
+    bg_map = getattr(finder, '_last_bg_map', medians) 
+    
+    metrics = finder.compute_metrics(image_batch, bg_map, [peaks], global_max=1.0)
+    deviance = metrics['deviance_nu']
+    
+    assert deviance < 1.5, f"Deviance failed on structured background ({deviance:.2f})! Model assumes flat background."
