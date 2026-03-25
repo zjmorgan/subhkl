@@ -31,7 +31,7 @@ class SparseRBFPeakFinder:
     Features:
     - Unified Poisson MLE: Operates strictly on raw counts in 1:1 photon units.
     - Fixed Morphological Base: Rigidly anchors subpixel geometry, preventing drift.
-    - Poisson Dual Variable Extraction: Exact topological gradients, immune to NaN propagation.
+    - Dirichlet Boundary: Configurable border width to ignore detector edge masking artifacts.
     - Exact Flux Debiasing: Damped Newton step strictly enforcing Positivity.
     """
     def __init__(
@@ -43,6 +43,7 @@ class SparseRBFPeakFinder:
         max_peaks: int = 500,           
         chunk_size: int = 1024,
         loss: str = 'gaussian',
+        border_width: int = 0,          # NEW: Dirichlet boundary condition width
         show_steps: bool = True
     ):
         self.alpha = alpha
@@ -53,6 +54,7 @@ class SparseRBFPeakFinder:
         self.max_peaks = max_peaks
         self.chunk_size = chunk_size
         self.loss = loss
+        self.border_width = border_width 
         self.show_steps = show_steps
         
         self.base_window_size = 32      
@@ -119,10 +121,8 @@ class SparseRBFPeakFinder:
 
     @staticmethod
     def _loss_fn(params_flat, x_grid, target_raw, target_bg, eff_alpha_scout, gamma, ref_s, bounds_tuple, opt_mask, loss_code):
-        """Unified Geometric Loss: Raw Poisson NLL tightly anchored to morphological background."""
         H, W, min_s, max_s = bounds_tuple
         
-        # params_flat purely contains geometric peaks. Background is strictly target_bg.
         params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask) + target_bg
@@ -145,11 +145,6 @@ class SparseRBFPeakFinder:
     @staticmethod
     @partial(jit, static_argnames=['max_iter', 'loss_type'])
     def _solve_ssn_unified(A, y, bg_flat, alpha_vec, loss_type, c_warm, max_iter=20):
-        """
-        Semi-Smooth Newton Solver:
-        - Phase 1 (Topology): Uses stable Expected Fisher Info to rigorously find active set.
-        - Phase 2 (Statistics): Uses Damped Exact Newton Step to safely land on true MLE flux.
-        """
         N_peaks = A.shape[1]
         N_params = N_peaks
         q_init = c_warm
@@ -160,7 +155,7 @@ class SparseRBFPeakFinder:
                 u_safe = jnp.maximum(u, 1e-6)
                 nll = jnp.sum(u_safe - y * jnp.log(u_safe))
                 grad = A.T @ (1.0 - y / u_safe)
-                W_diag = 1.0 / jnp.maximum(y, 1.0)  # Stable Expected Fisher Info for topology search
+                W_diag = 1.0 / jnp.maximum(y, 1.0)  
                 hess = A.T @ (W_diag[:, None] * A)
             else:
                 nll = 0.5 * jnp.sum((u - y)**2)
@@ -214,9 +209,7 @@ class SparseRBFPeakFinder:
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
         _, _, c_l1, _ = final_state
 
-        # =========================================================================
-        # DEBIASING PHASE: Exact Newton Step isolating Poisson flux
-        # =========================================================================
+        # DEBIASING PHASE
         active_mask = c_l1 > 1e-5
 
         def debias_cond(state):
@@ -243,7 +236,6 @@ class SparseRBFPeakFinder:
             
             dc = jnp.linalg.solve(DG, -grad)
             
-            # DAMPED STEP prevents Poisson NLL from overshooting into negatives
             tau = jnp.where(loss_type == 1, 0.5, 1.0)
             c_new_raw = c + tau * dc * active_mask
             
@@ -279,10 +271,8 @@ class SparseRBFPeakFinder:
             def check_sigma(s):
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
                 
-                # Protect division by strictly enforcing a background minimum
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
                 
-                # EXACT DUAL VARIABLE (Topological Gradient)
                 grad_field = jnp.where(
                     loss_code == 1,
                     (patch_stat / recon_total) - 1.0, 
@@ -318,7 +308,6 @@ class SparseRBFPeakFinder:
                 p, a_mask = operand
                 p_raw = self._to_unconstrained(p, *bounds)
                 
-                # Exclusively optimized on raw spatial bounds against target_bg
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
@@ -473,7 +462,6 @@ class SparseRBFPeakFinder:
         from scipy.ndimage import median_filter, gaussian_filter
         bg_med = median_filter(images_batch, size=(1, 15, 15))
         bg_map = gaussian_filter(bg_med, sigma=(0, 3.0, 3.0))
-        # Ensure strict positivity to prevent NaN log barriers
         bg_map = np.clip(bg_map, 1e-3, None)
         self._last_bg_map = bg_map
         
@@ -513,10 +501,21 @@ class SparseRBFPeakFinder:
         w_scout = self.base_window_size
         stride = w_scout // 2
         
-        grid_h = list(range(0, H - w_scout + 1, stride))
-        if grid_h[-1] + w_scout < H: grid_h.append(H - w_scout)
-        grid_w = list(range(0, W - w_scout + 1, stride))
-        if grid_w[-1] + w_scout < W: grid_w.append(W - w_scout)
+        bw = self.border_width
+        if H <= 2*bw or W <= 2*bw:
+            bw = 0  # Fallback if image is too small for requested border
+            
+        start_h, end_h = bw, H - bw
+        start_w, end_w = bw, W - bw
+        
+        # DIRICHLET GRID: Prevent Scout from searching the physical edges/masks
+        grid_h = list(range(start_h, end_h - w_scout + 1, stride))
+        if not grid_h or grid_h[-1] + w_scout < end_h: 
+            grid_h.append(max(start_h, end_h - w_scout))
+            
+        grid_w = list(range(start_w, end_w - w_scout + 1, stride))
+        if not grid_w or grid_w[-1] + w_scout < end_w: 
+            grid_w.append(max(start_w, end_w - w_scout))
         
         window_coords = [(b, r, c) for b in range(B) for r in grid_h for c in grid_w]
         window_coords_arr = np.array(window_coords, dtype=np.int32)
@@ -632,9 +631,10 @@ class SparseRBFPeakFinder:
                 global_rs = valid_r_centers - (P // 2) - self.halo + valid_peaks[:, 1]
                 global_cs = valid_c_centers - (P // 2) - self.halo + valid_peaks[:, 2]
                 
-                MARGIN = 10
-                in_bounds = (global_rs > MARGIN) & (global_rs < H - MARGIN) & \
-                            (global_cs > MARGIN) & (global_cs < W - MARGIN)
+                # DIRICHLET FILTER: Cleanly reject any peaks that drift into the margin
+                MARGIN = max(3, self.border_width)
+                in_bounds = (global_rs >= MARGIN) & (global_rs < H - MARGIN) & \
+                            (global_cs >= MARGIN) & (global_cs < W - MARGIN)
                             
                 final_mask = (valid_peaks[:, 0] > 1e-5) & in_bounds
                 
@@ -685,10 +685,10 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     Takes predicted spot coordinates, extracts patches, and uses Volume-Penalized
     Sparse RBF to simultaneously refine sub-pixel position and integrate intensity.
     """
-    def __init__(self, alpha=0.05, patch_size=15, min_sigma=0.5, max_sigma=5.0):
+    def __init__(self, alpha=0.05, patch_size=15, min_sigma=0.5, max_sigma=5.0, border_width=0):
         super().__init__(
             alpha=alpha, min_sigma=min_sigma, max_sigma=max_sigma,
-            loss='gaussian', show_steps=False
+            loss='gaussian', border_width=border_width, show_steps=False
         )
         self.refine_patch_size = patch_size
 
