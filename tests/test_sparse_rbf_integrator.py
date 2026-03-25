@@ -249,7 +249,7 @@ def test_peak_finder_multiscale_subpixel_recovery():
 
         finder = SparseRBFPeakFinder(
             alpha=2.0,
-            gamma=2.0,
+            gamma=1.0,
             min_sigma=0.5,
             max_sigma=5.0,
             show_steps=False
@@ -315,10 +315,10 @@ def test_poisson_vs_gaussian_sparse_flux():
 
     # Use low alpha to ensure both solvers admit the weak peak
     finder_l2 = SparseRBFPeakFinder(
-        alpha=1, min_sigma=1.0, max_sigma=4.0, loss='gaussian', show_steps=False
+        gamma=1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='gaussian', show_steps=False
     )
     finder_pois = SparseRBFPeakFinder(
-        alpha=1, min_sigma=1.0, max_sigma=4.0, loss='poisson', show_steps=False
+        gamma=1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='poisson', show_steps=False
     )
 
     peaks_l2 = finder_l2.find_peaks_batch(image_batch)[0]
@@ -392,7 +392,7 @@ def test_poisson_overlapping_string():
 
         finder = SparseRBFPeakFinder(
             alpha=2.0,
-            gamma=2.0,
+            gamma=1.0,
             min_sigma=0.5,
             max_sigma=5.0,
             loss='poisson',
@@ -454,8 +454,8 @@ def test_real_neutron_structured_background():
     image_batch = image[np.newaxis, ...]
     
     finder = SparseRBFPeakFinder(
-        alpha=1.0,
-        gamma=2.0,
+        alpha=0.5,
+        gamma=1.0,
         min_sigma=0.5,
         max_sigma=5.0,
         loss='poisson',
