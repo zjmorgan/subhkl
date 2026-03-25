@@ -268,7 +268,7 @@ class SparseRBFPeakFinder:
             
             recon = self._predict_batch_physical(params, x_grid, active_mask)
            
-           def check_sigma(s):
+            def check_sigma(s):
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
 
