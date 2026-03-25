@@ -486,7 +486,18 @@ class SparseRBFPeakFinder:
             print(f"  > SNR Threshold: User Alpha={self.alpha} -> {autotuned_alpha_raw:.1f} photon threshold")
 
         PAD_GLOBAL = 32
-        
+       
+        img_jax_stat_np = np.copy(images_batch)
+        if self.border_width > 0:
+            bw = self.border_width
+            # Create a boolean mask of the valid interior
+            valid_interior = np.zeros((H, W), dtype=bool)
+            valid_interior[bw:-bw, bw:-bw] = True
+            
+            # Broadcast mask to batch dimension and overwrite borders with background
+            valid_mask_batch = np.broadcast_to(valid_interior, (B, H, W))
+            img_jax_stat_np = np.where(valid_mask_batch, img_jax_stat_np, bg_map)
+
         img_jax_stat = jnp.array(images_batch)
         img_jax_stat_padded = jnp.pad(img_jax_stat, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
         
