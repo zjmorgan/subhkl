@@ -22,13 +22,15 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Upgrade packaging tools and install the package
 RUN uv pip install -U pip setuptools wheel toml \
-    && uv pip install -e .
+	&& uv build
 
 FROM python:3.10-slim AS tool
 
 # Copy the virtual environment from build stage
-COPY --from=build /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+COPY --from=build /build/dist/subhkl-0.1.0-py3-none-any.whl subhkl-0.1.0-py3-none-any.whl
+#ENV PATH="/opt/venv/bin:$PATH"
+
+RUN python -m pip install subhkl-0.1.0-py3-none-any.whl
 
 # Set working directory
 WORKDIR /app
