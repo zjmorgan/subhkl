@@ -102,7 +102,7 @@ def prepare_harvest_tasks(
             min_sigma=harvest_peaks_kwargs.get("min_sigma", 1.0),
             max_sigma=harvest_peaks_kwargs.get("max_sigma", 10.0),
             max_peaks=harvest_peaks_kwargs.get("max_peaks", 500),
-            border_width=border_width,
+            border_width=int(border_width),
             chunk_size=harvest_peaks_kwargs.get("chunk_size", 1024),
             show_steps=harvest_peaks_kwargs.get("show_steps", False),
         )
