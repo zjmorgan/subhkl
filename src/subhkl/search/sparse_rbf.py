@@ -277,39 +277,27 @@ class SparseRBFPeakFinder:
             recon = self._predict_batch_physical(params, x_grid, active_mask)
             
             def check_sigma(s):
-                # 1. Analytic Erf Kernel Construction
                 sig_sq2 = s * jnp.sqrt(2.0) + 1e-6
                 erf_y = jax.scipy.special.erf((ky + 0.5) / sig_sq2) - jax.scipy.special.erf((ky - 0.5) / sig_sq2)
                 erf_x = jax.scipy.special.erf((kx + 0.5) / sig_sq2) - jax.scipy.special.erf((kx - 0.5) / sig_sq2)
                 kernel_raw = (jnp.pi / 2.0) * (s**2) * erf_y * erf_x
                 
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
-                bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
                 
-                # 2. Fisher-Scaled Poisson L2 Equivalent Gradient
-                grad_field = jnp.where(
-                    loss_code == 1,
-                    bg_med * ((patch_stat / recon_total) - 1.0), 
-                    patch_stat - recon_total         
-                )
-                
-                # 3. KKT Dual Variable Cross-Correlation
+                # UNIVERSAL ABSOLUTE PHOTON RESIDUAL (Works identically for L2 and mapped Poisson)
+                grad_field = patch_stat - recon_total         
                 dual_var = jax.scipy.signal.correlate2d(grad_field, kernel_raw, mode='same')
                 
                 flat_idx = jnp.argmax(dual_var)
                 r_idx, c_idx = jnp.unravel_index(flat_idx, dual_var.shape)
                 
-                # 4. Exact Least Squares Peak Projection
                 kernel_sq_norm = jnp.sum(kernel_raw ** 2)
                 c_matched = dual_var[r_idx, c_idx] / kernel_sq_norm
                 
-                # 5. KKT Scale-Free Scoring (Avoids 1/s^2 Double Taxation)
                 extra_penalty = (s / self.ref_sigma) ** (self.gamma - 2.0)
                 final_score = c_matched / extra_penalty
                 
-                # 6. BFGS Warm Start Projection
                 c_init = jnp.maximum(c_matched, 0.0)
-                
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
 
             vals, candidates = vmap(check_sigma)(self.candidate_sigmas)
