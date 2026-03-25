@@ -272,10 +272,13 @@ class SparseRBFPeakFinder:
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
                 
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
-                
+               
+                # EXACT DUAL VARIABLE (Topological Gradient)
+                recon_grad_safe = jnp.maximum(recon_total, 1.0)
+
                 grad_field = jnp.where(
                     loss_code == 1,
-                    (patch_stat / recon_total) - 1.0, 
+                    (patch_stat / recon_grad_safe) - 1.0, 
                     patch_stat - recon_total         
                 )
                 
