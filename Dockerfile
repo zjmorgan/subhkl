@@ -26,11 +26,15 @@ RUN uv pip install -U pip setuptools wheel toml \
 
 FROM python:3.10-slim AS tool
 
+RUN apt-get update
+RUN apt-get install libxcb1
+
 # Copy the virtual environment from build stage
 COPY --from=build /build/dist/subhkl-0.1.0-py3-none-any.whl subhkl-0.1.0-py3-none-any.whl
 #ENV PATH="/opt/venv/bin:$PATH"
 
 RUN python -m pip install subhkl-0.1.0-py3-none-any.whl
+RUN rm subhkl-0.1.0-py3-none-any.whl
 
 # Set working directory
 WORKDIR /app
