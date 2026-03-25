@@ -267,31 +267,31 @@ class SparseRBFPeakFinder:
             params, active_mask, idx = state
             
             recon = self._predict_batch_physical(params, x_grid, active_mask)
-            
-            def check_sigma(s):
+           
+           def check_sigma(s):
                 kernel_raw = jnp.exp(-(kx**2 + ky**2) / (2 * s**2))
-                
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
-               
-                # EXACT DUAL VARIABLE (Topological Gradient)
-                recon_grad_safe = jnp.maximum(recon_total, 1.0)
 
                 grad_field = jnp.where(
                     loss_code == 1,
-                    (patch_stat / recon_grad_safe) - 1.0, 
-                    patch_stat - recon_total         
+                    (patch_stat / recon_total) - 1.0,
+                    patch_stat - recon_total
                 )
-                
+
+                # dual_var is the exact directional derivative
                 dual_var = jax.scipy.signal.correlate2d(grad_field, kernel_raw, mode='same')
-                
+
                 flat_idx = jnp.argmax(dual_var)
                 r_idx, c_idx = jnp.unravel_index(flat_idx, dual_var.shape)
-                
-                c_init = jnp.maximum(patch_stat[r_idx, c_idx] - recon_total[r_idx, c_idx], 0.0)
-                
+
                 weight = (s / self.ref_sigma) ** self.gamma + 1e-6
-                final_score = c_init / weight
-                
+
+                # 1. The True RKBS Score is the Dual Variable (Gradient Integral)
+                final_score = dual_var[r_idx, c_idx] / weight
+
+                # 2. Extract initial physical amplitude strictly for the BFGS starting guess
+                c_init = jnp.maximum(patch_stat[r_idx, c_idx] - recon_total[r_idx, c_idx], 0.0)
+
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
 
             vals, candidates = vmap(check_sigma)(self.candidate_sigmas)
