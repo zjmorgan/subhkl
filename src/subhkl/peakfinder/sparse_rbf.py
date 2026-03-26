@@ -228,10 +228,9 @@ class SparseRBFPeakFinder:
             
             if loss_type == 1:
                 u_safe = jnp.maximum(u, 1e-6)
-                grad = A.T @ (1.0 - y / u_safe)
                 
-                # Unscaled Expected Fisher Information for the debiasing step
-                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3) 
+                grad = bg_med * A.T @ (1.0 - y / u_safe)
+                W_diag = bg_med / jnp.maximum(u_safe, 1e-3) 
                 hess = A.T @ (W_diag[:, None] * A)
             else:
                 grad = A.T @ (u - y)
@@ -259,7 +258,7 @@ class SparseRBFPeakFinder:
     def _solve_dense(self, patch_stat, patch_bg, alpha_z_score, H, W, max_peaks_local, loss_code, do_merge):
         
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
-        local_noise_floor = jnp.maximum(jnp.sqrt(local_bg_med), 1.0)
+        local_noise_floor = jnp.sqrt(local_bg_med)
         
         eff_alpha = alpha_z_score * local_noise_floor
         
@@ -610,15 +609,6 @@ class SparseRBFPeakFinder:
                         keep[neighbors] = False
             valid_seeds = cands_sorted[keep]
 
-#             # STRICT BOUNDARY CULLING: Prevent Sniper from slicing outside the image
-#             r_starts = valid_seeds[:, 0] - pad_size
-#             c_starts = valid_seeds[:, 1] - pad_size
-# 
-#             safe_mask = (r_starts >= 0) & (r_starts + P_EXT <= H) & \
-#                         (c_starts >= 0) & (c_starts + P_EXT <= W)
-# 
-#             valid_seeds = valid_seeds[safe_mask]
-# 
             if len(valid_seeds) > 0:
                 bank_col = np.full((len(valid_seeds), 1), b)
                 unique_candidates.append(np.hstack([bank_col, valid_seeds]))
