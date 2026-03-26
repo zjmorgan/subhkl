@@ -259,20 +259,20 @@ class SparseRBFPeakFinder:
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code', 'do_merge'])
     def _solve_dense(self, patch_stat, patch_bg, alpha_z_score, H, W, max_peaks_local, loss_code, do_merge):
-
+        
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1.0)
         local_noise_floor = jnp.sqrt(local_bg_med)
-
+        
         eff_alpha = alpha_z_score * local_noise_floor
-
+        
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
         yy, xx = jnp.indices((H, W))
         x_grid = jnp.array([yy, xx])
         
+        # Max K radius defines the valid correlation boundaries
         max_k_rad = int(3.0 * self.max_sigma)
-        max_k_rad = min(max_k_rad, H // 2)
         k_grid = jnp.arange(-max_k_rad, max_k_rad + 1)
-        ky, kx = jnp.meshgrid(k_grid, k_grid)
+        ky, kx = jnp.meshgrid(k_grid, k_grid, indexing='ij')
         
         init_params = jnp.zeros((max_peaks_local, 4))
         init_active = jnp.zeros(max_peaks_local, dtype=bool)
@@ -281,7 +281,7 @@ class SparseRBFPeakFinder:
         def step_fn(state, _):
             params, active_mask, idx = state
             recon = self._predict_batch_physical(params, x_grid, active_mask)
-           
+            
             def check_sigma(s):
                 sig_sq2 = s * jnp.sqrt(2.0) + 1e-6
                 erf_y = jax.scipy.special.erf((ky + 0.5) / sig_sq2) - jax.scipy.special.erf((ky - 0.5) / sig_sq2)
@@ -291,25 +291,23 @@ class SparseRBFPeakFinder:
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
                 raw_grad = patch_stat - recon_total
                 
-                # Enforce strictly zero-mean local residual to obliterate padding dome artifacts
-                grad_field_zero_mean = raw_grad - jnp.mean(raw_grad)
+                # VALID CORRELATION: Kernel never touches a boundary, eliminating padding artifacts
+                dual_var = jax.scipy.signal.correlate2d(raw_grad, kernel_raw, mode='valid')
                 
-                # Topological Score uses zero-mean (artifact free)
-                dual_var_kkt = jax.scipy.signal.correlate2d(grad_field_zero_mean, kernel_raw, mode='same')
-                # Physical Warm Start uses raw photons
-                dual_var_phys = jax.scipy.signal.correlate2d(raw_grad, kernel_raw, mode='same')
+                flat_idx = jnp.argmax(dual_var)
+                r_valid, c_valid = jnp.unravel_index(flat_idx, dual_var.shape)
                 
-                flat_idx = jnp.argmax(dual_var_kkt)
-                r_idx, c_idx = jnp.unravel_index(flat_idx, dual_var_kkt.shape)
+                # Map from the smaller valid core back to the full extended patch
+                r_idx = r_valid + max_k_rad
+                c_idx = c_valid + max_k_rad
                 
                 kernel_sq_norm = jnp.sum(kernel_raw ** 2)
-                c_kkt = dual_var_kkt[r_idx, c_idx] / kernel_sq_norm
-                c_phys = dual_var_phys[r_idx, c_idx] / kernel_sq_norm
+                c_matched = dual_var[r_valid, c_valid] / kernel_sq_norm
                 
                 extra_penalty = (s / self.ref_sigma) ** (self.gamma - 2.0)
-                final_score = c_kkt / extra_penalty
+                final_score = c_matched / extra_penalty
                 
-                c_init = jnp.maximum(c_phys, 0.0)
+                c_init = jnp.maximum(c_matched, 0.0)
                 return final_score, jnp.array([c_init, r_idx, c_idx, s])
 
             vals, candidates = vmap(check_sigma)(self.candidate_sigmas)
@@ -317,6 +315,7 @@ class SparseRBFPeakFinder:
             best_score = vals[best_idx]
             new_peak = candidates[best_idx]
             
+            # The Scout checks against a quarter-threshold to let faint peaks reach BFGS
             is_strong = best_score > eff_alpha
             
             dummy_peak = jnp.array([0.0, 0.0, 0.0, 1.0])
@@ -481,6 +480,9 @@ class SparseRBFPeakFinder:
     def find_peaks_batch(self, images_batch):
         B, H, W = images_batch.shape
         
+        # alpha is strictly interpreted as the Z-score (SNR) threshold
+        alpha_z_score = self.alpha
+
         from scipy.ndimage import median_filter, gaussian_filter
         bg_med = median_filter(images_batch, size=(1, 15, 15))
         bg_map = gaussian_filter(bg_med, sigma=(0, 3.0, 3.0))
@@ -497,16 +499,11 @@ class SparseRBFPeakFinder:
             median_bg_level = 1.0
             
         poisson_noise_floor = np.maximum(np.sqrt(median_bg_level), 1.0)
-        autotuned_alpha_raw = self.alpha * poisson_noise_floor
-
-        alpha_z_score = self.alpha
 
         if self.show_steps:
             print(f"  > Pre-processing: Morphological Bg Evaluated.")
             print(f"  > Autotuning: Median BG={median_bg_level:.1f}, Noise Floor=~{poisson_noise_floor:.1f}")
 
-        PAD_GLOBAL = 32
-        
         img_jax_stat_np = np.copy(images_batch)
         if self.border_width > 0:
             bw = self.border_width
@@ -515,31 +512,43 @@ class SparseRBFPeakFinder:
             valid_mask_batch = np.broadcast_to(valid_interior, (B, H, W))
             img_jax_stat_np = np.where(valid_mask_batch, img_jax_stat_np, bg_map)
             
+        # NO GLOBAL PADDING. We strictly use the raw physical bounds.
         img_jax_stat = jnp.array(img_jax_stat_np)
-        img_jax_stat_padded = jnp.pad(img_jax_stat, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
-        
         img_jax_bg = jnp.array(bg_map)
-        img_jax_bg_padded = jnp.pad(img_jax_bg, ((0,0), (PAD_GLOBAL, PAD_GLOBAL), (PAD_GLOBAL, PAD_GLOBAL)))
 
         loss_code_sniper = 1 if self.loss == 'poisson' else 0
 
-        w_scout = self.base_window_size
-        stride = w_scout // 2
+        # Dynamically size the valid boundary exclusion zone
+        max_k_rad = int(3.0 * self.max_sigma)
         
-        bw = self.border_width
+        w_scout_core = self.base_window_size
+        w_ext = w_scout_core + 2 * max_k_rad
+        stride = w_scout_core // 2
+
+        # If the provided image is too small to even support a single extended patch,
+        # symmetrically pad the global image to prevent JAX slicing crashes.
+        if H < w_ext or W < w_ext:
+            pad_h = max(0, w_ext - H)
+            pad_w = max(0, w_ext - W)
+            img_jax_stat = jnp.pad(img_jax_stat, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
+            img_jax_bg = jnp.pad(img_jax_bg, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
+            H, W = img_jax_stat.shape[1], img_jax_stat.shape[2]
+        
+        # Restrict the grid to strictly avoid the image boundaries!
+        bw = max(self.border_width, max_k_rad)
         if H <= 2*bw or W <= 2*bw:
-            bw = 0  
+            return [np.empty((0, 4)) for _ in range(B)]
             
         start_h, end_h = bw, H - bw
         start_w, end_w = bw, W - bw
         
-        grid_h = list(range(start_h, end_h - w_scout + 1, stride))
-        if not grid_h or grid_h[-1] + w_scout < end_h: 
-            grid_h.append(max(start_h, end_h - w_scout))
+        grid_h = list(range(start_h, end_h - w_scout_core + 1, stride))
+        if not grid_h or grid_h[-1] + w_scout_core < end_h: 
+            grid_h.append(max(start_h, end_h - w_scout_core))
             
-        grid_w = list(range(start_w, end_w - w_scout + 1, stride))
-        if not grid_w or grid_w[-1] + w_scout < end_w: 
-            grid_w.append(max(start_w, end_w - w_scout))
+        grid_w = list(range(start_w, end_w - w_scout_core + 1, stride))
+        if not grid_w or grid_w[-1] + w_scout_core < end_w: 
+            grid_w.append(max(start_w, end_w - w_scout_core))
         
         window_coords = [(b, r, c) for b in range(B) for r in grid_h for c in grid_w]
         window_coords_arr = np.array(window_coords, dtype=np.int32)
@@ -547,21 +556,23 @@ class SparseRBFPeakFinder:
 
         @jit
         def extract_scout_window(img, b_idx, r_idx, c_idx):
-            r_pad = r_idx + PAD_GLOBAL
-            c_pad = c_idx + PAD_GLOBAL
+            # r_idx, c_idx are the top-left of the CORE window.
+            # Shift back to extract the expanded valid halo (Guaranteed to be >= 0 by grid bounds)
+            r_start = r_idx - max_k_rad
+            c_start = c_idx - max_k_rad
             def slice_one(bi, ri, ci):
-                return lax.dynamic_slice(img[bi], (ri, ci), (w_scout, w_scout))
-            return vmap(slice_one)(b_idx, r_pad, c_pad)
+                return lax.dynamic_slice(img[bi], (ri, ci), (w_ext, w_ext))
+            return vmap(slice_one)(b_idx, r_start, c_start)
 
-        scout_solver = jit(vmap(lambda ws, wb: self._solve_dense(ws, wb, alpha_z_score, w_scout, w_scout, 5, loss_code_sniper, False)))
+        scout_solver = jit(vmap(lambda ws, wb: self._solve_dense(ws, wb, alpha_z_score, w_ext, w_ext, 5, loss_code_sniper, False)))
         
         scout_results = []
         scout_pbar = tqdm(range(0, total_scout_wins, self.chunk_size), desc="Scout Phase", disable=not self.show_steps)
         
         for i in scout_pbar:
             chunk = window_coords_arr[i:i+self.chunk_size]
-            wins_stat = extract_scout_window(img_jax_stat_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
-            wins_bg = extract_scout_window(img_jax_bg_padded, chunk[:, 0], chunk[:, 1], chunk[:, 2])
+            wins_stat = extract_scout_window(img_jax_stat, chunk[:, 0], chunk[:, 1], chunk[:, 2])
+            wins_bg = extract_scout_window(img_jax_bg, chunk[:, 0], chunk[:, 1], chunk[:, 2])
             res = scout_solver(wins_stat, wins_bg)
             res.block_until_ready()
             
@@ -572,8 +583,10 @@ class SparseRBFPeakFinder:
             if len(b_indices) > 0:
                 valid_peaks = global_res[b_indices, peak_indices]
                 valid_banks = chunk[b_indices, 0]
-                valid_peaks[:, 1] += chunk[b_indices, 1]
-                valid_peaks[:, 2] += chunk[b_indices, 2]
+                
+                # Map the returned w_ext coordinates perfectly back to the global image grid
+                valid_peaks[:, 1] += chunk[b_indices, 1] - max_k_rad
+                valid_peaks[:, 2] += chunk[b_indices, 2] - max_k_rad
                 
                 peaks_with_bank = np.column_stack([valid_banks, valid_peaks])
                 scout_results.append(peaks_with_bank)
@@ -583,6 +596,9 @@ class SparseRBFPeakFinder:
 
         all_candidates = np.vstack(scout_results)
         unique_candidates = []
+        
+        P_core = self.refine_patch_size
+        P_EXT = P_core + 2 * max_k_rad
         
         for b in range(B):
             bank_mask = (all_candidates[:, 0] == b)
@@ -602,8 +618,19 @@ class SparseRBFPeakFinder:
                         neighbors = neighbors[neighbors > i] 
                         keep[neighbors] = False
             valid_seeds = cands_sorted[keep]
-            bank_col = np.full((len(valid_seeds), 1), b)
-            unique_candidates.append(np.hstack([bank_col, valid_seeds]))
+            
+            # STRICT BOUNDARY CULLING: Prevent Sniper from slicing outside the image
+            r_starts = valid_seeds[:, 0] - (P_core // 2) - max_k_rad
+            c_starts = valid_seeds[:, 1] - (P_core // 2) - max_k_rad
+            
+            safe_mask = (r_starts >= 0) & (r_starts + P_EXT <= H) & \
+                        (c_starts >= 0) & (c_starts + P_EXT <= W)
+                        
+            valid_seeds = valid_seeds[safe_mask]
+            
+            if len(valid_seeds) > 0:
+                bank_col = np.full((len(valid_seeds), 1), b)
+                unique_candidates.append(np.hstack([bank_col, valid_seeds]))
 
         if not unique_candidates:
             return [np.empty((0, 4)) for _ in range(B)]
@@ -611,16 +638,14 @@ class SparseRBFPeakFinder:
         all_seeds = np.vstack(unique_candidates)
         total_seeds = len(all_seeds)
 
-        P = self.refine_patch_size
-        P_EXT = P + 2 * self.halo
-       
         @jit
         def extract_patch_with_halo(img, centers):
             b_idx = centers[:, 0].astype(int)
             r_center = centers[:, 1].astype(int)
             c_center = centers[:, 2].astype(int)
-            r_start = r_center + PAD_GLOBAL - (P // 2) - self.halo
-            c_start = c_center + PAD_GLOBAL - (P // 2) - self.halo
+            
+            r_start = r_center - (P_core // 2) - max_k_rad
+            c_start = c_center - (P_core // 2) - max_k_rad
             def slice_one(bi, ri, ci):
                 return lax.dynamic_slice(img[bi], (ri, ci), (P_EXT, P_EXT))
             return vmap(slice_one)(b_idx, r_start, c_start)
@@ -633,8 +658,8 @@ class SparseRBFPeakFinder:
         for i in sniper_pbar:
             chunk = all_seeds[i:i+self.chunk_size]
             
-            patches_stat = extract_patch_with_halo(img_jax_stat_padded, jnp.array(chunk))
-            patches_bg = extract_patch_with_halo(img_jax_bg_padded, jnp.array(chunk))
+            patches_stat = extract_patch_with_halo(img_jax_stat, jnp.array(chunk))
+            patches_bg = extract_patch_with_halo(img_jax_bg, jnp.array(chunk))
             
             res = sniper_solver(patches_stat, patches_bg) 
             res.block_until_ready()
@@ -649,8 +674,9 @@ class SparseRBFPeakFinder:
                 valid_r_centers = chunk[b_indices, 1]
                 valid_c_centers = chunk[b_indices, 2]
                 
-                global_rs = valid_r_centers - (P // 2) - self.halo + valid_peaks[:, 1]
-                global_cs = valid_c_centers - (P // 2) - self.halo + valid_peaks[:, 2]
+                # Map the returned P_EXT coordinates perfectly back to the global grid
+                global_rs = valid_r_centers - (P_core // 2) - max_k_rad + valid_peaks[:, 1]
+                global_cs = valid_c_centers - (P_core // 2) - max_k_rad + valid_peaks[:, 2]
                 
                 MARGIN = max(3, self.border_width)
                 in_bounds = (global_rs >= MARGIN) & (global_rs < H - MARGIN) & \
@@ -666,7 +692,7 @@ class SparseRBFPeakFinder:
                         )
 
         final_coords_output = []
-        final_peaks_full = [] 
+        final_peaks_full = []
         
         for b in range(B):
             peaks = np.array(refined_peaks_by_bank[b])
@@ -751,7 +777,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 init_raw = self._to_unconstrained(init_phys, *bounds)
 
                 opt_mask = jnp.ones(1, dtype=bool)
-                eff_alpha = self.alpha * 0.25
+                eff_alpha = self.alpha
 
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
