@@ -666,8 +666,8 @@ class SparseRBFPeakFinder:
                 valid_c_centers = chunk[b_indices, 2]
                 
                 # Recover PADDED coordinates
-                global_rs_padded = valid_r_centers - pad_size + valid_peaks[:, 1]
-                global_cs_padded = valid_c_centers - pad_size + valid_peaks[:, 2]
+                global_rs_padded = valid_r_centers.astype(int) - pad_size + valid_peaks[:, 1]
+                global_cs_padded = valid_c_centers.astype(int) - pad_size + valid_peaks[:, 2]
                 
                 # SHIFT BACK TO PHYSICAL SENSOR COORDINATES
                 global_rs = global_rs_padded - pad_size
