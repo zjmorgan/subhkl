@@ -368,6 +368,130 @@ def test_real_neutron_structured_background():
     
     assert deviance < 1.5
 
+def test_large_sensor_basic_recovery_finder():
+    """
+    Diagnostic Test: Simulates a 512x512 detector with a FLAT Poisson background.
+    This isolates whether the GPU batching, memory, and scaling work on large arrays
+    without the confounding variable of morphological halo errors.
+    """
+    try:
+        from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
+    except ImportError:
+        from subhkl.search.sparse_rbf import SparseRBFPeakFinder
+
+    import numpy as np
+    import scipy.special
+
+    H, W = 512, 512
+    np.random.seed(42)
+
+    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+
+    # Flat background: 20 photons.
+    image = np.random.poisson(20.0, size=(H, W)).astype(np.float32)
+
+    # Inject 3 strong, isolated peaks
+    true_peaks = [
+        (100.0, 100.0, 2.0, 300.0),
+        (400.0, 400.0, 2.0, 250.0),
+        (150.0, 350.0, 1.5, 400.0)
+    ]
+    for r, c, sig, amp in true_peaks:
+        sig_sq2 = sig * np.sqrt(2.0) + 1e-6
+        erf_y = scipy.special.erf((y_coords + 0.5 - r) / sig_sq2) - scipy.special.erf((y_coords - 0.5 - r) / sig_sq2)
+        erf_x = scipy.special.erf((x_coords + 0.5 - c) / sig_sq2) - scipy.special.erf((x_coords - 0.5 - c) / sig_sq2)
+        image += amp * (np.pi / 2.0) * (sig**2) * erf_y * erf_x
+
+    image_batch = image[np.newaxis, ...]
+
+    finder = SparseRBFPeakFinder(
+        alpha=4.0, gamma=1.0, min_sigma=1.0, max_sigma=5.0, loss='poisson', show_steps=False
+    )
+
+    results = finder.find_peaks_batch(image_batch)
+    peaks = results[0]
+
+    # 1. Did it explode into noise?
+    assert len(peaks) < 15, f"Basic Finder Failed: Hallucinated {len(peaks)} peaks on a flat background!"
+
+    # 2. Did it find the 3 real ones?
+    assert len(peaks) >= 3, f"Basic Finder Failed: Missed the real peaks, only found {len(peaks)}."
+
+
+def test_large_sensor_basic_integration():
+    """
+    Diagnostic Test: Tests the dense SSN Integrator on a 512x512 array with a
+    FLAT Poisson background. This proves whether the massive Ht @ u matrix
+    operations and active-set thresholding are intact for large arrays.
+    """
+    try:
+        from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
+    except ImportError:
+        from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
+
+    import numpy as np
+    import scipy.special
+
+    H, W = 512, 512
+    np.random.seed(101)
+
+    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+
+    # Flat background
+    image = np.random.poisson(15.0, size=(H, W)).astype(np.float32)
+
+    true_r, true_c = 256.0, 256.0
+    true_sig, true_amp = 2.0, 200.0
+    sig_sq2 = true_sig * np.sqrt(2.0) + 1e-6
+    erf_y = scipy.special.erf((y_coords + 0.5 - true_r) / sig_sq2) - scipy.special.erf((y_coords - 0.5 - true_r) / sig_sq2)
+    erf_x = scipy.special.erf((x_coords + 0.5 - true_c) / sig_sq2) - scipy.special.erf((x_coords - 0.5 - true_c) / sig_sq2)
+    image += true_amp * (np.pi / 2.0) * (true_sig**2) * erf_y * erf_x
+
+    # Mock orchestrator
+    class MockImageHandler:
+        def __init__(self, ims):
+            self.ims = ims
+            self.bank_mapping = {0: 1}
+        def get_run_id(self, img_key):
+            return 0
+
+    class MockPeaks:
+        def __init__(self, ims):
+            self.image = MockImageHandler(ims)
+        def get_detector(self, bank):
+            from subhkl.instrument.detector import Detector
+            return Detector({
+                "n": H, "m": W, "width": W, "height": H, "pixel_size": 1.0,
+                "center": [0,0,100], "uhat": [1,0,0], "vhat": [0,1,0], "panel": "flat"
+            })
+
+    # Predictions: 1 True peak, 2 Fake peaks far away
+    pred_r = np.array([true_r, 50.0, 450.0])
+    pred_c = np.array([true_c, 50.0, 450.0])
+
+    peak_dict = {
+        0: [
+            pred_r, pred_c,
+            np.arange(3), np.arange(3), np.arange(3), np.ones(3)
+        ]
+    }
+
+    res = integrate_peaks_rbf_ssn(
+        peak_dict=peak_dict, peaks_obj=MockPeaks({0: image}),
+        sigmas=[1.0, 2.0, 4.0], alpha=4.0, gamma=1.0, max_peaks=5, show_progress=False
+    )
+
+    active_peaks = len([I for I in res.intensity if I > 0])
+
+    # 1. Did it crush everything? Did it light up the fake peaks?
+    assert active_peaks == 1, f"Basic Integrator Failed: Activated {active_peaks} peaks instead of 1."
+
+    # 2. Did debiasing work?
+    expected_intensity = true_amp * 2 * np.pi * true_sig**2
+    found_intensity = [I for I in res.intensity if I > 0][0]
+
+    assert np.isclose(found_intensity, expected_intensity, rtol=0.15), f"Debiasing failed: {found_intensity} vs {expected_intensity}"
+
 def test_large_sensor_artifact_suppression():
     """
     Simulates a full 512x512 detector panel with a massive, curved 
