@@ -129,12 +129,9 @@ class SparseRBFPeakFinder:
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask) + target_bg
         recon_safe = jnp.maximum(recon, 1e-6)
         
-        # Unclamped Dispersion Parameter (bg_med maps Poisson cleanly to L2 physical space)
-        bg_med = jnp.maximum(jnp.median(target_bg), 1e-3)
-        
         nll = jnp.where(
             loss_code == 1,
-            bg_med * jnp.sum(recon_safe - target_raw * jnp.log(recon_safe)),
+            jnp.sum(recon_safe - target_raw * jnp.log(recon_safe)),
             0.5 * jnp.sum((recon - target_raw)**2)
         )
             
@@ -151,17 +148,16 @@ class SparseRBFPeakFinder:
         N_peaks = A.shape[1]
         N_params = N_peaks
         q_init = c_warm
-        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
 
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat
             if loss_type == 1:
                 u_safe = jnp.maximum(u, 1e-6)
-                nll = bg_med * jnp.sum(u_safe - y * jnp.log(u_safe))
-                grad = bg_med * A.T @ (1.0 - y / u_safe)
+                nll = jnp.sum(u_safe - y * jnp.log(u_safe))
+                grad = A.T @ (1.0 - y / u_safe)
                 
                 # Use Expected Fisher Information (u) to prevent Hessian collapse on sparse zeros
-                W_diag = bg_med / jnp.maximum(u_safe, 1e-3)  
+                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)  
                 hess = A.T @ (W_diag[:, None] * A)
             else:
                 nll = 0.5 * jnp.sum((u - y)**2)
@@ -218,6 +214,8 @@ class SparseRBFPeakFinder:
         # DEBIASING PHASE
         active_mask = c_l1 > 1e-5
 
+        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
+
         def debias_cond(state):
             step, _, G_norm = state
             return (step < 30) & (G_norm > 1e-4)
@@ -228,20 +226,26 @@ class SparseRBFPeakFinder:
             
             if loss_type == 1:
                 u_safe = jnp.maximum(u, 1e-6)
+                # Pure unscaled gradient
+                grad = A.T @ (1.0 - y / u_safe)
                 
-                grad = bg_med * A.T @ (1.0 - y / u_safe)
-                W_diag = bg_med / jnp.maximum(u_safe, 1e-3) 
+                # Pure unscaled Hessian (Fisher Info)
+                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3) 
                 hess = A.T @ (W_diag[:, None] * A)
             else:
                 grad = A.T @ (u - y)
                 hess = A.T @ A
-            
+
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
-            DG = (I - D_mat) + hess @ D_mat + 1e-4 * I 
             
-            dc = jnp.linalg.solve(DG, -grad)
+            # THE NATURAL DIAGONAL SCALE: 1e-4 divided by the background
+            natural_lambda = 1e-4 / jnp.maximum(bg_med, 1e-3)
             
+            DG = (I - D_mat) + hess @ D_mat + natural_lambda * I 
+            
+            dc = jnp.linalg.solve(DG, -grad) 
+
             tau = jnp.where(loss_type == 1, 0.5, 1.0)
             c_new_raw = c + tau * dc * active_mask
             
@@ -261,6 +265,12 @@ class SparseRBFPeakFinder:
         local_noise_floor = jnp.sqrt(local_bg_med)
         
         eff_alpha = alpha_z_score * local_noise_floor
+
+        # 2. The continuous Newton solvers require precise statistical gradient mapping!
+        if loss_code == 1:
+            eff_alpha_stat = alpha_z_score # Poisson Mapped
+        else:
+            eff_alpha_stat = alpha_z_score * local_noise_floor # L2 Mapped
         
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
         yy, xx = jnp.indices((H, W))
@@ -328,7 +338,7 @@ class SparseRBFPeakFinder:
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, patch_stat, patch_bg, eff_alpha, self.gamma, self.ref_sigma, bounds, a_mask, loss_code),
+                    args=(x_grid, patch_stat, patch_bg, eff_alpha_stat, self.gamma, self.ref_sigma, bounds, a_mask, loss_code),
                     method='BFGS',
                     options={'maxiter': 15}
                 )
@@ -342,7 +352,7 @@ class SparseRBFPeakFinder:
                 A_masked = A * a_mask
                 
                 weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
-                alpha_vec_stat = eff_alpha * weights
+                alpha_vec_stat = eff_alpha_stat * weights
                 
                 c_sparse_stat = self._solve_ssn_unified(A_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat, loss_code, c_phys)
                 
@@ -392,7 +402,7 @@ class SparseRBFPeakFinder:
             A_aug_masked = A_aug * aug_mask
             
             weights_aug = (sigma_aug / self.ref_sigma)**self.gamma + 1e-6
-            alpha_vec_stat_aug = eff_alpha * weights_aug
+            alpha_vec_stat_aug = eff_alpha_stat * weights_aug
             
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)
             
