@@ -526,24 +526,15 @@ class SparseRBFPeakFinder:
         min_required_patch = 2 * max_k_rad + 1
         P_core = max(self.refine_patch_size, min_required_patch)
         P_EXT = P_core + 2 * max_k_rad
-        max_req_size = max(w_ext, P_EXT)
 
-        # If the image is too small to fit a patch, symmetrically pad it.
-        if H < max_req_size or W < max_req_size:
-            pad_h = max(0, max_req_size - H)
-            pad_w = max(0, max_req_size - W)
-            img_jax_stat = jnp.pad(img_jax_stat, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
-            img_jax_bg = jnp.pad(img_jax_bg, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
-            H = img_jax_stat.shape[1]
-            W = img_jax_stat.shape[2]
+        pad_size = P_core // 2 + max_k_rad
 
-        # Restrict the grid to strictly avoid the image boundaries!
-        bw = max(self.border_width, max_k_rad)
-        if H <= 2*bw or W <= 2*bw:
-            return [np.empty((0, 4)) for _ in range(B)]
-            
-        start_h, end_h = bw, H - bw
-        start_w, end_w = bw, W - bw
+        # pad symmetrically
+        img_jax_stat = jnp.pad(img_jax_stat, ((0,0), (pad_size, pad_size), (pad_size, pad_size)), mode='symmetric')
+        img_jax_bg = jnp.pad(img_jax_bg, ((0,0), (pad_size, pad_size), (pad_size, pad_size)), mode='symmetric')
+
+        start_h, end_h = pad_size, pad_size + H
+        start_w, end_w = pad_size, pad_size + W
         
         grid_h = list(range(start_h, end_h - w_scout_core + 1, stride))
         if not grid_h or grid_h[-1] + w_scout_core < end_h: 
@@ -618,16 +609,16 @@ class SparseRBFPeakFinder:
                         neighbors = neighbors[neighbors > i] 
                         keep[neighbors] = False
             valid_seeds = cands_sorted[keep]
-            
-            # STRICT BOUNDARY CULLING: Prevent Sniper from slicing outside the image
-            r_starts = valid_seeds[:, 0] - (P_core // 2) - max_k_rad
-            c_starts = valid_seeds[:, 1] - (P_core // 2) - max_k_rad
-            
-            safe_mask = (r_starts >= 0) & (r_starts + P_EXT <= H) & \
-                        (c_starts >= 0) & (c_starts + P_EXT <= W)
-                        
-            valid_seeds = valid_seeds[safe_mask]
-            
+
+#             # STRICT BOUNDARY CULLING: Prevent Sniper from slicing outside the image
+#             r_starts = valid_seeds[:, 0] - pad_size
+#             c_starts = valid_seeds[:, 1] - pad_size
+# 
+#             safe_mask = (r_starts >= 0) & (r_starts + P_EXT <= H) & \
+#                         (c_starts >= 0) & (c_starts + P_EXT <= W)
+# 
+#             valid_seeds = valid_seeds[safe_mask]
+# 
             if len(valid_seeds) > 0:
                 bank_col = np.full((len(valid_seeds), 1), b)
                 unique_candidates.append(np.hstack([bank_col, valid_seeds]))
@@ -644,8 +635,8 @@ class SparseRBFPeakFinder:
             r_center = centers[:, 1].astype(int)
             c_center = centers[:, 2].astype(int)
             
-            r_start = r_center - (P_core // 2) - max_k_rad
-            c_start = c_center - (P_core // 2) - max_k_rad
+            r_start = r_center - pad_size
+            c_start = c_center - pad_size
             def slice_one(bi, ri, ci):
                 return lax.dynamic_slice(img[bi], (ri, ci), (P_EXT, P_EXT))
             return vmap(slice_one)(b_idx, r_start, c_start)
@@ -674,10 +665,14 @@ class SparseRBFPeakFinder:
                 valid_r_centers = chunk[b_indices, 1]
                 valid_c_centers = chunk[b_indices, 2]
                 
-                # Map the returned P_EXT coordinates perfectly back to the global grid
-                global_rs = valid_r_centers - (P_core // 2) - max_k_rad + valid_peaks[:, 1]
-                global_cs = valid_c_centers - (P_core // 2) - max_k_rad + valid_peaks[:, 2]
+                # Recover PADDED coordinates
+                global_rs_padded = valid_r_centers - pad_size + valid_peaks[:, 1]
+                global_cs_padded = valid_c_centers - pad_size + valid_peaks[:, 2]
                 
+                # SHIFT BACK TO PHYSICAL SENSOR COORDINATES
+                global_rs = global_rs_padded - pad_size
+                global_cs = global_cs_padded - pad_size 
+
                 MARGIN = max(3, self.border_width)
                 in_bounds = (global_rs >= MARGIN) & (global_rs < H - MARGIN) & \
                             (global_cs >= MARGIN) & (global_cs < W - MARGIN)
