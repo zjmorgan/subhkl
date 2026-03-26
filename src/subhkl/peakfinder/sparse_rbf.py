@@ -142,10 +142,8 @@ class SparseRBFPeakFinder:
         sigmas = params_phys[:, 3]
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
         reg = eff_alpha * jnp.sum(intensities * reg_weight)
-        
-        normalizer = jnp.maximum(jnp.max(target_raw), 1.0)
-        
-        return (nll / normalizer) + (reg / normalizer)
+
+        return nll + reg
 
     @staticmethod
     @partial(jit, static_argnames=['max_iter', 'loss_type'])
@@ -260,8 +258,8 @@ class SparseRBFPeakFinder:
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code', 'do_merge'])
     def _solve_dense(self, patch_stat, patch_bg, alpha_z_score, H, W, max_peaks_local, loss_code, do_merge):
         
-        local_bg_med = jnp.maximum(jnp.median(patch_bg), 1.0)
-        local_noise_floor = jnp.sqrt(local_bg_med)
+        local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
+        local_noise_floor = jnp.maximum(jnp.sqrt(local_bg_med), 1.0)
         
         eff_alpha = alpha_z_score * local_noise_floor
         
@@ -525,15 +523,20 @@ class SparseRBFPeakFinder:
         w_ext = w_scout_core + 2 * max_k_rad
         stride = w_scout_core // 2
 
-        # If the provided image is too small to even support a single extended patch,
-        # symmetrically pad the global image to prevent JAX slicing crashes.
-        if H < w_ext or W < w_ext:
-            pad_h = max(0, w_ext - H)
-            pad_w = max(0, w_ext - W)
+        min_required_patch = 2 * max_k_rad + 1
+        P_core = max(self.refine_patch_size, min_required_patch)
+        P_EXT = P_core + 2 * max_k_rad
+        max_req_size = max(w_ext, P_EXT)
+
+        # If the image is too small to fit a patch, symmetrically pad it.
+        if H < max_req_size or W < max_req_size:
+            pad_h = max(0, max_req_size - H)
+            pad_w = max(0, max_req_size - W)
             img_jax_stat = jnp.pad(img_jax_stat, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
             img_jax_bg = jnp.pad(img_jax_bg, ((0,0), (0, pad_h), (0, pad_w)), mode='symmetric')
-            H, W = img_jax_stat.shape[1], img_jax_stat.shape[2]
-        
+            H = img_jax_stat.shape[1]
+            W = img_jax_stat.shape[2]
+
         # Restrict the grid to strictly avoid the image boundaries!
         bw = max(self.border_width, max_k_rad)
         if H <= 2*bw or W <= 2*bw:
@@ -596,9 +599,6 @@ class SparseRBFPeakFinder:
 
         all_candidates = np.vstack(scout_results)
         unique_candidates = []
-        
-        P_core = self.refine_patch_size
-        P_EXT = P_core + 2 * max_k_rad
         
         for b in range(B):
             bank_mask = (all_candidates[:, 0] == b)
