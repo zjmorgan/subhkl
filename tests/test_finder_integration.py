@@ -53,7 +53,6 @@ def test_finder_cli_integration(tmp_path, algorithm):
         # --- LEGACY ALGORITHM FAILSAFES ---
         region_growth_minimum_intensity=10.0, 
         peak_minimum_pixels=1,         # Ensure narrow test peaks aren't discarded as cosmic rays
-        peak_minimum_intensity=20.0,   # Absolute background threshold
         show_progress=False
     )
     
