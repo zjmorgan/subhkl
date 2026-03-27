@@ -170,8 +170,9 @@ class SparseRBFPeakFinder:
             return nll + reg, grad, hess
 
         def cond_fn(state):
-            step, _, _, Gq_norm = state
-            return (step < max_iter) & (Gq_norm > 1e-4)
+            step, _, _, dq_norm = state
+            # Terminate when the proposed step is less than 0.001 photons
+            return (step < max_iter) & (dq_norm > 1e-3)
 
         def body_fn(state):
             step, q, c, _ = state
@@ -217,7 +218,7 @@ class SparseRBFPeakFinder:
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, c_final, _, _ = bt_final
 
-            return (step + 1, q_final, c_final, jnp.linalg.norm(Gq))
+            return (step + 1, q_final, c_final, jnp.linalg.norm(dq))
 
         init_state = (0, q_init, c_warm, 1e9)
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
@@ -227,8 +228,9 @@ class SparseRBFPeakFinder:
         active_mask = c_l1 > 1e-5
 
         def debias_cond(state):
-            step, _, G_norm = state
-            return (step < 30) & (G_norm > 1e-4)
+            step, _, dc_norm = state
+            # Terminate when the intensity adjustment is sub-milliphoton
+            return (step < 30) & (dc_norm > 1e-3)
 
         def debias_body(state):
             step, c, _ = state
@@ -240,17 +242,19 @@ class SparseRBFPeakFinder:
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
-            # F_c is the Preconditioned Gradient!
             F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)
             DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I 
 
             dc = jnp.linalg.solve(DG, -F_c)
 
-            c_new_raw = c + dc * active_mask
+            # Damped Newton for Poisson prevents log-barrier boundary ringing
+            tau = jnp.where(loss_type == 1, 0.8, 1.0)
+            
+            c_new_raw = c + tau * dc * active_mask
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
 
-            # Return the norm of F_c, NOT the raw gradient!
-            return (step + 1, c_new, jnp.linalg.norm(F_c))
+            # RETURN DC NORM AS THE METRIC
+            return (step + 1, c_new, jnp.linalg.norm(dc * active_mask))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1, 1e9))
         _, c_final, _ = debias_state
