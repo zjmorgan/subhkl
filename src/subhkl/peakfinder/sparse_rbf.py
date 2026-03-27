@@ -37,7 +37,7 @@ class SparseRBFPeakFinder:
         min_sigma: float = 0.5,         
         max_sigma: float = 8.0,
         max_peaks: int = 500,           
-        chunk_size: int = 1024,
+        chunk_size: int = 128,
         loss: str = 'gaussian',
         border_width: int = 0,
         num_sigmas: int = 32,
