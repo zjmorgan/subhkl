@@ -154,7 +154,7 @@ class SparseRBFPeakFinder:
         N_params = N_peaks
         q_init = c_warm
 
-        # 1. The Constant Proximal Preconditioner
+        # 1. CONSTANT SCALAR PRECONDITIONER FOR L1 (Maintains Proximal Geometry)
         bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
         gamma_scale = jnp.where(loss_type == 1, bg_med, 1.0)
 
@@ -192,6 +192,7 @@ class SparseRBFPeakFinder:
             DP_mat = jnp.diag(D)
             I = jnp.eye(N_params)
 
+            # Preconditioned Hessian
             DG = (I - DP_mat) + (gamma_scale * hess) @ DP_mat + 1e-4 * I
 
             dq = jnp.linalg.solve(DG, -Gq)
@@ -235,17 +236,22 @@ class SparseRBFPeakFinder:
             step, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
+            # 2. JACOBI PRECONDITIONER FOR DEBIASING (Unpenalized MLE)
+            # Makes 1e-4 Tikhonov perfect for all dynamic ranges
+            H_diag = jnp.diag(hess)
+            eta = 1.0 / jnp.maximum(H_diag, 1e-6)
+
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
-            F_c = (1.0 - active_mask) * c + active_mask * (gamma_scale * grad)
-            DG = (I - D_mat) + (gamma_scale * hess) @ D_mat + 1e-4 * I
+            F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)
+            DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I 
 
             dc = jnp.linalg.solve(DG, -F_c)
 
             # Damped Newton specifically for unscaled Poisson to prevent log boundary ringing
             tau = jnp.where(loss_type == 1, 0.8, 1.0)
-
+            
             c_new_raw = c + tau * dc * active_mask
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
 
@@ -342,6 +348,7 @@ class SparseRBFPeakFinder:
                     method='BFGS',
                     options={'maxiter': 15}
                 )
+
                 p_refined = self._to_physical(res.x, *bounds)
                 c_phys, r, col, sigma = p_refined.T
                 
