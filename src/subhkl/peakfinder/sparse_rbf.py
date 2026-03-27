@@ -154,23 +154,13 @@ class SparseRBFPeakFinder:
         N_params = N_peaks
         q_init = c_warm
 
-        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
-
-        # pre-conditioner
-        gamma_scale = jnp.where(loss_type == 1, bg_med, 1.0)
-
-        # dynamic stabilizer
-        natural_lambda = jnp.where(loss_type == 1, 1e-4 / bg_med, 1e-4)
-
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat
             if loss_type == 1:
                 u_safe = jnp.maximum(u, 1e-6)
                 nll = jnp.sum(u_safe - y * jnp.log(u_safe))
                 grad = A.T @ (1.0 - y / u_safe)
-                
-                # Use Expected Fisher Information (u) to prevent Hessian collapse on sparse zeros
-                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)  
+                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)
                 hess = A.T @ (W_diag[:, None] * A)
             else:
                 nll = 0.5 * jnp.sum((u - y)**2)
@@ -187,22 +177,23 @@ class SparseRBFPeakFinder:
             step, q, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            # 1. Scale the Gradient and Alpha into the Dimensionless q-space
-            scaled_grad = gamma_scale * grad
-            scaled_alpha = gamma_scale * alpha_vec
+            # THE JACOBI PRECONDITIONER (Dimensionful Learning Rate)
+            H_diag = jnp.diag(hess)
+            eta = 1.0 / jnp.maximum(H_diag, 1e-6)
 
-            # 2. The q-space Residual
+            scaled_grad = eta * grad
+            scaled_alpha = eta * alpha_vec
+
             Gq = (q - c) + scaled_grad
 
-            # 3. The Active Set (using the scaled threshold)
             D = (q > scaled_alpha).astype(jnp.float32)
             DP_mat = jnp.diag(D)
             I = jnp.eye(N_params)
 
-            # 4. The q-space Jacobian (Hessian scaled to match the gradient)
-            DG = (I - DP_mat) + (gamma_scale * hess) @ DP_mat + natural_lambda * I
+            # eta[:, None] * hess forces the matrix diagonal to exactly 1.0
+            # A static 1e-4 is now mathematically perfect for all dynamic ranges
+            DG = (I - DP_mat) + (eta[:, None] * hess) @ DP_mat + 1e-4 * I
 
-            # 5. The Exact Newton Step in q-space
             dq = jnp.linalg.solve(DG, -Gq)
 
             def bt_cond(bt_state):
@@ -220,7 +211,6 @@ class SparseRBFPeakFinder:
 
             q_test = q + dq
             c_test = jnp.maximum(0.0, q_test - scaled_alpha)
-
             j_test, _, _ = get_loss_grad_hess(c_test)
 
             bt_init = (0, 1.0, q_test, c_test, j_test, obj_val)
@@ -244,21 +234,23 @@ class SparseRBFPeakFinder:
             step, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
+            H_diag = jnp.diag(hess)
+            eta = 1.0 / jnp.maximum(H_diag, 1e-6)
+
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
-            # Debiasing strictly enforces G_c = 0 for the active set.
-            # We scale both the gradient and Hessian by gamma_scale to match natural_lambda.
-            F_c = (1.0 - active_mask) * c + active_mask * (gamma_scale * grad)
-            DG = (I - D_mat) + (gamma_scale * hess) @ D_mat + natural_lambda * I 
+            # F_c is the Preconditioned Gradient!
+            F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)
+            DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I 
 
             dc = jnp.linalg.solve(DG, -F_c)
 
-            tau = jnp.where(loss_type == 1, 0.5, 1.0)
-            c_new_raw = c + tau * dc * active_mask
+            c_new_raw = c + dc * active_mask
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
 
-            return (step + 1, c_new, jnp.linalg.norm(grad * active_mask))
+            # Return the norm of F_c, NOT the raw gradient!
+            return (step + 1, c_new, jnp.linalg.norm(F_c))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1, 1e9))
         _, c_final, _ = debias_state
