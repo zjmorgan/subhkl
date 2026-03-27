@@ -46,13 +46,23 @@ def test_finder_cli_integration(tmp_path, algorithm):
         output_filename=str(output_h5),
         instrument="MANDI",
         finder_algorithm=algorithm,
+        
+        # --- SPARSE RBF PARAMS ---
         sparse_rbf_alpha=4.0,           
         sparse_rbf_min_sigma=1.0,
         sparse_rbf_max_sigma=5.0,
         sparse_rbf_loss="poisson",
-        # --- LEGACY ALGORITHM FAILSAFES ---
-        region_growth_minimum_intensity=10.0, 
-        peak_minimum_pixels=1,         # Ensure narrow test peaks aren't discarded as cosmic rays
+        
+        # --- THRESHOLDING PARAMS ---
+        background_noise_quantile=0.50,         # Very low noise floor assumption
+        peak_minimum_signal_to_noise=2.0,
+        region_growth_minimum_intensity=5.0, 
+        peak_minimum_pixels=1,                  # Don't throw away 1-pixel tips
+        
+        # --- PEAK LOCAL MAX PARAMS ---
+        peak_local_max_distance=2,
+        peak_local_max_threshold_abs=30.0,      # Absolute photon threshold
+        
         show_progress=False
     )
     
