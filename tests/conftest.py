@@ -18,7 +18,7 @@ DATA_DIR = Path(__file__).parent / "data" / "MANDI" / "mesolite"
 ZENODO_FILES = [f"MANDI_{i}.nxs.h5" for i in range(11613, 11685)]
 
 
-#@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def download_mesolite_data():
     """Download mesolite test data from Zenodo if not already present.
 
