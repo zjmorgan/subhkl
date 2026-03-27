@@ -50,7 +50,10 @@ def test_finder_cli_integration(tmp_path, algorithm):
         sparse_rbf_min_sigma=1.0,
         sparse_rbf_max_sigma=5.0,
         sparse_rbf_loss="poisson",
-        region_growth_minimum_intensity=10.0, # Safe baseline for legacy algos
+        # --- LEGACY ALGORITHM FAILSAFES ---
+        region_growth_minimum_intensity=10.0, 
+        peak_minimum_pixels=1,         # Ensure narrow test peaks aren't discarded as cosmic rays
+        peak_minimum_intensity=20.0,   # Absolute background threshold
         show_progress=False
     )
     
