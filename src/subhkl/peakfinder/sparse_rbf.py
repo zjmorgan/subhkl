@@ -154,6 +154,10 @@ class SparseRBFPeakFinder:
         N_params = N_peaks
         q_init = c_warm
 
+        # 1. The Constant Proximal Preconditioner
+        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
+        gamma_scale = jnp.where(loss_type == 1, bg_med, 1.0)
+
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat
             if loss_type == 1:
@@ -171,19 +175,16 @@ class SparseRBFPeakFinder:
 
         def cond_fn(state):
             step, _, _, dq_norm = state
-            # Terminate when the proposed step is less than 0.001 photons
+            # Terminate based on physical photon shift
             return (step < max_iter) & (dq_norm > 1e-3)
 
         def body_fn(state):
             step, q, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            # THE JACOBI PRECONDITIONER (Dimensionful Learning Rate)
-            H_diag = jnp.diag(hess)
-            eta = 1.0 / jnp.maximum(H_diag, 1e-6)
-
-            scaled_grad = eta * grad
-            scaled_alpha = eta * alpha_vec
+            # Map to Physical Photons using a CONSTANT scale (Preserves L1!)
+            scaled_grad = gamma_scale * grad
+            scaled_alpha = gamma_scale * alpha_vec
 
             Gq = (q - c) + scaled_grad
 
@@ -191,9 +192,7 @@ class SparseRBFPeakFinder:
             DP_mat = jnp.diag(D)
             I = jnp.eye(N_params)
 
-            # eta[:, None] * hess forces the matrix diagonal to exactly 1.0
-            # A static 1e-4 is now mathematically perfect for all dynamic ranges
-            DG = (I - DP_mat) + (eta[:, None] * hess) @ DP_mat + 1e-4 * I
+            DG = (I - DP_mat) + (gamma_scale * hess) @ DP_mat + 1e-4 * I
 
             dq = jnp.linalg.solve(DG, -Gq)
 
@@ -218,6 +217,7 @@ class SparseRBFPeakFinder:
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, c_final, _, _ = bt_final
 
+            # Return the DQ norm to track physical steps
             return (step + 1, q_final, c_final, jnp.linalg.norm(dq))
 
         init_state = (0, q_init, c_warm, 1e9)
@@ -229,31 +229,27 @@ class SparseRBFPeakFinder:
 
         def debias_cond(state):
             step, _, dc_norm = state
-            # Terminate when the intensity adjustment is sub-milliphoton
             return (step < 30) & (dc_norm > 1e-3)
 
         def debias_body(state):
             step, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            H_diag = jnp.diag(hess)
-            eta = 1.0 / jnp.maximum(H_diag, 1e-6)
-
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
-            F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)
-            DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I 
+            F_c = (1.0 - active_mask) * c + active_mask * (gamma_scale * grad)
+            DG = (I - D_mat) + (gamma_scale * hess) @ D_mat + 1e-4 * I
 
             dc = jnp.linalg.solve(DG, -F_c)
 
-            # Damped Newton for Poisson prevents log-barrier boundary ringing
+            # Damped Newton specifically for unscaled Poisson to prevent log boundary ringing
             tau = jnp.where(loss_type == 1, 0.8, 1.0)
-            
+
             c_new_raw = c + tau * dc * active_mask
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
 
-            # RETURN DC NORM AS THE METRIC
+            # Track DC norm
             return (step + 1, c_new, jnp.linalg.norm(dc * active_mask))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1, 1e9))
