@@ -149,7 +149,11 @@ def prepare_harvest_tasks(
         pre_coords = None
         if finder_algorithm == "sparse_rbf":
             coords = precomputed_peaks[img_key]
-            pre_coords = (coords[:, 0], coords[:, 1])
+            # coords shape is [intensity, r, c, sigma]
+            if len(coords) > 0:
+                pre_coords = (coords[:, 1], coords[:, 2])
+            else:
+                pre_coords = (np.array([]), np.array([]))
 
         finder_info = (finder_algorithm, harvest_peaks_kwargs, pre_coords)
         mask_info = (
