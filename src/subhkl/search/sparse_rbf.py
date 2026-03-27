@@ -799,7 +799,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 patch_bg = jnp.full_like(patch, bg_med)
                 noise_floor = jnp.sqrt(bg_med)
                 
-                # Correctly route the absolute threshold based on statistical loss
                 eff_alpha_stat = jnp.where(loss_code == 1, self.alpha / noise_floor, self.alpha * noise_floor)
                 
                 dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2
@@ -827,8 +826,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 A_k = A_joint.reshape(P*P, K_NEIGHBORS, N_shapes)
                 
-                # EXACT VORONOI MASKING
-                # Mask both the data AND the basis matrix so the area norm evaluates perfectly
                 y_sub_k = y_sub[:, None] * pixel_masks
                 A_k_masked = A_k * pixel_masks[:, :, None]
                 
@@ -836,27 +833,31 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
                 c_warm_proj_k = jnp.maximum(0.0, jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6)).astype(jnp.float32)
                 
-                best_idx_k = jnp.argmax(ncc_k, axis=1)
-                c_warm_k = jnp.zeros((K_NEIGHBORS, N_shapes), dtype=jnp.float32)
-                c_warm_k = vmap(lambda cw, best, proj: cw.at[best].set(proj[best]))(c_warm_k, best_idx_k, c_warm_proj_k)
-                c_warm = c_warm_k.flatten()
+                best_idx_k = jnp.argmax(ncc_k, axis=1) # [K]
                 
-                weights = (self.candidate_sigmas / self.ref_sigma)**self.gamma + 1e-6
-                alpha_vec = eff_alpha_stat * weights
-                alpha_vec_joint = jnp.tile(alpha_vec, K_NEIGHBORS)
+                # --- L1 GREEDY SWAP FIX ---
+                # Slice out strictly the 1 best shape per neighbor using advanced JAX indexing
+                indices = jnp.arange(K_NEIGHBORS)
+                A_best = A_k[:, indices, best_idx_k]       # [961, K]
+                c_warm_best = c_warm_proj_k[indices, best_idx_k] # [K]
+                best_sigmas = self.candidate_sigmas[best_idx_k]  # [K]
                 
-                # JOINT SSN SOLVE (Unmasked boundaries)
+                weights_best = (best_sigmas / self.ref_sigma)**self.gamma + 1e-6
+                alpha_vec_best = eff_alpha_stat * weights_best
+                
+                # JOINT SSN SOLVE (With strict K columns)
                 c_final_joint = self._solve_ssn_unified(
-                    A_joint, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm, 20
+                    A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20
                 )
                 
-                c_final_target = c_final_joint[:N_shapes]
+                # Target peak is guaranteed to be index 0 of the neighbors
+                c_final_target = c_final_joint[0]
+                best_sig_target = best_sigmas[0]
                 
-                volumes = jnp.float32(2.0 * jnp.pi) * (self.candidate_sigmas**2)
-                intensity = jnp.sum(c_final_target * volumes)
-                best_sig = self.candidate_sigmas[best_idx_k[0]]
+                volumes = jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
+                intensity = c_final_target * volumes
                 
-                return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig, 0.0)])
+                return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig_target, 0.0)])
                 
             return vmap(process_patch)(patches, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
@@ -936,8 +937,14 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 g = np.gcd.reduce([abs(h), abs(k), abs(l)])
                 fund_hkl = (h//g, k//g, l//g)
 
-            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
-                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+            # --- SPATIAL DEDUPLICATION FIX ---
+            # Append an approximate detector bin (5 pixels) to the dictionary key.
+            # This ensures spatially separated harmonics (or test arrays) are preserved!
+            loc_key = (int(np.round(i_arr[idx]/5.0)), int(np.round(j_arr[idx]/5.0)))
+            unique_key = (fund_hkl, loc_key)
+
+            if unique_key not in unique_peaks or hkl_sq[idx] < unique_peaks[unique_key]['hkl_sq']:
+                unique_peaks[unique_key] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         p_data = [arr[keep_indices] for arr in p_data]
