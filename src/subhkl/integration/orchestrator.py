@@ -93,6 +93,8 @@ def prepare_harvest_tasks(
         img_stack = np.stack(images_list)
 
         border_width = harvest_peaks_kwargs.get("mask_rel_erosion_radius", 0)
+        if border_width is None:
+            border_width = 0.0
         border_width *= min(img_stack.shape[1], img_stack.shape[2])
 
         alg = SparseRBFPeakFinder(
