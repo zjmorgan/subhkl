@@ -121,24 +121,29 @@ class SparseRBFPeakFinder:
         final_image, _ = lax.scan(body, init, params_phys)
         return final_image
 
+
     @staticmethod
-    def _loss_fn(params_flat, x_grid, target_raw, target_bg, eff_alpha, gamma, ref_s, bounds_tuple, opt_mask, loss_code):
+    def _loss_fn(params_flat, x_grid, target_raw, target_bg, eff_alpha_abs, gamma, ref_s, bounds_tuple, opt_mask, loss_code):
         H, W, min_s, max_s = bounds_tuple
-        
         params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
         recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask) + target_bg
         recon_safe = jnp.maximum(recon, 1e-6)
-        
+
+        # Dimensional Bridge strictly for BFGS to prevent early termination
+        bg_med = jnp.maximum(jnp.median(target_bg), 1e-3)
+
         nll = jnp.where(
             loss_code == 1,
-            jnp.sum(recon_safe - target_raw * jnp.log(recon_safe)),
+            bg_med * jnp.sum(recon_safe - target_raw * jnp.log(recon_safe)),
             0.5 * jnp.sum((recon - target_raw)**2)
         )
-            
+
         intensities = jnp.abs(params_phys[:, 0]) * opt_mask
         sigmas = params_phys[:, 3]
         reg_weight = (sigmas / ref_s) ** gamma + 1e-6
-        reg = eff_alpha * jnp.sum(intensities * reg_weight)
+
+        # We pass eff_alpha_abs to match the bridged objective
+        reg = eff_alpha_abs * jnp.sum(intensities * reg_weight)
 
         return nll + reg
 
@@ -150,6 +155,11 @@ class SparseRBFPeakFinder:
         q_init = c_warm
 
         bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
+
+        # pre-conditioner
+        gamma_scale = jnp.where(loss_type == 1, bg_med, 1.0)
+
+        # dynamic stabilizer
         natural_lambda = jnp.where(loss_type == 1, 1e-4 / bg_med, 1e-4)
 
         def get_loss_grad_hess(c):
@@ -177,13 +187,22 @@ class SparseRBFPeakFinder:
             step, q, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            Gq = (q - c) + grad
-            
-            D = (q > alpha_vec).astype(jnp.float32)
+            # 1. Scale the Gradient and Alpha into the Dimensionless q-space
+            scaled_grad = gamma_scale * grad
+            scaled_alpha = gamma_scale * alpha_vec
+
+            # 2. The q-space Residual
+            Gq = (q - c) + scaled_grad
+
+            # 3. The Active Set (using the scaled threshold)
+            D = (q > scaled_alpha).astype(jnp.float32)
             DP_mat = jnp.diag(D)
             I = jnp.eye(N_params)
-            
-            DG = (I - DP_mat) + hess @ DP_mat + natural_lambda * I
+
+            # 4. The q-space Jacobian (Hessian scaled to match the gradient)
+            DG = (I - DP_mat) + (gamma_scale * hess) @ DP_mat + natural_lambda * I
+
+            # 5. The Exact Newton Step in q-space
             dq = jnp.linalg.solve(DG, -Gq)
 
             def bt_cond(bt_state):
@@ -195,12 +214,12 @@ class SparseRBFPeakFinder:
                 bt_i, tau, _, _, _, j_curr = bt_state
                 tau = tau * 0.5
                 q_test = q + tau * dq
-                c_test = jnp.maximum(0.0, q_test - alpha_vec)
+                c_test = jnp.maximum(0.0, q_test - scaled_alpha)
                 j_test, _, _ = get_loss_grad_hess(c_test)
                 return (bt_i + 1, tau, q_test, c_test, j_test, j_curr)
 
             q_test = q + dq
-            c_test = jnp.maximum(0.0, q_test - alpha_vec)
+            c_test = jnp.maximum(0.0, q_test - scaled_alpha)
 
             j_test, _, _ = get_loss_grad_hess(c_test)
 
@@ -223,50 +242,41 @@ class SparseRBFPeakFinder:
 
         def debias_body(state):
             step, c, _ = state
-            u = A @ c + bg_flat
-            
-            if loss_type == 1:
-                u_safe = jnp.maximum(u, 1e-6)
-                # Pure unscaled gradient
-                grad = A.T @ (1.0 - y / u_safe)
-                
-                # Pure unscaled Hessian (Fisher Info)
-                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3) 
-                hess = A.T @ (W_diag[:, None] * A)
-            else:
-                grad = A.T @ (u - y)
-                hess = A.T @ A
+            obj_val, grad, hess = get_loss_grad_hess(c)
 
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
-            
-            DG = (I - D_mat) + hess @ D_mat + natural_lambda * I 
-            
-            dc = jnp.linalg.solve(DG, -grad) 
+
+            # Debiasing strictly enforces G_c = 0 for the active set.
+            # We scale both the gradient and Hessian by gamma_scale to match natural_lambda.
+            F_c = (1.0 - active_mask) * c + active_mask * (gamma_scale * grad)
+            DG = (I - D_mat) + (gamma_scale * hess) @ D_mat + natural_lambda * I 
+
+            dc = jnp.linalg.solve(DG, -F_c)
 
             tau = jnp.where(loss_type == 1, 0.5, 1.0)
             c_new_raw = c + tau * dc * active_mask
-            
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
-            
+
             return (step + 1, c_new, jnp.linalg.norm(grad * active_mask))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1, 1e9))
         _, c_final, _ = debias_state
 
-        return c_final 
+        return c_final
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code', 'do_merge'])
     def _solve_dense(self, patch_stat, patch_bg, alpha_z_score, H, W, max_peaks_local, loss_code, do_merge):
         
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
         local_noise_floor = jnp.sqrt(local_bg_med)
-        
+       
+        # Absolute Photons (For Scout and BFGS)
         eff_alpha = alpha_z_score * local_noise_floor
 
-        # 2. The continuous Newton solvers require precise statistical gradient mapping!
+        # The continuous Newton solvers require precise statistical gradient mapping!
         if loss_code == 1:
-            eff_alpha_stat = alpha_z_score # Poisson Mapped
+            eff_alpha_stat = alpha_z_score / local_noise_floor # Poisson Mapped
         else:
             eff_alpha_stat = alpha_z_score * local_noise_floor # L2 Mapped
         
@@ -336,7 +346,7 @@ class SparseRBFPeakFinder:
                 res = jax.scipy.optimize.minimize(
                     fun=self._loss_fn,
                     x0=p_raw,
-                    args=(x_grid, patch_stat, patch_bg, eff_alpha_stat, self.gamma, self.ref_sigma, bounds, a_mask, loss_code),
+                    args=(x_grid, patch_stat, patch_bg, eff_alpha, self.gamma, self.ref_sigma, bounds, a_mask, loss_code),
                     method='BFGS',
                     options={'maxiter': 15}
                 )
