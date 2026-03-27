@@ -3,12 +3,6 @@ import numpy as np
 import scipy.special
 import jax.numpy as jnp
 
-from subhkl.search.sparse_rbf import (
-    build_dense_padded_matrix,
-    solve_ssn,
-    integrate_peaks_rbf_ssn,
-)
-
 def generate_erf_peak(y_coords, x_coords, r, c, sig, amp):
     """
     Helper function to generate physically exact subpixel peaks
@@ -19,87 +13,133 @@ def generate_erf_peak(y_coords, x_coords, r, c, sig, amp):
     erf_x = scipy.special.erf((x_coords + 0.5 - c) / sig_sq2) - scipy.special.erf((x_coords - 0.5 - c) / sig_sq2)
     return amp * (np.pi / 2.0) * (sig**2) * erf_y * erf_x
 
-
 def test_single_isolated_peak():
     """
-    Validates that a single isolated Gaussian peak is correctly identified,
-    that sparsity strictly deactivates incorrect shapes, and the background plane is recovered.
+    Validates that a single isolated Gaussian peak is correctly integrated by the
+    new Patch-Based SSN Integrator, that the best shape is activated, and that 
+    the unpenalized Tikhonov debiasing accurately recovers the mass.
     """
+    try:
+        from subhkl.peakfinder.sparse_rbf import SparseLaueIntegrator
+    except ImportError:
+        from subhkl.search.sparse_rbf import SparseLaueIntegrator
+        
+    import numpy as np
+    
     H, W = 50, 50
     bg_level = 15.0
-
+    
     np.random.seed(42)
-    image = np.random.normal(loc=bg_level, scale=2.0, size=(H, W)).astype(np.float32)
-
+    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+    
+    # Flat background
+    image = np.full((H, W), bg_level, dtype=np.float32)
+    
     cx, cy = 25.0, 25.0
     true_sigma = 2.0
     true_amp = 100.0
-
-    y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
-    image += generate_erf_peak(y_coords, x_coords, cy, cx, true_sigma, true_amp)
-
-    peak_centers = np.array([[cx, cy]])
-    sigmas = [1.0, 2.0, 5.0]
-    gamma = 1.0
-    max_peaks = 5
-    alpha = 15.0
-
-    A, weights, volumes, actual_peaks = build_dense_padded_matrix(
-        image, peak_centers, sigmas, gamma, max_peaks
-    )
-
-    assert actual_peaks == 1
-    assert A.shape == (H * W, max_peaks * len(sigmas) + 3)
-
-    intensities = jnp.array(image.flatten(), dtype=jnp.float32)
-    N_c = max_peaks * len(sigmas)
-    u_prime, active_set = solve_ssn(A, intensities, N_c, alpha)
-
-    c_unscaled = u_prime[:N_c] / weights
-
-    c_1 = float(c_unscaled[0]) # sigma = 1.0
-    c_2 = float(c_unscaled[1]) # sigma = 2.0 (The True Shape)
-    c_5 = float(c_unscaled[2]) # sigma = 5.0
-
-    assert c_1 == 0.0
-    assert c_5 == 0.0
     
-    assert active_set[0] == False
-    assert active_set[1] == True
-    assert active_set[2] == False
-
-    assert c_2 > 85.0
+    # generate_erf_peak should already be in your test file
+    image += generate_erf_peak(y_coords, x_coords, cy, cx, true_sigma, true_amp)
+    
+    # Apply Poisson noise
+    image = np.random.poisson(image).astype(np.float32)
+    
+    # Use the new Unified Patch Integrator
+    integrator = SparseLaueIntegrator(
+        alpha=4.0,          # 4-sigma detection threshold
+        patch_size=31,      # Localized extraction window
+        min_sigma=1.0, 
+        max_sigma=5.0, 
+        gamma=1.0, 
+        loss='gaussian'
+    )
+    
+    images_batch = image[np.newaxis, ...]
+    frames = [0]
+    rs = [cy]
+    cs = [cx]
+    
+    results = integrator.integrate_reflections(images_batch, frames, rs, cs)
+    
+    assert len(results) == 1, "The integrator dropped the peak!"
+    
+    intensity, r_found, c_found, sig_found = results[0]
+    
+    # 1. Did it pick the right shape from the linspace dictionary?
+    assert abs(sig_found - true_sigma) < 0.25, f"Sigma warped! Expected ~{true_sigma}, Found {sig_found}"
+    
+    # 2. Did the debiasing properly recover the physical mass?
+    expected_intensity = true_amp * 2 * np.pi * true_sigma**2
+    assert np.isclose(intensity, expected_intensity, rtol=0.15), f"Debiasing failed: {intensity} vs {expected_intensity}"
 
 
 def test_overlapping_peaks_crosstalk():
+    """
+    Validates that the patch-based integrator can independently resolve closely 
+    overlapping peaks without the backgrounds swallowing each other, thanks to the 
+    local median filter and robust NCC warm start.
+    """
+    try:
+        from subhkl.peakfinder.sparse_rbf import SparseLaueIntegrator
+    except ImportError:
+        from subhkl.search.sparse_rbf import SparseLaueIntegrator
+        
+    import numpy as np
+    
     H, W = 50, 50
-    image = np.full((H, W), 10.0, dtype=np.float32)
+    bg_level = 10.0
+    np.random.seed(101)
+    
+    image = np.full((H, W), bg_level, dtype=np.float32)
     y_coords, x_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
     
+    # Peak 1
     cx1, cy1 = 20.0, 25.0
-    image += generate_erf_peak(y_coords, x_coords, cy1, cx1, 2.0, 80.0)
+    true_sig1, true_amp1 = 2.0, 80.0
+    image += generate_erf_peak(y_coords, x_coords, cy1, cx1, true_sig1, true_amp1)
     
+    # Peak 2 (Highly overlapping, only 2-sigma away!)
     cx2, cy2 = 24.0, 25.0
-    image += generate_erf_peak(y_coords, x_coords, cy2, cx2, 2.0, 60.0)
+    true_sig2, true_amp2 = 2.0, 60.0
+    image += generate_erf_peak(y_coords, x_coords, cy2, cx2, true_sig2, true_amp2)
     
-    peak_centers = np.array([[cx1, cy1], [cx2, cy2]])
-    sigmas = [1.0, 2.0, 5.0]
-    N_c = 2 * len(sigmas)
+    image = np.random.poisson(image).astype(np.float32)
     
-    A, weights, _, _ = build_dense_padded_matrix(
-        image, peak_centers, sigmas, gamma=2.0, max_peaks=2
+    integrator = SparseLaueIntegrator(
+        alpha=4.0, 
+        patch_size=32, 
+        min_sigma=1.0, 
+        max_sigma=5.0, 
+        gamma=1.0, 
+        loss='gaussian'
     )
     
-    intensities = jnp.array(image.flatten())
-    u_prime, _ = solve_ssn(A, intensities, N_c, alpha=0.5)
-    c_unscaled = u_prime[:N_c] / weights
+    images_batch = image[np.newaxis, ...]
+    frames = [0, 0]
+    rs = [cy1, cy2]
+    cs = [cx1, cx2]
     
-    p1_amp = float(c_unscaled[1])
-    p2_amp = float(c_unscaled[4])
+    results = integrator.integrate_reflections(images_batch, frames, rs, cs)
     
-    assert 70.0 < p1_amp < 85.0
-    assert 50.0 < p2_amp < 65.0
-
+    assert len(results) == 2, "Integrator crashed on one of the overlapping peaks!"
+    
+    i1, r1, c1, sig1 = results[0]
+    i2, r2, c2, sig2 = results[1]
+    
+    # Ensure both survived the sparsity constraints
+    assert sig1 > 0.0, "Peak 1 was crushed"
+    assert sig2 > 0.0, "Peak 2 was crushed"
+    
+    # Because we evaluate them as independent local patches now (instead of a giant joint matrix),
+    # there is a slight geometric overlap accepted into the unpenalized volume. 
+    # We use a 20% tolerance to ensure crosstalk bleeding stays mathematically bounded.
+    exp_i1 = true_amp1 * 2 * np.pi * true_sig1**2
+    exp_i2 = true_amp2 * 2 * np.pi * true_sig2**2
+   
+    print('sig1', sig1, 'sig2', sig2)
+    assert np.isclose(i1, exp_i1, rtol=0.20), f"Peak 1 Crosstalk Bleed: {i1} vs {exp_i1}"
+    assert np.isclose(i2, exp_i2, rtol=0.20), f"Peak 2 Crosstalk Bleed: {i2} vs {exp_i2}"
 
 def test_integrate_peaks_rbf_ssn_orchestrator():
     H, W = 40, 40
@@ -144,6 +184,11 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
             np.array([2]), np.array([3]), np.array([1.5])
         ]
     }
+
+    try:
+        from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
+    except ImportError:
+        from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
 
     res = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict, peaks_obj=mock_peaks_obj,
@@ -359,13 +404,49 @@ def test_real_neutron_structured_background():
     peaks = results[0]
     
     assert len(peaks) >= 3
-    
+   
+    print("\n--- GEOMETRY DIAGNOSTICS ---")
+    for true_r, true_c, true_sig, true_amp in true_peaks:
+        dists = np.sqrt((peaks[:, 1] - true_r)**2 + (peaks[:, 2] - true_c)**2)
+        closest_idx = np.argmin(dists)
+
+        p_c, p_r, p_col, p_sig = peaks[closest_idx]
+        min_dist = dists[closest_idx]
+
+        print(f"Target: r={true_r:5.1f}, c={true_c:5.1f}, sig={true_sig:4.2f}")
+        print(f"Found : r={p_r:5.2f}, c={p_col:5.2f}, sig={p_sig:4.2f} | Dist: {min_dist:.3f}")
+
+        # Assert subpixel spatial accuracy
+        assert min_dist < 0.75, f"Peak wandered! Dist: {min_dist:.2f}"
+
+        # Assert shape preservation (allowing for dyadic grid snapping)
+        assert abs(p_sig - true_sig) < 0.5, f"Sigma collapsed/exploded! True: {true_sig}, Found: {p_sig}"
+    print("----------------------------\n")
+
     medians = np.median(image_batch, axis=(1, 2), keepdims=True)
     bg_map = getattr(finder, '_last_bg_map', medians) 
-    
+
+    print(f"\n--- GHOST PEAK DIAGNOSTICS ---")
+    print(f"Total peaks returned by Finder: {len(peaks)} (Expected: 3)")
+
+    # Sort peaks by amplitude (descending)
+    peaks_sorted = peaks[np.argsort(peaks[:, 0])[::-1]]
+
+    print("\nTop 10 Peaks by Amplitude:")
+    for i, p in enumerate(peaks_sorted[:10]):
+        print(f"  [{i}] Amp: {p[0]:6.1f} | r: {p[1]:5.1f}, c: {p[2]:5.1f} | sig: {p[3]:4.2f}")
+
+    # Isolate ONLY the True Peaks for the strict deviance check
+    # (Filtering out the 0.5-sigma background ghost bumps)
+    top_peaks = peaks_sorted[:3]
+
+    metrics_top = finder.compute_metrics(image_batch, bg_map, [top_peaks], global_max=1.0)
+    deviance_top = metrics_top['deviance_nu']
+    print(f"\nDeviance (Top 3 True Peaks Only): {deviance_top:.3f}")
+
     metrics = finder.compute_metrics(image_batch, bg_map, [peaks], global_max=1.0)
     deviance = metrics['deviance_nu']
-    
+
     assert deviance < 1.5
 
 def test_large_sensor_basic_recovery_finder():
