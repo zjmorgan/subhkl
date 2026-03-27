@@ -525,8 +525,14 @@ class SparseRBFPeakFinder:
         # alpha is strictly interpreted as the Z-score (SNR) threshold
         alpha_z_score = self.alpha
 
+        # Ensure the median filter is strictly larger than the biggest possible Bragg peak
+        # so it captures the true background without swallowing the signal.
+        filter_size = max(15, int(self.max_sigma * 5))
+        if filter_size % 2 == 0: 
+            filter_size += 1
+
         from scipy.ndimage import median_filter, gaussian_filter
-        bg_med = median_filter(images_batch, size=(1, 15, 15))
+        bg_med = median_filter(images_batch, size=(1, filter_size, filter_size))
         bg_map = gaussian_filter(bg_med, sigma=(0, 3.0, 3.0))
         bg_map = np.clip(bg_map, 1e-3, None)
         self._last_bg_map = bg_map
