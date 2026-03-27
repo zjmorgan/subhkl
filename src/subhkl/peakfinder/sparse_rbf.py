@@ -149,6 +149,9 @@ class SparseRBFPeakFinder:
         N_params = N_peaks
         q_init = c_warm
 
+        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
+        natural_lambda = jnp.where(loss_type == 1, 1e-4 / bg_med, 1e-4)
+
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat
             if loss_type == 1:
@@ -180,7 +183,7 @@ class SparseRBFPeakFinder:
             DP_mat = jnp.diag(D)
             I = jnp.eye(N_params)
             
-            DG = (I - DP_mat) + hess @ DP_mat + 1e-3 * I
+            DG = (I - DP_mat) + hess @ DP_mat + natural_lambda * I
             dq = jnp.linalg.solve(DG, -Gq)
 
             def bt_cond(bt_state):
@@ -214,8 +217,6 @@ class SparseRBFPeakFinder:
         # DEBIASING PHASE
         active_mask = c_l1 > 1e-5
 
-        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
-
         def debias_cond(state):
             step, _, G_norm = state
             return (step < 30) & (G_norm > 1e-4)
@@ -238,9 +239,6 @@ class SparseRBFPeakFinder:
 
             I = jnp.eye(N_params)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
-            
-            # THE NATURAL DIAGONAL SCALE: 1e-4 divided by the background
-            natural_lambda = 1e-4 / jnp.maximum(bg_med, 1e-3)
             
             DG = (I - D_mat) + hess @ D_mat + natural_lambda * I 
             
