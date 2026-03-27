@@ -54,15 +54,16 @@ def test_finder_cli_integration(tmp_path, algorithm):
         sparse_rbf_loss="poisson",
         
         # --- THRESHOLDING PARAMS ---
-        background_noise_quantile=0.50,         # Very low noise floor assumption
-        peak_minimum_signal_to_noise=2.0,
-        region_growth_minimum_intensity=5.0, 
-        peak_minimum_pixels=1,                  # Don't throw away 1-pixel tips
+        thresholding_noise_cutoff_quantile=0.80,  # Ignore the 15-photon background
         
         # --- PEAK LOCAL MAX PARAMS ---
-        peak_local_max_distance=2,
-        peak_local_max_threshold_abs=30.0,      # Absolute photon threshold
+        peak_local_max_min_relative_intensity=0.5, # Ignore noise (165 * 0.5 = 82.5 > 30 noise max)
+        peak_local_max_min_pixel_distance=5,
         
+        # --- COMMON INTEGRATION FAILSAFES ---
+        region_growth_minimum_intensity=20.0, # Stop growing exactly at the peak's edge
+        peak_minimum_pixels=1,                # Accept our narrow sigma=2.0 peak
+        peak_minimum_signal_to_noise=2.0,
         show_progress=False
     )
     
