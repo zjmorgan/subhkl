@@ -150,47 +150,43 @@ class SparseRBFPeakFinder:
         q_init = c_warm.astype(jnp.float32)
 
         # 1. CONSTANT SCALAR PRECONDITIONER FOR L1 (Maintains Proximal Geometry)
-        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3)
-        gamma_scale = jnp.where(loss_type == 1, bg_med, 1.0).astype(jnp.float32)
+        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3).astype(jnp.float32)
+        gamma_scale = jnp.where(loss_type == 1, bg_med, jnp.float32(1.0))
+        scaled_alpha = gamma_scale * alpha_vec
 
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat
             if loss_type == 1:
                 u_safe = jnp.maximum(u, 1e-6)
-                nll = jnp.sum(u_safe - y * jnp.log(u_safe))
-                grad = A.T @ (1.0 - y / u_safe)
+                # PERFECT SCALING: nll, grad, and hess MUST all be multiplied by gamma_scale
+                nll = gamma_scale * jnp.sum(u_safe - y * jnp.log(u_safe))
+                grad = gamma_scale * (A.T @ (1.0 - y / u_safe))
                 W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)
-                hess = A.T @ (W_diag[:, None] * A)
+                hess = gamma_scale * (A.T @ (W_diag[:, None] * A))
             else:
                 nll = 0.5 * jnp.sum((u - y)**2)
                 grad = A.T @ (u - y)
                 hess = A.T @ A
-            reg = jnp.sum(alpha_vec * c)
+            
+            reg = jnp.sum(scaled_alpha * c)
             return nll + reg, grad, hess
 
         def cond_fn(state):
             step, _, _, dq_norm = state
-            # Terminate based on physical photon shift
             return (step < max_iter) & (dq_norm > 1e-3)
 
         def body_fn(state):
             step, q, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            scaled_grad = gamma_scale * grad
-            scaled_alpha = gamma_scale * alpha_vec
-
-            Gq = (q - c) + scaled_grad
+            Gq = (q - c) + grad
 
             D = (q > scaled_alpha).astype(jnp.float32)
             DP_mat = jnp.diag(D)
-            
-            # STRICT TYPE LOCK: Prevent default float64 upcast
             I = jnp.eye(N_params, dtype=jnp.float32)
 
-            DG = (I - DP_mat) + (gamma_scale * hess) @ DP_mat + 1e-4 * I
+            DG = (I - DP_mat) + hess @ DP_mat + 1e-4 * I
             
-            # STRICT TYPE LOCK: Force 32-bit linear algebra
             dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
             def bt_cond(bt_state):
@@ -214,10 +210,8 @@ class SparseRBFPeakFinder:
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, c_final, _, _ = bt_final
 
-            # STRICT TYPE LOCK: Safe pass to loop carry
             return (step + 1, q_final.astype(jnp.float32), c_final.astype(jnp.float32), jnp.linalg.norm(dq).astype(jnp.float32))
 
-        # STRICT TYPE LOCK: Loop initialization
         init_state = (0, q_init.astype(jnp.float32), c_warm.astype(jnp.float32), jnp.float32(1e9))
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
         _, _, c_l1, _ = final_state
@@ -227,24 +221,21 @@ class SparseRBFPeakFinder:
 
         def debias_cond(state):
             step, _, actual_step_norm = state
-            # Max 100 ensures the unpenalized MLE is fully reached
             return (step < 100) & (actual_step_norm > 1e-4)
 
         def debias_body(state):
             step, c, _ = state
-            obj_val, grad, hess = get_loss_grad_hess(c)
+            _, grad, hess = get_loss_grad_hess(c)
 
             H_diag = jnp.diag(hess)
             eta = 1.0 / jnp.maximum(H_diag, 1e-6)
 
-            # STRICT TYPE LOCK
             I = jnp.eye(N_params, dtype=jnp.float32)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
             F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)
             DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I 
 
-            # STRICT TYPE LOCK
             dc = jnp.linalg.solve(DG, -F_c).astype(jnp.float32)
 
             tau = jnp.where(loss_type == 1, jnp.float32(0.8), jnp.float32(1.0))
@@ -253,8 +244,6 @@ class SparseRBFPeakFinder:
             c_new = jnp.maximum(0.0, c_new_raw) * active_mask
 
             actual_step = c_new - c
-
-            # STRICT TYPE LOCK
             return (step + 1, c_new.astype(jnp.float32), jnp.linalg.norm(actual_step).astype(jnp.float32))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1.astype(jnp.float32), jnp.float32(1e9)))
@@ -770,13 +759,11 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     Takes predicted spot coordinates, extracts patches, and uses Volume-Penalized
     Sparse RBF to accurately integrate intensity using the Preconditioned SSN Engine.
     """
-    def __init__(self, alpha=0.05, patch_size=31, min_sigma=0.5, max_sigma=5.0, gamma=2.0, loss='poisson'):
+    def __init__(self, alpha=0.05, min_sigma=0.5, max_sigma=5.0, gamma=2.0, loss='poisson', num_sigmas=64):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
-            loss=loss, border_width=0, show_steps=False
+            loss=loss, border_width=0, show_steps=False, num_sigmas=num_sigmas
         )
-        self.refine_patch_size = patch_size
-        self.candidate_sigmas = jnp.linspace(min_sigma, max_sigma, 24)
 
     def integrate_reflections(self, images_batch, frames, rs, cs):
         B, H, W = images_batch.shape
@@ -785,8 +772,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         P = self.refine_patch_size
         half_p = P // 2
         PAD = P
+        
+        K_NEIGHBORS = min(4, N_spots) if N_spots > 0 else 1
 
-        # Reflect-pad the raw image to safely slice patches on the sensor edge
         img_jax_padded = jnp.pad(jnp.array(images_batch), ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
 
         bounds = (float(P), float(P), self.min_sigma, self.max_sigma)
@@ -796,7 +784,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
         @jit
         def extract_patches(img, f_idx, r_idx, c_idx):
-            # Coordinates are already shifted by +PAD when passed here
             r_start = jnp.clip(jnp.int32(jnp.round(r_idx)) - half_p, 0, img.shape[1] - P)
             c_start = jnp.clip(jnp.int32(jnp.round(c_idx)) - half_p, 0, img.shape[2] - P)
             def slice_one(bi, ri, ci):
@@ -804,52 +791,85 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             return vmap(slice_one)(f_idx, r_start, c_start), r_start, c_start
 
         @jit
-        def solve_patches(patches, rs_patch, cs_patch):
-            def process_patch(patch, r_local, c_local):
-                def eval_one(si):
-                    return self._rbf_basis(x_grid, jnp.array([r_local, c_local]), si).flatten()
-
-                A = vmap(eval_one)(self.candidate_sigmas).T
-
-                # --- LOCAL MEDIAN BACKGROUND ---
-                # A 31x31 patch is 961 pixels. The peak takes < 150 pixels.
-                # The median is mathematically guaranteed to perfectly isolate the local halo curve.
+        def solve_patches(patches, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_rs_jnp, all_cs_jnp):
+            N_shapes = len(self.candidate_sigmas)
+            
+            def process_patch(patch, r_global, c_global, r_start, c_start):
                 bg_med = jnp.maximum(jnp.median(patch), 1e-3)
                 patch_bg = jnp.full_like(patch, bg_med)
-
                 noise_floor = jnp.sqrt(bg_med)
-                eff_alpha_stat = self.alpha / noise_floor
-
+                
+                # Correctly route the absolute threshold based on statistical loss
+                eff_alpha_stat = jnp.where(loss_code == 1, self.alpha / noise_floor, self.alpha * noise_floor)
+                
+                dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2
+                _, nbr_idxs = jax.lax.top_k(-dists, K_NEIGHBORS)
+                
+                nbr_rs = all_rs_jnp[nbr_idxs]
+                nbr_cs = all_cs_jnp[nbr_idxs]
+                
+                local_rs = nbr_rs - r_start
+                local_cs = nbr_cs - c_start
+                
+                def eval_neighbor(nr, nc):
+                    def eval_shape(si):
+                        return self._rbf_basis(x_grid, jnp.array([nr, nc]), si).flatten()
+                    return vmap(eval_shape)(self.candidate_sigmas).T
+                
+                A_all = vmap(eval_neighbor)(local_rs, local_cs)
+                A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)
+                
+                y_sub = (patch - patch_bg).flatten()
+                
+                pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
+                closest_k = jnp.argmin(pixel_dists_k, axis=1)
+                pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
+                
+                A_k = A_joint.reshape(P*P, K_NEIGHBORS, N_shapes)
+                
+                # EXACT VORONOI MASKING
+                # Mask both the data AND the basis matrix so the area norm evaluates perfectly
+                y_sub_k = y_sub[:, None] * pixel_masks
+                A_k_masked = A_k * pixel_masks[:, :, None]
+                
+                A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6))
+                ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
+                c_warm_proj_k = jnp.maximum(0.0, jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6)).astype(jnp.float32)
+                
+                best_idx_k = jnp.argmax(ncc_k, axis=1)
+                c_warm_k = jnp.zeros((K_NEIGHBORS, N_shapes), dtype=jnp.float32)
+                c_warm_k = vmap(lambda cw, best, proj: cw.at[best].set(proj[best]))(c_warm_k, best_idx_k, c_warm_proj_k)
+                c_warm = c_warm_k.flatten()
+                
                 weights = (self.candidate_sigmas / self.ref_sigma)**self.gamma + 1e-6
                 alpha_vec = eff_alpha_stat * weights
-
-                y_sub = (patch - patch_bg).flatten()
-
-                # --- NCC WARM START (Typed) ---
-                A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A**2, axis=0), 1e-6))
-                ncc = jnp.sum(A * y_sub[:, None], axis=0) / A_norms
-                best_idx = jnp.argmax(ncc)
-
-                c_warm_proj = jnp.maximum(0.0, jnp.sum(A * y_sub[:, None], axis=0) / jnp.maximum(jnp.sum(A**2, axis=0), 1e-6)).astype(jnp.float32)
-                c_warm = jnp.zeros(len(self.candidate_sigmas), dtype=jnp.float32).at[best_idx].set(c_warm_proj[best_idx])
-
-                c_final = self._solve_ssn_unified(
-                    A, patch.flatten(), patch_bg.flatten(), alpha_vec, loss_code, c_warm, 20
+                alpha_vec_joint = jnp.tile(alpha_vec, K_NEIGHBORS)
+                
+                # JOINT SSN SOLVE (Unmasked boundaries)
+                c_final_joint = self._solve_ssn_unified(
+                    A_joint, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm, 20
                 )
-
+                
+                c_final_target = c_final_joint[:N_shapes]
+                
                 volumes = jnp.float32(2.0 * jnp.pi) * (self.candidate_sigmas**2)
-                intensity = jnp.sum(c_final * volumes)
-                best_sig = self.candidate_sigmas[best_idx]
-
-                return jnp.array([intensity, r_local, c_local, jnp.where(intensity > 0, best_sig, 0.0)])
-            return vmap(process_patch)(patches, rs_patch, cs_patch)
+                intensity = jnp.sum(c_final_target * volumes)
+                best_sig = self.candidate_sigmas[best_idx_k[0]]
+                
+                return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig, 0.0)])
+                
+            return vmap(process_patch)(patches, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
         refined_peaks = []
-
-        # Shift the requested coordinates by PAD to match the padded arrays
         rs_padded = np.array(rs) + PAD
         cs_padded = np.array(cs) + PAD
-
+        
+        PAD_N = max(N_spots, 4)
+        rs_full = np.pad(rs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)
+        cs_full = np.pad(cs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)
+        all_rs_jnp = jnp.array(rs_full, dtype=jnp.float32)
+        all_cs_jnp = jnp.array(cs_full, dtype=jnp.float32)
+        
         from tqdm import tqdm
         with tqdm(total=N_spots, desc="Sparse Laue Integration", disable=not self.show_steps) as pbar:
             for i in range(0, N_spots, self.chunk_size):
@@ -859,10 +879,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
                 patches, r_starts, c_starts = extract_patches(img_jax_padded, chunk_f, chunk_r, chunk_c)
 
-                rs_local = chunk_r - r_starts
-                cs_local = chunk_c - c_starts
-
-                res = solve_patches(patches, rs_local, cs_local)
+                res = solve_patches(patches, chunk_r, chunk_c, r_starts, c_starts, all_rs_jnp, all_cs_jnp)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
@@ -880,7 +897,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 # =====================================================================
 # API WRAPPER FOR BACKWARD COMPATIBILITY
 # =====================================================================
-
 from typing import Dict, List
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
@@ -899,7 +915,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         sample_offset = np.zeros(3)
 
     integrator = SparseLaueIntegrator(
-        alpha=alpha, patch_size=31, min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma, loss='poisson'
+        alpha=alpha, min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma, loss='poisson'
     )
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)
     integrator.show_steps = show_progress
@@ -914,7 +930,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         for idx in range(len(i_arr)):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
-            # --- FIX: Preserve Direct Beam for Unit Tests ---
             if h == 0 and k == 0 and l == 0:
                 fund_hkl = (0, 0, 0)
             else:

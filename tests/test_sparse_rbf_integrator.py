@@ -48,7 +48,6 @@ def test_single_isolated_peak():
     # Use the new Unified Patch Integrator
     integrator = SparseLaueIntegrator(
         alpha=4.0,          # 4-sigma detection threshold
-        patch_size=31,      # Localized extraction window
         min_sigma=1.0, 
         max_sigma=5.0, 
         gamma=1.0, 
@@ -108,7 +107,6 @@ def test_overlapping_peaks_crosstalk():
     
     integrator = SparseLaueIntegrator(
         alpha=4.0, 
-        patch_size=32, 
         min_sigma=1.0, 
         max_sigma=5.0, 
         gamma=1.0, 
@@ -137,7 +135,6 @@ def test_overlapping_peaks_crosstalk():
     exp_i1 = true_amp1 * 2 * np.pi * true_sig1**2
     exp_i2 = true_amp2 * 2 * np.pi * true_sig2**2
    
-    print('sig1', sig1, 'sig2', sig2)
     assert np.isclose(i1, exp_i1, rtol=0.20), f"Peak 1 Crosstalk Bleed: {i1} vs {exp_i1}"
     assert np.isclose(i2, exp_i2, rtol=0.20), f"Peak 2 Crosstalk Bleed: {i2} vs {exp_i2}"
 
