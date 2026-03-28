@@ -286,21 +286,20 @@ class SparseRBFPeakFinder:
             def check_sigma(s):
                 sig_sq2 = s * jnp.sqrt(2.0) + 1e-6
                 
-                # --- 24x SPEEDUP: 1D KERNEL ---
-                # We only compute a 1D slice of the Error Function
+                # --- CUDNN-OPTIMIZED SEPARABLE KERNELS ---
                 k_1d = jax.scipy.special.erf((k_grid + 0.5) / sig_sq2) - jax.scipy.special.erf((k_grid - 0.5) / sig_sq2)
+                
+                # Reshape to degenerate 2D matrices so Nvidia's cuDNN takes over
+                k_col = k_1d[:, None]  # Shape [K, 1]
+                k_row = k_1d[None, :]  # Shape [1, K]
 
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
                 raw_grad = patch_stat - recon_total
 
-                # --- SEPARABLE CONVOLUTION ---
-                # 1. Correlate vertically (along columns)
-                def corr_col(col): return jnp.correlate(col, k_1d, mode='valid')
-                temp = vmap(corr_col, in_axes=1, out_axes=1)(raw_grad)
-                
-                # 2. Correlate horizontally (along rows)
-                def corr_row(row): return jnp.correlate(row, k_1d, mode='valid')
-                dual_var_unscaled = vmap(corr_row, in_axes=0, out_axes=0)(temp)
+                # 1. Slide vertically (fast memory stride)
+                temp = jax.scipy.signal.correlate2d(raw_grad, k_col, mode='valid')
+                # 2. Slide horizontally
+                dual_var_unscaled = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')
                 
                 # 3. Restore the 2D Gaussian Area Scalar
                 area_scalar = (jnp.pi / 2.0) * (s**2)
@@ -312,9 +311,7 @@ class SparseRBFPeakFinder:
                 r_idx = r_valid + max_k_rad
                 c_idx = c_valid + max_k_rad
 
-                # --- O(1) AREA NORM CALCULATION ---
-                # Sum of squares of an outer product equals the square of the sum of squares.
-                # This completely avoids building the massive 2D matrix for the denominator.
+                # O(1) Area Norm Calculation
                 k_1d_sq_sum = jnp.sum(k_1d ** 2)
                 kernel_sq_norm = (area_scalar ** 2) * (k_1d_sq_sum ** 2)
 
