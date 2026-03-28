@@ -280,10 +280,10 @@ def test_poisson_vs_gaussian_sparse_flux():
     image_batch = image[np.newaxis, ...]
 
     finder_l2 = SparseRBFPeakFinder(
-        gamma=1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='gaussian', show_steps=False
+        gamma=-1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='gaussian', show_steps=False
     )
     finder_pois = SparseRBFPeakFinder(
-        gamma=1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='poisson', show_steps=False
+        gamma=-1.0, alpha=1, min_sigma=1.0, max_sigma=4.0, loss='poisson', show_steps=False
     )
 
     peaks_l2 = finder_l2.find_peaks_batch(image_batch)[0]
@@ -394,7 +394,7 @@ def test_real_neutron_structured_background():
     image_batch = image[np.newaxis, ...]
     
     finder = SparseRBFPeakFinder(
-        alpha=0.5, gamma=-1.0, min_sigma=0.5, max_sigma=5.0, loss='poisson', show_steps=False
+        alpha=0.5, gamma=1.0, min_sigma=0.5, max_sigma=5.0, loss='poisson', show_steps=False
     )
     
     results = finder.find_peaks_batch(image_batch)
@@ -685,7 +685,7 @@ def test_integrator_large_sensor_halo_suppression():
     
     res = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict, peaks_obj=MockPeaks({0: image}), 
-        sigmas=[1.0, 2.0, 4.0], alpha=5.0, gamma=-1.0, max_peaks=10, show_progress=False
+        sigmas=[1.0, 2.0, 4.0], alpha=5.0, gamma=1.0, max_peaks=10, show_progress=False
     )
     
     active_peaks = len([I for I in res.intensity if I > 0])
