@@ -322,8 +322,13 @@ class SparseRBFPeakFinder:
             new_peak = candidates[best_idx]
             
             c_best = new_peak[0] 
-            is_strong = c_best > eff_alpha
-            
+            s_best = new_peak[3]
+           
+            # c_best is the dimensionless peak height. 
+            # The RKBS L1 norm requires dividing out sigma^gamma.
+            weight_best = (s_best / self.ref_sigma) ** (-self.gamma)
+            is_strong = c_best > (eff_alpha * weight_best)
+
             dummy_peak = jnp.array([0.0, 0.0, 0.0, 1.0])
             new_peak = jnp.where(is_strong, new_peak, dummy_peak)
             
@@ -345,8 +350,10 @@ class SparseRBFPeakFinder:
                 
                 A = vmap(eval_one)(r, col, sigma).T
                 A_masked = A * a_mask
-                
-                alpha_vec_stat = eff_alpha_stat * jnp.ones_like(sigma)
+
+                # Restore the SSN Besov weights with correct theoretical sign
+                weights = (sigma / self.ref_sigma) ** (-self.gamma)
+                alpha_vec_stat = eff_alpha_stat * weights
                 c_phys_masked = c_init * a_mask
                 
                 # Immediately execute Poisson Maximum Likelihood
@@ -396,8 +403,9 @@ class SparseRBFPeakFinder:
             
             A_aug = vmap(eval_one_aug)(r_aug, col_aug, sigma_aug).T
             A_aug_masked = A_aug * aug_mask
-            
-            alpha_vec_stat_aug = eff_alpha_stat * jnp.ones_like(sigma_aug)
+           
+            weights_aug = (sigma_aug / self.ref_sigma) ** (-self.gamma)
+            alpha_vec_stat_aug = eff_alpha_stat * weights_aug
             
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)
             
@@ -808,7 +816,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_warm_best = c_warm_proj_k[indices, best_idx_k] # [K]
                 best_sigmas = self.candidate_sigmas[best_idx_k]  # [K]
                 
-                weights_best = (best_sigmas / self.ref_sigma)**self.gamma + 1e-6
+                weights_best = (best_sigmas / self.ref_sigma)**(-self.gamma) + 1e-6
                 alpha_vec_best = eff_alpha_stat * weights_best
                 
                 # JOINT SSN SOLVE (With strict K columns)
