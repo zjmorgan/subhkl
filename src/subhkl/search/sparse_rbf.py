@@ -541,7 +541,7 @@ class SparseRBFPeakFinder:
             return lax.map(process_one, imgs)
 
         # Execute instantly on GPU (Zero CPU <-> GPU transfers until the end!)
-        bg_map = np.array(compute_bg_batch(jnp.array(images_batch)))
+        bg_map = np.array(compute_bg_batch(jnp.array(images_batch, dtype=jnp.float32)))
         self._last_bg_map = bg_map
 
         valid_bg = bg_map[bg_map > 1e-2]
