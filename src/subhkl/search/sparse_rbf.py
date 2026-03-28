@@ -371,7 +371,7 @@ class SparseRBFPeakFinder:
            
             # c_best is the dimensionless peak height. 
             # The RKBS L1 norm requires dividing out sigma^gamma.
-            weight_best = (s_best / self.ref_sigma) ** (-self.gamma)
+            weight_best = (s_best / self.ref_sigma) ** self.gamma
             is_strong = c_best > (eff_alpha * weight_best)
 
             dummy_peak = jnp.array([0.0, 0.0, 0.0, 1.0])
@@ -396,12 +396,11 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T
                 A_masked = A * a_mask
 
-                # Restore the SSN Besov weights with correct theoretical sign
-                weights = (sigma / self.ref_sigma) ** (-self.gamma)
+                weights = (sigma / self.ref_sigma) ** self.gamma
                 alpha_vec_stat = eff_alpha_stat * weights
+                
                 c_phys_masked = c_init * a_mask
                 
-                # Immediately execute Poisson Maximum Likelihood
                 c_sparse_stat = self._solve_ssn_unified(A_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat, loss_code, c_phys_masked)
                 
                 c_sparse_norm = c_sparse_stat * a_mask
@@ -449,9 +448,9 @@ class SparseRBFPeakFinder:
             A_aug = vmap(eval_one_aug)(r_aug, col_aug, sigma_aug).T
             A_aug_masked = A_aug * aug_mask
            
-            weights_aug = (sigma_aug / self.ref_sigma) ** (-self.gamma)
+            weights_aug = (sigma_aug / self.ref_sigma) ** self.gamma
             alpha_vec_stat_aug = eff_alpha_stat * weights_aug
-            
+
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)
             
             return jnp.stack([c_sparse_stat_aug * aug_mask, r_aug, col_aug, sigma_aug], axis=1)
@@ -868,9 +867,10 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_warm_best = c_warm_proj_k[indices, best_idx_k] 
                 best_sigmas = self.candidate_sigmas[best_idx_k]  
                 
-                weights_best = (best_sigmas / self.ref_sigma) ** (-self.gamma)
+                # Align SSN penalty with amplitude physics
+                weights_best = (best_sigmas / self.ref_sigma) ** self.gamma
                 alpha_vec_best = eff_alpha_stat * weights_best
-                
+
                 # JOINT SSN SOLVE (Providing the exact curved patch_bg geometry)
                 c_final_joint = self._solve_ssn_unified(
                     A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20
