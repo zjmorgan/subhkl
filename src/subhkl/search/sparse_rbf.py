@@ -25,6 +25,51 @@ if HAS_JAX:
     import jax.scipy.optimize
     import jax.scipy.signal
 
+# auxiliary functions
+@partial(jit, static_argnames=['window_size'])
+def jax_median_2d(img, window_size):
+    pad_w = window_size // 2
+    padded = jnp.pad(img, pad_w, mode='reflect')
+    im_4d = padded[None, None, :, :]
+
+    # Extract sliding windows purely on GPU using hardware-accelerated memory striding
+    patches = lax.conv_general_dilated_patches(
+        im_4d,
+        filter_shape=(window_size, window_size),
+        window_strides=(1, 1),
+        padding='VALID',
+        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+    )
+    # patches is [1, window_size**2, H, W]. JAX median sorts this axis flawlessly.
+    return jnp.median(patches[0], axis=0)
+
+@jit
+def jax_gaussian_blur_2d(img):
+    # Pure JAX separable 1D Gaussian blur keeps the data on the GPU
+    sigma = 3.0
+    radius = int(4.0 * sigma + 0.5)
+    x = jnp.arange(-radius, radius + 1)
+    k_1d = jnp.exp(-0.5 * (x / sigma) ** 2)
+    k_1d = k_1d / jnp.sum(k_1d)
+
+    k_col = k_1d[:, None]
+    k_row = k_1d[None, :]
+
+    padded = jnp.pad(img, radius, mode='reflect')
+    temp = jax.scipy.signal.correlate2d(padded, k_col, mode='valid')
+    blurred = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')
+    return blurred
+
+@partial(jit, static_argnames=['filter_size'])
+def compute_bg_batch(imgs, filter_size):
+    def process_one(img):
+        med = jax_median_2d(img, filter_size)
+        blur = jax_gaussian_blur_2d(med)
+        return jnp.maximum(blur, 1e-3)
+    # lax.map executes strictly sequentially on GPU, protecting VRAM from the massive patch tensor
+    return lax.map(process_one, imgs)
+
+
 
 class SparseRBFPeakFinder:
     """
@@ -497,51 +542,8 @@ class SparseRBFPeakFinder:
         if filter_size % 2 == 0:
             filter_size += 1
 
-        @partial(jit, static_argnames=['window_size'])
-        def jax_median_2d(img, window_size):
-            pad_w = window_size // 2
-            padded = jnp.pad(img, pad_w, mode='reflect')
-            im_4d = padded[None, None, :, :]
-
-            # Extract sliding windows purely on GPU using hardware-accelerated memory striding
-            patches = lax.conv_general_dilated_patches(
-                im_4d,
-                filter_shape=(window_size, window_size),
-                window_strides=(1, 1),
-                padding='VALID',
-                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-            )
-            # patches is [1, window_size**2, H, W]. JAX median sorts this axis flawlessly.
-            return jnp.median(patches[0], axis=0)
-
-        @jit
-        def jax_gaussian_blur_2d(img):
-            # Pure JAX separable 1D Gaussian blur keeps the data on the GPU
-            sigma = 3.0
-            radius = int(4.0 * sigma + 0.5)
-            x = jnp.arange(-radius, radius + 1)
-            k_1d = jnp.exp(-0.5 * (x / sigma) ** 2)
-            k_1d = k_1d / jnp.sum(k_1d)
-
-            k_col = k_1d[:, None]
-            k_row = k_1d[None, :]
-
-            padded = jnp.pad(img, radius, mode='reflect')
-            temp = jax.scipy.signal.correlate2d(padded, k_col, mode='valid')
-            blurred = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')
-            return blurred
-
-        @jit
-        def compute_bg_batch(imgs):
-            def process_one(img):
-                med = jax_median_2d(img, filter_size)
-                blur = jax_gaussian_blur_2d(med)
-                return jnp.maximum(blur, 1e-3)
-            # lax.map executes strictly sequentially on GPU, protecting VRAM from the massive patch tensor
-            return lax.map(process_one, imgs)
-
         # Execute instantly on GPU (Zero CPU <-> GPU transfers until the end!)
-        bg_map = np.array(compute_bg_batch(jnp.array(images_batch, dtype=jnp.float32)))
+        bg_map = np.array(compute_bg_batch(jnp.array(images_batch, dtype=jnp.float32), filter_size))
         self._last_bg_map = bg_map
 
         valid_bg = bg_map[bg_map > 1e-2]
@@ -788,7 +790,17 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         
         K_NEIGHBORS = min(4, N_spots) if N_spots > 0 else 1
 
-        img_jax_padded = jnp.pad(jnp.array(images_batch), ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
+        filter_size = max(15, int(self.max_sigma * 5))
+        if filter_size % 2 == 0:
+            filter_size += 1
+
+        # Execute background natively on GPU
+        images_jax = jnp.array(images_batch, dtype=jnp.float32)
+        bg_maps_jax = compute_bg_batch(images_jax, filter_size)
+
+        # Pad both Data and Background
+        img_jax_padded = jnp.pad(images_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
+        bg_jax_padded = jnp.pad(bg_maps_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
 
         bounds = (float(P), float(P), self.min_sigma, self.max_sigma)
         yy, xx = jnp.indices((P, P))
@@ -796,20 +808,22 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         loss_code = 1 if self.loss == 'poisson' else 0
 
         @jit
-        def extract_patches(img, f_idx, r_idx, c_idx):
-            r_start = jnp.clip(jnp.int32(jnp.round(r_idx)) - half_p, 0, img.shape[1] - P)
-            c_start = jnp.clip(jnp.int32(jnp.round(c_idx)) - half_p, 0, img.shape[2] - P)
-            def slice_one(bi, ri, ci):
-                return lax.dynamic_slice(img[bi], (ri, ci), (P, P))
-            return vmap(slice_one)(f_idx, r_start, c_start), r_start, c_start
+        def extract_patches(img_src, bg_src, f_idx, r_idx, c_idx):
+            r_start = jnp.clip(jnp.int32(jnp.round(r_idx)) - half_p, 0, img_src.shape[1] - P)
+            c_start = jnp.clip(jnp.int32(jnp.round(c_idx)) - half_p, 0, img_src.shape[2] - P)
+            
+            def slice_img(bi, ri, ci): return lax.dynamic_slice(img_src[bi], (ri, ci), (P, P))
+            def slice_bg(bi, ri, ci):  return lax.dynamic_slice(bg_src[bi], (ri, ci), (P, P))
+            
+            return vmap(slice_img)(f_idx, r_start, c_start), vmap(slice_bg)(f_idx, r_start, c_start), r_start, c_start
 
         @jit
-        def solve_patches(patches, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_rs_jnp, all_cs_jnp):
+        def solve_patches(patches, patches_bg, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_rs_jnp, all_cs_jnp):
             N_shapes = len(self.candidate_sigmas)
             
-            def process_patch(patch, r_global, c_global, r_start, c_start):
-                bg_med = jnp.maximum(jnp.median(patch), 1e-3)
-                patch_bg = jnp.full_like(patch, bg_med)
+            def process_patch(patch, patch_bg, r_global, c_global, r_start, c_start):
+                # The noise floor is now safely derived from the true morphological background
+                bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
                 noise_floor = jnp.sqrt(bg_med)
                 
                 eff_alpha_stat = jnp.where(loss_code == 1, self.alpha / noise_floor, self.alpha * noise_floor)
@@ -831,6 +845,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 A_all = vmap(eval_neighbor)(local_rs, local_cs)
                 A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)
                 
+                # Subtracting the curved background patch instead of a flat median
                 y_sub = (patch - patch_bg).flatten()
                 
                 pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
@@ -846,24 +861,21 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
                 c_warm_proj_k = jnp.maximum(0.0, jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6)).astype(jnp.float32)
                 
-                best_idx_k = jnp.argmax(ncc_k, axis=1) # [K]
+                best_idx_k = jnp.argmax(ncc_k, axis=1) 
                 
-                # --- L1 GREEDY SWAP FIX ---
-                # Slice out strictly the 1 best shape per neighbor using advanced JAX indexing
                 indices = jnp.arange(K_NEIGHBORS)
-                A_best = A_k[:, indices, best_idx_k]       # [961, K]
-                c_warm_best = c_warm_proj_k[indices, best_idx_k] # [K]
-                best_sigmas = self.candidate_sigmas[best_idx_k]  # [K]
+                A_best = A_k[:, indices, best_idx_k]       
+                c_warm_best = c_warm_proj_k[indices, best_idx_k] 
+                best_sigmas = self.candidate_sigmas[best_idx_k]  
                 
-                weights_best = (best_sigmas / self.ref_sigma)**(-self.gamma) + 1e-6
+                weights_best = (best_sigmas / self.ref_sigma) ** (-self.gamma)
                 alpha_vec_best = eff_alpha_stat * weights_best
                 
-                # JOINT SSN SOLVE (With strict K columns)
+                # JOINT SSN SOLVE (Providing the exact curved patch_bg geometry)
                 c_final_joint = self._solve_ssn_unified(
                     A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20
                 )
                 
-                # Target peak is guaranteed to be index 0 of the neighbors
                 c_final_target = c_final_joint[0]
                 best_sig_target = best_sigmas[0]
                 
@@ -872,7 +884,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig_target, 0.0)])
                 
-            return vmap(process_patch)(patches, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
+            return vmap(process_patch)(patches, patches_bg, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
         refined_peaks = []
         rs_padded = np.array(rs) + PAD
@@ -891,9 +903,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 chunk_r = jnp.array(rs_padded[i:i+self.chunk_size])
                 chunk_c = jnp.array(cs_padded[i:i+self.chunk_size])
 
-                patches, r_starts, c_starts = extract_patches(img_jax_padded, chunk_f, chunk_r, chunk_c)
+                patches, patches_bg, r_starts, c_starts = extract_patches(img_jax_padded, bg_jax_padded, chunk_f, chunk_r, chunk_c)
 
-                res = solve_patches(patches, chunk_r, chunk_c, r_starts, c_starts, all_rs_jnp, all_cs_jnp)
+                res = solve_patches(patches, patches_bg, chunk_r, chunk_c, r_starts, c_starts, all_rs_jnp, all_cs_jnp)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
