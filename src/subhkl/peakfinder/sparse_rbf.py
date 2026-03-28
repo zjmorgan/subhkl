@@ -118,31 +118,6 @@ class SparseRBFPeakFinder:
         return final_image
 
     @staticmethod
-    def _loss_fn(params_flat, x_grid, target_raw, target_bg, eff_alpha, gamma, ref_s, bounds_tuple, opt_mask, loss_code):
-        H, W, min_s, max_s = bounds_tuple
-        params_phys = SparseRBFPeakFinder._to_physical(params_flat, H, W, min_s, max_s)
-        recon = SparseRBFPeakFinder._predict_batch_physical(params_phys, x_grid, opt_mask) + target_bg
-        
-        # UNPENALIZED MLE GEOMETRY
-        # Free from L1 drag, we can safely use the exact statistical metric.
-        # This cures the L2 shape bias and expands sigma perfectly.
-        recon_safe = jnp.maximum(recon, 1e-6)
-        bg_med = jnp.maximum(jnp.median(target_bg), 1e-3)
-
-        nll = jnp.where(
-            loss_code == 1,
-            bg_med * jnp.sum(recon_safe - target_raw * jnp.log(recon_safe)),
-            0.5 * jnp.sum((recon - target_raw)**2)
-        )
-
-        intensities = jnp.abs(params_phys[:, 0]) * opt_mask
-        sigmas = params_phys[:, 3]
-        reg_weight = (sigmas / ref_s) ** gamma + 1e-6
-        reg = eff_alpha * jnp.sum(intensities * reg_weight)
-
-        return nll + reg
-
-    @staticmethod
     @partial(jit, static_argnames=['max_iter', 'loss_type'])
     def _solve_ssn_unified(A, y, bg_flat, alpha_vec, loss_type, c_warm, max_iter=20):
         N_peaks = A.shape[1]
@@ -257,23 +232,19 @@ class SparseRBFPeakFinder:
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
         local_noise_floor = jnp.sqrt(local_bg_med)
        
-        # Absolute Photons (For Scout and BFGS)
         eff_alpha = alpha_z_score * local_noise_floor
 
-        # The continuous Newton solvers require precise statistical gradient mapping!
         if loss_code == 1:
-            eff_alpha_stat = alpha_z_score / local_noise_floor # Poisson Mapped
+            eff_alpha_stat = alpha_z_score / local_noise_floor 
         else:
-            eff_alpha_stat = alpha_z_score * local_noise_floor # L2 Mapped
+            eff_alpha_stat = alpha_z_score * local_noise_floor 
         
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)
         yy, xx = jnp.indices((H, W))
         x_grid = jnp.array([yy, xx])
         
-        # Max K radius defines the valid correlation boundaries
         max_k_rad = int(3.0 * self.max_sigma)
         k_grid = jnp.arange(-max_k_rad, max_k_rad + 1)
-        ky, kx = jnp.meshgrid(k_grid, k_grid, indexing='ij')
         
         init_params = jnp.zeros((max_peaks_local, 4))
         init_active = jnp.zeros(max_peaks_local, dtype=bool)
@@ -286,32 +257,56 @@ class SparseRBFPeakFinder:
             def check_sigma(s):
                 sig_sq2 = s * jnp.sqrt(2.0) + 1e-6
                 
-                # --- CUDNN-OPTIMIZED SEPARABLE KERNELS ---
+                # separable kernels
                 k_1d = jax.scipy.special.erf((k_grid + 0.5) / sig_sq2) - jax.scipy.special.erf((k_grid - 0.5) / sig_sq2)
-                
-                # Reshape to degenerate 2D matrices so Nvidia's cuDNN takes over
-                k_col = k_1d[:, None]  # Shape [K, 1]
-                k_row = k_1d[None, :]  # Shape [1, K]
+                k_col = k_1d[:, None]
+                k_row = k_1d[None, :]
 
                 recon_total = jnp.maximum(recon + patch_bg, 1e-3)
                 raw_grad = patch_stat - recon_total
 
-                # 1. Slide vertically (fast memory stride)
                 temp = jax.scipy.signal.correlate2d(raw_grad, k_col, mode='valid')
-                # 2. Slide horizontally
                 dual_var_unscaled = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')
                 
-                # 3. Restore the 2D Gaussian Area Scalar
                 area_scalar = (jnp.pi / 2.0) * (s**2)
                 dual_var = dual_var_unscaled * area_scalar
 
                 flat_idx = jnp.argmax(dual_var)
                 r_valid, c_valid = jnp.unravel_index(flat_idx, dual_var.shape)
 
-                r_idx = r_valid + max_k_rad
-                c_idx = c_valid + max_k_rad
+                # --- EXACT LOG-PARABOLIC INTERPOLATION ---
+                # A correlation of Gaussians is a Gaussian.
+                # Linear parabolic interpolation systematically underestimates the shift.
+                # The natural log of a background-subtracted Gaussian is a perfect parabola.
+                padded_dv = jnp.pad(dual_var, 1, mode='edge')
+                r_p, c_p = r_valid + 1, c_valid + 1
+                
+                # Protect against negative correlation values (which aren't valid peaks anyway)
+                safe_dv = jnp.maximum(padded_dv, 1e-6)
+                val    = jnp.log(safe_dv[r_p, c_p])
+                val_up = jnp.log(safe_dv[r_p - 1, c_p])
+                val_dn = jnp.log(safe_dv[r_p + 1, c_p])
+                val_lf = jnp.log(safe_dv[r_p, c_p - 1])
+                val_rt = jnp.log(safe_dv[r_p, c_p + 1])
+                
+                # Denominator is the 2nd derivative (curvature).
+                # A true local maximum MUST have negative curvature. 
+                den_r = val_up - 2.0 * val + val_dn
+                den_r = jnp.minimum(den_r, -1e-6) # Force strictly negative
+                dr = 0.5 * (val_up - val_dn) / den_r
+                
+                den_c = val_lf - 2.0 * val + val_rt
+                den_c = jnp.minimum(den_c, -1e-6)
+                dc = 0.5 * (val_lf - val_rt) / den_c
 
-                # O(1) Area Norm Calculation
+                # If (r_valid, c_valid) is the true discrete maximum, 
+                # the continuous peak mathematically MUST lie within [-0.5, 0.5].
+                dr = jnp.clip(dr, -0.5, 0.5)
+                dc = jnp.clip(dc, -0.5, 0.5)
+
+                r_idx = r_valid + max_k_rad + dr
+                c_idx = c_valid + max_k_rad + dc
+
                 k_1d_sq_sum = jnp.sum(k_1d ** 2)
                 kernel_sq_norm = (area_scalar ** 2) * (k_1d_sq_sum ** 2)
 
@@ -326,11 +321,7 @@ class SparseRBFPeakFinder:
             best_idx = jnp.argmax(vals)
             new_peak = candidates[best_idx]
             
-            # Extract the actual physical amplitude found in photons
             c_best = new_peak[0] 
-            
-            # Threshold the physical amplitude, NOT the scale-amplified SNR score!
-            # This instantly annihilates the 32 background ghost bumps.
             is_strong = c_best > eff_alpha
             
             dummy_peak = jnp.array([0.0, 0.0, 0.0, 1.0])
@@ -342,46 +333,12 @@ class SparseRBFPeakFinder:
             def run_opt(operand):
                 p, a_mask = operand
                 
-                # 1. PERMANENTLY LOCK SIGMA TO THE SCOUT'S NCC ESTIMATE
-                locked_sigmas = p[:, 3]
-                
-                # 2. Define 3-Parameter Mappings (c, r, col)
-                def to_unc3(p_phys):
-                    c, r, col = p_phys[:, 0], p_phys[:, 1], p_phys[:, 2]
-                    c_safe = jnp.maximum(c, 1e-9)
-                    c_raw = jnp.where(c_safe > 20.0, c_safe, jnp.log(jnp.expm1(c_safe)))
-                    r_raw = jax.scipy.special.logit(jnp.clip(r / H, 1e-6, 1.0 - 1e-6))
-                    col_raw = jax.scipy.special.logit(jnp.clip(col / W, 1e-6, 1.0 - 1e-6))
-                    return jnp.stack([c_raw, r_raw, col_raw], axis=1).ravel()
-                
-                def to_phys3(p3_raw):
-                    p3_reshaped = p3_raw.reshape((-1, 3))
-                    c_raw, r_raw, col_raw = p3_reshaped.T
-                    c = jax.nn.softplus(c_raw)
-                    r = jax.nn.sigmoid(r_raw) * H
-                    col = jax.nn.sigmoid(col_raw) * W
-                    # Re-inject the pristine locked sigmas
-                    return jnp.stack([c, r, col, locked_sigmas], axis=1)
-
-                p_raw = to_unc3(p)
-                
-                # 3. Pure L2 Unpenalized Geometry Loss (Immune to Neyman bias)
-                def loss_fn_locked(p3_raw_flat, x_grid, target_raw, target_bg, opt_mask):
-                    p_phys = to_phys3(p3_raw_flat)
-                    recon = self._predict_batch_physical(p_phys, x_grid, opt_mask) + target_bg
-                    return 0.5 * jnp.sum((recon - target_raw)**2)
-                
-                # 4. Run BFGS Strictly to find Subpixel (r, c)
-                res = jax.scipy.optimize.minimize(
-                    fun=loss_fn_locked,
-                    x0=p_raw,
-                    args=(x_grid, patch_stat, patch_bg, a_mask),
-                    method='BFGS',
-                    options={'maxiter': 20}
-                )
-                
-                p_refined = to_phys3(res.x)
-                c_phys, r, col, sigma = p_refined.T
+                # --- BFGS REMOVED! ---
+                # We already have exact subpixel geometry via Parabolic Interpolation
+                c_init = p[:, 0]
+                r = p[:, 1]
+                col = p[:, 2]
+                sigma = p[:, 3]
                 
                 def eval_one(ri, ci_col, si):
                     return self._rbf_basis(x_grid, jnp.array([ri, ci_col]), si).flatten()
@@ -389,13 +346,10 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T
                 A_masked = A * a_mask
                 
-                weights = (sigma / self.ref_sigma)**self.gamma + 1e-6
-                alpha_vec_stat = eff_alpha_stat * weights
+                alpha_vec_stat = eff_alpha_stat * jnp.ones_like(sigma)
+                c_phys_masked = c_init * a_mask
                 
-                # STRICT MASKING: Kill ghost amplitudes
-                c_phys_masked = c_phys * a_mask
-                
-                # 5. Hand the locked shapes to the true Poisson Integrator
+                # Immediately execute Poisson Maximum Likelihood
                 c_sparse_stat = self._solve_ssn_unified(A_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat, loss_code, c_phys_masked)
                 
                 c_sparse_norm = c_sparse_stat * a_mask
@@ -413,7 +367,6 @@ class SparseRBFPeakFinder:
         final_params, final_active, _ = final_state
         
         if do_merge:
-            # intensity-weighted averaging of peak locations to subpixel accuracy
             c, r, col, sigma = final_params.T
             active_mask = final_active & (c > 1e-9)
             num_active = jnp.sum(active_mask)
@@ -444,8 +397,7 @@ class SparseRBFPeakFinder:
             A_aug = vmap(eval_one_aug)(r_aug, col_aug, sigma_aug).T
             A_aug_masked = A_aug * aug_mask
             
-            weights_aug = (sigma_aug / self.ref_sigma)**self.gamma + 1e-6
-            alpha_vec_stat_aug = eff_alpha_stat * weights_aug
+            alpha_vec_stat_aug = eff_alpha_stat * jnp.ones_like(sigma_aug)
             
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)
             
