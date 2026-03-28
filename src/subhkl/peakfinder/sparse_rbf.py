@@ -493,18 +493,57 @@ class SparseRBFPeakFinder:
         # alpha is strictly interpreted as the Z-score (SNR) threshold
         alpha_z_score = self.alpha
 
-        # Ensure the median filter is strictly larger than the biggest possible Bragg peak
-        # so it captures the true background without swallowing the signal.
         filter_size = max(15, int(self.max_sigma * 5))
-        if filter_size % 2 == 0: 
+        if filter_size % 2 == 0:
             filter_size += 1
 
-        from scipy.ndimage import median_filter, gaussian_filter
-        bg_med = median_filter(images_batch, size=(1, filter_size, filter_size))
-        bg_map = gaussian_filter(bg_med, sigma=(0, 3.0, 3.0))
-        bg_map = np.clip(bg_map, 1e-3, None)
+        @partial(jit, static_argnames=['window_size'])
+        def jax_median_2d(img, window_size):
+            pad_w = window_size // 2
+            padded = jnp.pad(img, pad_w, mode='reflect')
+            im_4d = padded[None, None, :, :]
+
+            # Extract sliding windows purely on GPU using hardware-accelerated memory striding
+            patches = lax.conv_general_dilated_patches(
+                im_4d,
+                filter_shape=(window_size, window_size),
+                window_strides=(1, 1),
+                padding='VALID',
+                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+            )
+            # patches is [1, window_size**2, H, W]. JAX median sorts this axis flawlessly.
+            return jnp.median(patches[0], axis=0)
+
+        @jit
+        def jax_gaussian_blur_2d(img):
+            # Pure JAX separable 1D Gaussian blur keeps the data on the GPU
+            sigma = 3.0
+            radius = int(4.0 * sigma + 0.5)
+            x = jnp.arange(-radius, radius + 1)
+            k_1d = jnp.exp(-0.5 * (x / sigma) ** 2)
+            k_1d = k_1d / jnp.sum(k_1d)
+
+            k_col = k_1d[:, None]
+            k_row = k_1d[None, :]
+
+            padded = jnp.pad(img, radius, mode='reflect')
+            temp = jax.scipy.signal.correlate2d(padded, k_col, mode='valid')
+            blurred = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')
+            return blurred
+
+        @jit
+        def compute_bg_batch(imgs):
+            def process_one(img):
+                med = jax_median_2d(img, filter_size)
+                blur = jax_gaussian_blur_2d(med)
+                return jnp.maximum(blur, 1e-3)
+            # lax.map executes strictly sequentially on GPU, protecting VRAM from the massive patch tensor
+            return lax.map(process_one, imgs)
+
+        # Execute instantly on GPU (Zero CPU <-> GPU transfers until the end!)
+        bg_map = np.array(compute_bg_batch(jnp.array(images_batch)))
         self._last_bg_map = bg_map
-        
+
         valid_bg = bg_map[bg_map > 1e-2]
         if valid_bg.size == 0:
             median_bg_level = 1.0
