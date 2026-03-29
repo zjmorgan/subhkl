@@ -773,10 +773,18 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     Takes predicted spot coordinates, extracts patches, and uses Volume-Penalized
     Sparse RBF to accurately integrate intensity using the Preconditioned SSN Engine.
     """
-    def __init__(self, alpha=0.05, min_sigma=0.5, max_sigma=5.0, gamma=2.0, loss='poisson', num_sigmas=64):
+    def __init__(self,
+                 alpha=0.05,
+                 min_sigma=0.5,
+                 max_sigma=5.0,
+                 gamma=2.0,
+                 loss='poisson',
+                 border_width=0,
+                 num_sigmas=32):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
-            loss=loss, border_width=0, show_steps=False, num_sigmas=num_sigmas
+            loss=loss, border_width=border_width, num_sigmas=num_sigmas,
+            show_steps=False
         )
 
     def integrate_reflections(self, images_batch, frames, rs, cs):
@@ -790,14 +798,12 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         K_NEIGHBORS = min(4, N_spots) if N_spots > 0 else 1
 
         filter_size = max(15, int(self.max_sigma * 5))
-        if filter_size % 2 == 0:
+        if filter_size % 2 == 0: 
             filter_size += 1
 
-        # Execute background natively on GPU
         images_jax = jnp.array(images_batch, dtype=jnp.float32)
         bg_maps_jax = compute_bg_batch(images_jax, filter_size)
 
-        # Pad both Data and Background
         img_jax_padded = jnp.pad(images_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
         bg_jax_padded = jnp.pad(bg_maps_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')
 
@@ -810,25 +816,26 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         def extract_patches(img_src, bg_src, f_idx, r_idx, c_idx):
             r_start = jnp.clip(jnp.int32(jnp.round(r_idx)) - half_p, 0, img_src.shape[1] - P)
             c_start = jnp.clip(jnp.int32(jnp.round(c_idx)) - half_p, 0, img_src.shape[2] - P)
-            
             def slice_img(bi, ri, ci): return lax.dynamic_slice(img_src[bi], (ri, ci), (P, P))
             def slice_bg(bi, ri, ci):  return lax.dynamic_slice(bg_src[bi], (ri, ci), (P, P))
-            
             return vmap(slice_img)(f_idx, r_start, c_start), vmap(slice_bg)(f_idx, r_start, c_start), r_start, c_start
 
         @jit
-        def solve_patches(patches, patches_bg, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_rs_jnp, all_cs_jnp):
+        def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp):
             N_shapes = len(self.candidate_sigmas)
             
-            def process_patch(patch, patch_bg, r_global, c_global, r_start, c_start):
-                # The noise floor is now safely derived from the true morphological background
+            def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
                 bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
                 noise_floor = jnp.sqrt(bg_med)
                 
                 eff_alpha_stat = jnp.where(loss_code == 1, self.alpha / noise_floor, self.alpha * noise_floor)
                 
                 dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2
-                _, nbr_idxs = jax.lax.top_k(-dists, K_NEIGHBORS)
+                
+                # --- CROSS-FRAME K-NN FIX ---
+                # Force peaks from different images to have an infinite distance so they never interact
+                frame_penalty = jnp.where(all_fs_jnp == f_global, 0.0, 1e9)
+                _, nbr_idxs = jax.lax.top_k(-(dists + frame_penalty), K_NEIGHBORS)
                 
                 nbr_rs = all_rs_jnp[nbr_idxs]
                 nbr_cs = all_cs_jnp[nbr_idxs]
@@ -844,7 +851,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 A_all = vmap(eval_neighbor)(local_rs, local_cs)
                 A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)
                 
-                # Subtracting the curved background patch instead of a flat median
                 y_sub = (patch - patch_bg).flatten()
                 
                 pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
@@ -867,11 +873,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_warm_best = c_warm_proj_k[indices, best_idx_k] 
                 best_sigmas = self.candidate_sigmas[best_idx_k]  
                 
-                # Align SSN penalty with amplitude physics
                 weights_best = (best_sigmas / self.ref_sigma) ** self.gamma
                 alpha_vec_best = eff_alpha_stat * weights_best
-
-                # JOINT SSN SOLVE (Providing the exact curved patch_bg geometry)
+                
                 c_final_joint = self._solve_ssn_unified(
                     A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20
                 )
@@ -884,15 +888,18 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig_target, 0.0)])
                 
-            return vmap(process_patch)(patches, patches_bg, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
+            return vmap(process_patch)(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
         refined_peaks = []
         rs_padded = np.array(rs) + PAD
         cs_padded = np.array(cs) + PAD
         
         PAD_N = max(N_spots, 4)
+        fs_full = np.pad(np.array(frames), (0, PAD_N - N_spots), constant_values=-1)
         rs_full = np.pad(rs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)
         cs_full = np.pad(cs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)
+        
+        all_fs_jnp = jnp.array(fs_full, dtype=jnp.int32)
         all_rs_jnp = jnp.array(rs_full, dtype=jnp.float32)
         all_cs_jnp = jnp.array(cs_full, dtype=jnp.float32)
         
@@ -905,7 +912,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
                 patches, patches_bg, r_starts, c_starts = extract_patches(img_jax_padded, bg_jax_padded, chunk_f, chunk_r, chunk_c)
 
-                res = solve_patches(patches, patches_bg, chunk_r, chunk_c, r_starts, c_starts, all_rs_jnp, all_cs_jnp)
+                res = solve_patches(patches, patches_bg, chunk_f, chunk_r, chunk_c, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
@@ -920,14 +927,17 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
         return np.vstack(refined_peaks)
 
+
 # =====================================================================
 # API WRAPPER FOR BACKWARD COMPATIBILITY
 # =====================================================================
+
 from typing import Dict, List
+
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            create_visualizations: bool = False):
+                            border_width: int = 0, create_visualizations: bool = False):
 
     class RBFResult:
         def __init__(self):
@@ -941,13 +951,25 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         sample_offset = np.zeros(3)
 
     integrator = SparseLaueIntegrator(
-        alpha=alpha, min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma, loss='poisson'
+        alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
+        loss='poisson', border_width=border_width,
     )
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)
     integrator.show_steps = show_progress
 
+    # --- PHASE 1: GATHER AND BATCH ---
+    images_list = []
+    all_frames = []
+    all_rs, all_cs = [], []
+    meta_h, meta_k, meta_l, meta_wl = [], [], [], []
+    meta_keys = []
+
+    frame_counter = 0
+    img_keys_ordered = sorted(peak_dict.keys())
+
     from tqdm import tqdm
-    for img_key, p_data in tqdm(peak_dict.items(), disable=not show_progress, desc="RBF Integration Wrapper"):
+    for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
+        p_data = peak_dict[img_key]
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
         if len(i_arr) == 0: continue
 
@@ -962,9 +984,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 g = np.gcd.reduce([abs(h), abs(k), abs(l)])
                 fund_hkl = (h//g, k//g, l//g)
 
-            # --- SPATIAL DEDUPLICATION FIX ---
-            # Append an approximate detector bin (5 pixels) to the dictionary key.
-            # This ensures spatially separated harmonics (or test arrays) are preserved!
             loc_key = (int(np.round(i_arr[idx]/5.0)), int(np.round(j_arr[idx]/5.0)))
             unique_key = (fund_hkl, loc_key)
 
@@ -972,15 +991,38 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 unique_peaks[unique_key] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
-        p_data = [arr[keep_indices] for arr in p_data]
-        i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
 
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
-        images_batch = image_raw[np.newaxis, ...]
-        frames = np.zeros(len(i_arr), dtype=int)
+        images_list.append(image_raw)
 
-        integrated_results = integrator.integrate_reflections(images_batch, frames, i_arr, j_arr)
+        for idx in keep_indices:
+            all_frames.append(frame_counter)
+            all_rs.append(i_arr[idx])
+            all_cs.append(j_arr[idx])
+            meta_h.append(h_arr[idx])
+            meta_k.append(k_arr[idx])
+            meta_l.append(l_arr[idx])
+            meta_wl.append(wl_arr[idx])
+            meta_keys.append(img_key)
 
+        frame_counter += 1
+
+    if not images_list:
+        return res
+
+    images_batch = np.stack(images_list)
+    frames = np.array(all_frames, dtype=int)
+
+    # --- PHASE 2: GPU INTEGRATION ---
+    integrated_results = integrator.integrate_reflections(images_batch, frames, all_rs, all_cs)
+
+    # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
+    from collections import defaultdict
+    results_by_img = defaultdict(list)
+    for i in range(len(meta_keys)):
+        results_by_img[meta_keys[i]].append(i)
+
+    for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
@@ -991,17 +1033,20 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             current_R_val = all_R
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
-        bank_tt, bank_az = det.pixel_to_angles(p_data[0], p_data[1], sample_offset=s_lab)
 
-        for p_idx in range(len(i_arr)):
-            res.h.append(p_data[2][p_idx])
-            res.k.append(p_data[3][p_idx])
-            res.l.append(p_data[4][p_idx])
-            res.wavelength.append(p_data[5][p_idx])
-            res.intensity.append(float(integrated_results[p_idx, 0]))
-            res.sigma.append(float(integrated_results[p_idx, 3]))
-            res.tt.append(float(bank_tt[p_idx]))
-            res.az.append(float(bank_az[p_idx]))
+        img_rs = [all_rs[idx] for idx in indices]
+        img_cs = [all_cs[idx] for idx in indices]
+        bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
+
+        for local_idx, global_idx in enumerate(indices):
+            res.h.append(meta_h[global_idx])
+            res.k.append(meta_k[global_idx])
+            res.l.append(meta_l[global_idx])
+            res.wavelength.append(meta_wl[global_idx])
+            res.intensity.append(float(integrated_results[global_idx, 0]))
+            res.sigma.append(float(integrated_results[global_idx, 3]))
+            res.tt.append(float(bank_tt[local_idx]))
+            res.az.append(float(bank_az[local_idx]))
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
