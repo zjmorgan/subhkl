@@ -1376,7 +1376,7 @@ def rbf_integrator(
         show_progress=show_progress,
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
-        border_wdith=border_width,
+        border_width=border_width,
         create_visualizations=create_visualizations
     )
 
