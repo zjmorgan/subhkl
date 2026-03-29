@@ -1314,6 +1314,7 @@ def rbf_integrator(
     gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
     sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
+    rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
     create_visualizations: bool = False,
 ):
@@ -1362,6 +1363,9 @@ def rbf_integrator(
     if angles_stack is None:
         angles_stack = peaks.goniometer.angles_raw
 
+    one_image = min(next(iter(peaks.image.ims)))
+    border_width = int(rel_border_width * min(one_image.shape[0], one_image.shape[1]))
+
     result = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict,
         peaks_obj=peaks,             # Pass the full Peaks object
@@ -1372,6 +1376,7 @@ def rbf_integrator(
         show_progress=show_progress,
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
+        border_wdith=border_width,
         create_visualizations=create_visualizations
     )
 
