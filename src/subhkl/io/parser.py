@@ -1363,7 +1363,7 @@ def rbf_integrator(
     if angles_stack is None:
         angles_stack = peaks.goniometer.angles_raw
 
-    one_image = next(iter(peaks.image.ims))
+    one_image = next(iter(peaks.image.ims.values))
     border_width = int(rel_border_width * min(one_image.shape[0], one_image.shape[1]))
 
     result = integrate_peaks_rbf_ssn(
