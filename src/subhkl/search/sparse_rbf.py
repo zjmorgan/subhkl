@@ -1027,6 +1027,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
+        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
+
         if all_R is not None and all_R.ndim == 3:
             current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
         else:
@@ -1038,16 +1040,65 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_cs = [all_cs[idx] for idx in indices]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
 
+        img_intensities = [float(integrated_results[idx, 0]) for idx in indices]
+        img_sigmas = [float(integrated_results[idx, 3]) for idx in indices]
+
+        res.intensity += img_intensities
+        res.sigma += img_sigmas
+
         for local_idx, global_idx in enumerate(indices):
             res.h.append(meta_h[global_idx])
             res.k.append(meta_k[global_idx])
             res.l.append(meta_l[global_idx])
             res.wavelength.append(meta_wl[global_idx])
-            res.intensity.append(float(integrated_results[global_idx, 0]))
-            res.sigma.append(float(integrated_results[global_idx, 3]))
             res.tt.append(float(bank_tt[local_idx]))
             res.az.append(float(bank_az[local_idx]))
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
+
+        if create_visualizations:
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Circle
+            import matplotlib.lines as mlines
+            import matplotlib.cm as cm
+
+            if plt.get_backend().lower() != "agg":
+                plt.switch_backend("Agg")
+
+            N_shapes = len(integrator.candidate_sigmas)
+            fig, ax = plt.subplots(figsize=(10, 10))
+            ax.imshow(image_raw, cmap="viridis", origin="lower")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
+                    transform=ax.transAxes, ha='left', va='top', fontsize=16)
+
+            ax.scatter(img_rs, img_cs, marker='+', color='blue', s=60, label="Predicted")
+            color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
+
+            for s_idx, (cx, cy, intensity) in enumerate(zip(img_cs, img_rs, img_intensities)):
+                is_active = intensity > 0
+                if is_active:
+                    active_sig = img_sigmas[s_idx]
+                    color = color_map[sigmas.index(active_sig)]
+                    circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
+                    ax.add_patch(circle)
+
+            handles, labels = ax.get_legend_handles_labels()
+            for s_idx in range(N_shapes):
+                color = color_map[s_idx]
+                active_sig = sigmas[s_idx]
+                circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+                handles.append(circle_key)
+                labels.append(rf'$2\sigma={2.0 * active_sig}$')
+
+            ax.legend(
+                handles=handles, labels=labels, loc='lower center',
+                ncol=len(handles), frameon=False, fontsize=12
+            )
+            out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
+            fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0)
+            plt.tight_layout(pad=3)
+            plt.close(fig)
 
     return res
