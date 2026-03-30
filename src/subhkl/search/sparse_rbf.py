@@ -1067,13 +1067,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
             N_shapes = len(integrator.candidate_sigmas)
             fig, ax = plt.subplots(figsize=(10, 10))
-            ax.imshow(image_raw, cmap="viridis", origin="lower")
+            im = ax.imshow(image_raw, cmap="viridis", origin="lower")
             ax.set_xticks([])
             ax.set_yticks([])
             ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
                     transform=ax.transAxes, ha='left', va='top', fontsize=16)
 
-            ax.scatter(img_rs, img_cs, marker='+', color='blue', s=60, label="Predicted")
+            ax.scatter(img_cs, img_rs, marker='+', color='blue', s=60, label="Predicted")
             color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
 
             for s_idx, (cx, cy, intensity) in enumerate(zip(img_cs, img_rs, img_intensities)):
@@ -1096,9 +1096,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 handles=handles, labels=labels, loc='lower center',
                 ncol=len(handles), frameon=False, fontsize=12
             )
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
             out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
-            fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0)
-            plt.tight_layout(pad=3)
+            fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
             plt.close(fig)
 
     return res
