@@ -885,8 +885,31 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 volumes = jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
                 intensity = c_final_target * volumes
+               
+                # append a flat background vector to the active basis set
+                A_tilde = jnp.hstack([A_best, jnp.ones((P*P, 1))])
                 
-                return jnp.array([intensity, local_rs[0], local_cs[0], jnp.where(intensity > 0, best_sig_target, 0.0)])
+                # Poisson pixel variance weights: w = 1 / max(y, 1)
+                w = 1.0 / jnp.maximum(patch.flatten(), 1.0)
+                
+                # Fisher Information Matrix
+                I_mat = A_tilde.T @ (w[:, None] * A_tilde)
+                
+                # Covariance Matrix (with slight ridge for numerical stability)
+                C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))
+                
+                # Extract variance of the target coefficient (index 0)
+                var_c0 = C_mat[0, 0]
+                sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0))
+                
+                # Return 5 elements: Intensity, R, C, Spatial Sigma, sigI
+                return jnp.array([
+                    intensity, 
+                    local_rs[0], 
+                    local_cs[0], 
+                    jnp.where(intensity > 0, best_sig_target, 0.0),
+                    jnp.where(intensity > 0, sigI, 0.0)
+                ])
                 
             return vmap(process_patch)(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
@@ -1040,11 +1063,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_cs = [all_cs[idx] for idx in indices]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
 
+        # Extract 5-element arrays
         img_intensities = [float(integrated_results[idx, 0]) for idx in indices]
-        img_sigmas = [float(integrated_results[idx, 3]) for idx in indices]
+        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in indices]
+        img_sigI = [float(integrated_results[idx, 4]) for idx in indices]
 
         res.intensity += img_intensities
-        res.sigma += img_sigmas
+        res.sigma += img_sigI
 
         for local_idx, global_idx in enumerate(indices):
             res.h.append(meta_h[global_idx])
@@ -1092,13 +1117,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
                 is_active = intensity > 0
                 if is_active:
-                    active_sig = img_sigmas[s_idx]
-
-                    # safely map float32 sigmas to the color map index
+                    # Use spatial sigmas to draw the circles, NOT statistical uncertainty
+                    active_sig = img_spatial_sigmas[s_idx]
                     best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig)))
                     color = color_map[best_c_idx]
 
-                    # Draw circle exactly at the refined mathematical center
                     circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
                     ax.add_patch(circle)
 
