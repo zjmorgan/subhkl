@@ -598,10 +598,15 @@ def test_large_sensor_basic_integration():
     pred_r = np.array([true_r, 50.0, 450.0])
     pred_c = np.array([true_c, 50.0, 450.0])
 
+    # Use distinct, non-harmonic Miller indices so the deduplicator keeps them all
+    h_arr = np.array([1, 2, 3])
+    k_arr = np.array([13, 17, 19])
+    l_arr = np.array([1, 1, 1])
+
     peak_dict = {
         0: [
             pred_r, pred_c,
-            np.arange(3), np.arange(3), np.arange(3), np.ones(3)
+            h_arr, k_arr, l_arr, np.ones(3)
         ]
     }
 
@@ -676,12 +681,17 @@ def test_integrator_large_sensor_halo_suppression():
 
     # Provide a grid of HKL predictions. Only ONE matches the true peak (Index 5).
     grid_i, grid_j = np.linspace(50, 450, 10), np.linspace(50, 450, 10)
-    grid_i[5], grid_j[5] = true_r, true_c
-
+    grid_i[5], grid_j[5] = true_r, true_c 
+    
+    # Generate 10 unique fundamental rays
+    h_arr = np.arange(1, 11)
+    k_arr = np.full(10, 13)
+    l_arr = np.full(10, 17)
+    
     peak_dict = {
         0: [
-            grid_i, grid_j,
-            np.arange(10), np.arange(10), np.arange(10), np.ones(10)
+            grid_i, grid_j, 
+            h_arr, k_arr, l_arr, np.ones(10)
         ]
     }
 

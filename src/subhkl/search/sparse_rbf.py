@@ -985,26 +985,40 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
         p_data = peak_dict[img_key]
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
-        if len(i_arr) == 0: continue
+        
+        initial_peaks_count = len(i_arr)
+        if initial_peaks_count == 0: 
+            continue
 
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
-        for idx in range(len(i_arr)):
+        
+        # Group strictly by the fundamental Miller ray (h/g, k/g, l/g).
+        # This prevents collinear basis functions from sabotaging the Fisher Information matrix!
+        for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
             if h == 0 and k == 0 and l == 0:
-                fund_hkl = (0, 0, 0)
-            else:
-                g = np.gcd.reduce([abs(h), abs(k), abs(l)])
-                fund_hkl = (h//g, k//g, l//g)
+                continue # Safety skip for origin
+                
+            # Find the fundamental ray using the Greatest Common Divisor
+            g = np.gcd.reduce([abs(h), abs(k), abs(l)])
+            fund_hkl = (h//g, k//g, l//g)
 
-            loc_key = (int(np.round(i_arr[idx]/5.0)), int(np.round(j_arr[idx]/5.0)))
-            unique_key = (fund_hkl, loc_key)
-
-            if unique_key not in unique_peaks or hkl_sq[idx] < unique_peaks[unique_key]['hkl_sq']:
-                unique_peaks[unique_key] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+            # Strictly enforce one spatial prediction per ray
+            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
+                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
+        actual_peaks_count = len(keep_indices)
+
+        # Diagnostic Compression Output
+        if show_progress and initial_peaks_count != actual_peaks_count:
+            physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
+            comp_ratio = (1.0 - actual_peaks_count / initial_peaks_count) * 100
+            tqdm.write(f"Bank {physical_b} [Run {peaks_obj.image.get_run_id(img_key)}]: "
+                       f"Harmonics Filtered {initial_peaks_count} -> {actual_peaks_count} "
+                       f"({comp_ratio:.1f}% compression)")
 
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         images_list.append(image_raw)
