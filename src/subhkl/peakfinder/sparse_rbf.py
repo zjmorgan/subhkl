@@ -993,8 +993,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
         
-        # Group strictly by the fundamental Miller ray (h/g, k/g, l/g).
-        # This prevents collinear basis functions from sabotaging the Fisher Information matrix!
+        # --- 1. HARMONIC DEDUPLICATION (EXACT CRYSTALLOGRAPHIC) ---
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
@@ -1005,9 +1004,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
 
-            # Strictly enforce one spatial prediction per ray
-            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
-                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+            # Reintroduce loc_key to protect spatially-separated harmonics from being deleted!
+            loc_key = (int(np.round(i_arr[idx]/5.0)), int(np.round(j_arr[idx]/5.0)))
+            unique_key = (fund_hkl, loc_key)
+
+            if unique_key not in unique_peaks or hkl_sq[idx] < unique_peaks[unique_key]['hkl_sq']:
+                unique_peaks[unique_key] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         actual_peaks_count = len(keep_indices)
