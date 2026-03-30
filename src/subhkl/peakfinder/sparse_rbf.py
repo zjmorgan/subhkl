@@ -163,8 +163,8 @@ class SparseRBFPeakFinder:
         return final_image
 
     @staticmethod
-    @partial(jit, static_argnames=['max_iter', 'loss_type'])
-    def _solve_ssn_unified(A, y, bg_flat, alpha_vec, loss_type, c_warm, max_iter=20):
+    @partial(jit, static_argnames=['max_iter', 'loss_type', 'force_target'])
+    def _solve_ssn_unified(A, y, bg_flat, alpha_vec, loss_type, c_warm, max_iter=20, force_target=False):
         N_peaks = A.shape[1]
         N_params = N_peaks
         q_init = c_warm.astype(jnp.float32)
@@ -238,6 +238,10 @@ class SparseRBFPeakFinder:
 
         # DEBIASING PHASE
         active_mask = c_l1 > 1e-5
+
+        if force_target:
+            # Guarantee the target peak (index 0) is measured unbiasedly
+            active_mask = active_mask.at[0].set(True)
 
         def debias_cond(state):
             step, _, actual_step_norm = state
@@ -831,9 +835,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 eff_alpha_stat = jnp.where(loss_code == 1, self.alpha / noise_floor, self.alpha * noise_floor)
                 
                 dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2
-                
-                # --- CROSS-FRAME K-NN FIX ---
-                # Force peaks from different images to have an infinite distance so they never interact
                 frame_penalty = jnp.where(all_fs_jnp == f_global, 0.0, 1e9)
                 _, nbr_idxs = jax.lax.top_k(-(dists + frame_penalty), K_NEIGHBORS)
                 
@@ -848,36 +849,35 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                         return self._rbf_basis(x_grid, jnp.array([nr, nc]), si).flatten()
                     return vmap(eval_shape)(self.candidate_sigmas).T
                 
-                A_all = vmap(eval_neighbor)(local_rs, local_cs)
-                A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)
+                A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes)
                 
+                # --- 1. Enforce 1-Shape-Per-Peak (Prevents composite halo traps) ---
                 y_sub = (patch - patch_bg).flatten()
                 
+                # Spatial masking ensures neighbors don't hijack the NCC of the target peak
                 pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
                 closest_k = jnp.argmin(pixel_dists_k, axis=1)
                 pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
                 
-                A_k = A_joint.reshape(P*P, K_NEIGHBORS, N_shapes)
-                
-                y_sub_k = y_sub[:, None] * pixel_masks
+                A_k = A_all.transpose(1, 0, 2) # (P*P, K_NEIGHBORS, N_shapes)
                 A_k_masked = A_k * pixel_masks[:, :, None]
+                y_sub_k = y_sub[:, None] * pixel_masks
                 
                 A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6))
                 ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
-                c_warm_proj_k = jnp.maximum(0.0, jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6)).astype(jnp.float32)
-                
                 best_idx_k = jnp.argmax(ncc_k, axis=1) 
                 
                 indices = jnp.arange(K_NEIGHBORS)
                 A_best = A_k[:, indices, best_idx_k]       
-                c_warm_best = c_warm_proj_k[indices, best_idx_k] 
                 best_sigmas = self.candidate_sigmas[best_idx_k]  
                 
+                # --- 2. Execute SSN with Target Forcing ---
                 weights_best = (best_sigmas / self.ref_sigma) ** self.gamma
                 alpha_vec_best = eff_alpha_stat * weights_best
+                c_warm_best = jnp.zeros(K_NEIGHBORS, dtype=jnp.float32)
                 
                 c_final_joint = self._solve_ssn_unified(
-                    A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20
+                    A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20, force_target=True
                 )
                 
                 c_final_target = c_final_joint[0]
@@ -885,30 +885,21 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 volumes = jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
                 intensity = c_final_target * volumes
-               
-                # append a flat background vector to the active basis set
+                
+                # --- 3. Extract Fisher Information Variance (sigI) ---
                 A_tilde = jnp.hstack([A_best, jnp.ones((P*P, 1))])
-                
-                # Poisson pixel variance weights: w = 1 / max(y, 1)
                 w = 1.0 / jnp.maximum(patch.flatten(), 1.0)
-                
-                # Fisher Information Matrix
                 I_mat = A_tilde.T @ (w[:, None] * A_tilde)
-                
-                # Covariance Matrix (with slight ridge for numerical stability)
                 C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))
-                
-                # Extract variance of the target coefficient (index 0)
                 var_c0 = C_mat[0, 0]
                 sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0))
                 
-                # Return 5 elements: Intensity, R, C, Spatial Sigma, sigI
                 return jnp.array([
                     intensity, 
                     local_rs[0], 
                     local_cs[0], 
-                    jnp.where(intensity > 0, best_sig_target, 0.0),
-                    jnp.where(intensity > 0, sigI, 0.0)
+                    best_sig_target, 
+                    sigI
                 ])
                 
             return vmap(process_patch)(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
