@@ -1068,19 +1068,37 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             N_shapes = len(integrator.candidate_sigmas)
             fig, ax = plt.subplots(figsize=(10, 10))
             im = ax.imshow(image_raw, cmap="viridis", origin="lower")
+
+            # enforce strict boundaries to prevent auto-scaling padding
+            ax.set_xlim(0, image_raw.shape[1])
+            ax.set_ylim(0, image_raw.shape[0])
+
             ax.set_xticks([])
             ax.set_yticks([])
-            ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
-                    transform=ax.transAxes, ha='left', va='top', fontsize=16)
 
-            ax.scatter(img_cs, img_rs, marker='+', color='blue', s=60, label="Predicted")
+            # Add a background box to the text so it's readable over the image
+            ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
+                    transform=ax.transAxes, ha='left', va='top', fontsize=16, 
+                    color='white', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
+
+            # Plot initial theoretical predictions as transparent red crosshairs
+            ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
             color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
 
-            for s_idx, (cx, cy, intensity) in enumerate(zip(img_cs, img_rs, img_intensities)):
+            # extract the subpixel-refined coordinates for the circles
+            ref_rs = [float(integrated_results[idx, 1]) for idx in indices]
+            ref_cs = [float(integrated_results[idx, 2]) for idx in indices]
+
+            for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
                 is_active = intensity > 0
                 if is_active:
                     active_sig = img_sigmas[s_idx]
-                    color = color_map[sigmas.index(active_sig)]
+
+                    # safely map float32 sigmas to the color map index
+                    best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig)))
+                    color = color_map[best_c_idx]
+
+                    # Draw circle exactly at the refined mathematical center
                     circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
                     ax.add_patch(circle)
 
@@ -1090,11 +1108,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 active_sig = sigmas[s_idx]
                 circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
                 handles.append(circle_key)
-                labels.append(rf'$2\sigma={2.0 * active_sig}$')
+                labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
 
             ax.legend(
                 handles=handles, labels=labels, loc='lower center',
-                ncol=len(handles), frameon=False, fontsize=12
+                ncol=len(handles) // 2 + 1, frameon=True, fontsize=10, 
+                facecolor='black', edgecolor='none', labelcolor='white'
             )
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
