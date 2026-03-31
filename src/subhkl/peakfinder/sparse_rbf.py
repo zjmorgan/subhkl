@@ -795,10 +795,15 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         B, H, W = images_batch.shape
         N_spots = len(frames)
 
-        P = self.refine_patch_size
+        # Dynamically size the patch
+        max_k_rad = int(3.0 * self.max_sigma)
+        P = max(self.refine_patch_size, 2 * max_k_rad + 1)
+        if P % 2 == 0: 
+            P += 1  # Ensure odd dimension for perfect mathematical centering
+
         half_p = P // 2
         PAD = P
-        
+
         K_NEIGHBORS = min(4, N_spots) if N_spots > 0 else 1
 
         filter_size = max(15, int(self.max_sigma * 5))
