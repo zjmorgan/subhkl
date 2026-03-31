@@ -299,25 +299,26 @@ class SparseRBFPeakFinder:
             step, q, c, _ = state
             obj_val, grad, hess = get_loss_grad_hess(c)
 
-            # --- THE DIMENSIONAL FIX ---
-            # 1. Compute the physical metric tau using the Lipschitz constant [photons / Pixel^3]
+            # 1. Compute the physical metric tau using the Lipschitz constant
+            # hess is [Pixel^2], so L is [Pixel^2] and tau is [Pixel^-2]
             L = jnp.max(jnp.diag(hess)) + 1e-4
-            tau = 1.0 / L 
+            tau = 1.0 / L  # [Pixel^-2]
 
-            # 2. Dimensionally perfect residual [Pixel]
-            Gq = (q - c) / tau + grad
+            # 2. Dimensionally perfect residual: [photons/Pixel^2] / [Pixel^-2] + [photons] = [photons]
+            Gq = (q - c) / tau + grad  
 
-            # 3. Apply tau to the penalty threshold! [photons/Pixel^2]
+            # 3. Apply tau metric to the volume threshold: [Pixel^-2] * [photons * Pixel^0.5] = [photons / Pixel^1.5]
             tau_alpha = tau * scaled_alpha
 
             D = (q > tau_alpha).astype(jnp.float32)  # [-]
             DP_mat = jnp.diag(D)  # [-]
             I = jnp.eye(N_params, dtype=jnp.float32)  # [-]
 
-            # 4. Dimensionally perfect generalized Hessian [Pixel^3 / photons]
-            DG = (I - DP_mat) / tau + hess @ DP_mat + 1e-4 * I 
-            
-            dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)  # [photons / Pixel^2]
+            # 4. Generalized Hessian: [-] / [Pixel^-2] + [Pixel^2] = [Pixel^2]
+            DG = (I - DP_mat) / tau + hess @ DP_mat + 1e-4 * I  
+
+            # dq = [photons] / [Pixel^2] = [photons / Pixel^2] (Perfect coefficient update!)
+            dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
             def bt_cond(bt_state):
                 bt_i, step_size, _, _, j_test, j_curr = bt_state
@@ -475,7 +476,8 @@ class SparseRBFPeakFinder:
 
                 scale_score = dual_var[r_valid, c_valid] / jnp.sqrt(kernel_sq_norm)  # [photons / Pixel]
 
-                c_matched = dual_var[r_valid, c_valid] / kernel_sq_norm  # [photons * Pixel / Pixel^2] = [photons/Pixel] Wait -> [photons/Pixel^2] equivalent
+                # Exact dimensional recovery of volumetric density:
+                c_matched = dual_var[r_valid, c_valid] / kernel_sq_norm  # [photons * Pixel / Pixel^2]
                 c_init = jnp.maximum(c_matched, 0.0)  # [photons/Pixel^2]
 
                 # Return true matched-filter photon scale score for accurate SNR thresholding
@@ -1032,13 +1034,18 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 A_tilde = jnp.hstack([A_best_masked, jnp.ones((P*P, 1))])  # [Pixel]
                 w = 1.0 / jnp.maximum(patch.flatten(), 1.0)  # [Pixel / photons]
                 
-                I_mat = A_tilde.T @ (w[:, None] * A_tilde)  # [Pixel^3 / photons]
+                # I_mat = [Pixel] * [Pixel/photons] * [Pixel] = [Pixel^3 / photons]
+                I_mat = A_tilde.T @ (w[:, None] * A_tilde)  
+                
+                # C_mat is the inverse of I_mat
                 C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))  # [photons / Pixel^3]
                 
-                rhs = A_tilde.T @ (w * y_sub)  # [Pixel^2 / Pixel] = [Pixel] ??? Wait, [Pixel]*[Pixel/photons]*[photons/Pixel] = [Pixel/Pixel] = [-] ??? Actually, rhs = [Pixel]*[Pixel/photons]*[photons/Pixel] = [Pixel]. No, A_tilde.T[Pixel] * w[Pixel/photons] * y_sub[photons/Pixel] = [Pixel]. C_mat[photons/Pixel^3] * rhs[Pixel] = [photons/Pixel^2]. Perfect!
+                # rhs = [Pixel] * [Pixel/photons] * [photons/Pixel] = [Pixel]
+                rhs = A_tilde.T @ (w * y_sub)  
                 
-                c_ols = C_mat @ rhs  # [photons / Pixel^2]
-                
+                # c_ols = [photons / Pixel^3] * [Pixel] = [photons / Pixel^2]
+                c_ols = C_mat @ rhs 
+
                 c_final_target = c_ols[0]  # [photons/Pixel^2]
                 best_sig_target = best_sigmas[0]  # [Pixel^0.5]
                 
