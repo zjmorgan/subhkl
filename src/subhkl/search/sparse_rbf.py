@@ -499,7 +499,7 @@ class SparseRBFPeakFinder:
 
                 volumes = (jnp.pi / 2.0) * (sigma**2)  # [Pixel]
                 weights = (sigma / self.ref_sigma) ** self.gamma  # [-]
-                alpha_vec_stat = alpha_z_score * volumes * weights  # [Pixel]
+                alpha_vec_stat = eff_alpha_stat * volumes * weights  # [Pixel]
                 
                 c_phys_masked = c_init * a_mask  # [photons/Pixel^2]
                 
@@ -552,7 +552,7 @@ class SparseRBFPeakFinder:
            
             volumes_aug = (jnp.pi / 2.0) * (sigma_aug**2)  # [Pixel]
             weights_aug = (sigma_aug / self.ref_sigma) ** self.gamma  # [-]
-            alpha_vec_stat_aug = alpha_z_score * volumes_aug * weights_aug  # [Pixel]
+            alpha_vec_stat_aug = eff_alpha_stat * volumes_aug * weights_aug  # [Pixel]
 
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)  # [photons/Pixel^2]
             
@@ -987,7 +987,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
                 
                 # alpha_vec_joint = [-] * [Pixel] * [-] = [Pixel]
-                alpha_vec_joint = alpha_z_score * volumes_joint * weights_joint  
+                alpha_vec_joint = eff_alpha_stat * volumes_joint * weights_joint  
                 
                 c_warm_joint = jnp.zeros(K_NEIGHBORS * N_shapes, dtype=jnp.float32)  # [photons/Pixel^2]
                 
