@@ -872,19 +872,38 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                     A_joint, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm_joint, 20
                 )
                 c_ssn_k = c_ssn.reshape(K_NEIGHBORS, N_shapes)
+               
+                max_c_ssn = jnp.max(c_ssn_k, axis=1)
+                best_idx_ssn = jnp.argmax(c_ssn_k, axis=1)
                 
-                # Extract the surviving physical shapes
-                best_idx_k = jnp.argmax(c_ssn_k, axis=1) 
+                # Calculate pure spatial pixel overlap (NCC) for weak peaks
+                y_sub = (patch - patch_bg).flatten()
                 
-                # Mask out crosstalk neighbors that were killed by the L1 penalty.
+                # Spatial masking ensures neighbors don't hijack the NCC of the target peak
+                pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
+                closest_k = jnp.argmin(pixel_dists_k, axis=1)
+                pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
+                
+                A_k = A_all.transpose(1, 0, 2)
+                A_k_masked = A_k * pixel_masks[:, :, None]
+                y_sub_k = y_sub[:, None] * pixel_masks
+                
+                A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6))
+                ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
+                best_idx_ncc = jnp.argmax(ncc_k, axis=1) 
+                
+                # If SSN crushed the peak (max == 0), it's weak. Trust the raw NCC shape.
+                # If the peak survived SSN, it's strong. Trust the SSN's halo-rejecting shape.
+                best_idx_k = jnp.where(max_c_ssn > 1e-9, best_idx_ssn, best_idx_ncc)
+                
                 # We MUST keep the Target Peak (index 0) alive to measure weak high-q reflections!
                 is_target = jnp.arange(K_NEIGHBORS) == 0
-                surviving_mask = (jnp.max(c_ssn_k, axis=1) > 1e-9) | is_target
+                surviving_mask = (max_c_ssn > 1e-9) | is_target
                 
                 indices = jnp.arange(K_NEIGHBORS)
                 A_best = A_all[indices, :, best_idx_k].T # (P*P, K_NEIGHBORS)
                 A_best_masked = A_best * surviving_mask[None, :]
-                
+
                 # =====================================================================
                 # STAGE 2: UNCONSTRAINED OLS (Unbiased Measurement & Noise Preservation)
                 # =====================================================================
