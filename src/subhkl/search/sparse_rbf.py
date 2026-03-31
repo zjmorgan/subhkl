@@ -393,7 +393,23 @@ class SparseRBFPeakFinder:
         
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
         local_noise_floor = jnp.sqrt(local_bg_med)  # [photons^0.5 / Pixel^0.5]
+       
+        # alpha_z_score: [-]
+        # local_noise_floor (sqrt(B)): [photons^0.5 / Pixel^0.5]
         
+        if loss_code == 1:
+            # POISSON LOSS
+            # The NLL naturally scales with the background B [photons/Pixel].
+            # To make the final threshold scale with sqrt(B), we divide by sqrt(B) here.
+            # Units: [-] / [photons^0.5 / Pixel^0.5] = [Pixel^0.5 / photons^0.5]
+            eff_alpha_stat = alpha_z_score / local_noise_floor 
+        else:
+            # GAUSSIAN LOSS
+            # The OLS NLL is unscaled [-]. 
+            # To make the threshold scale with sqrt(B), we multiply by sqrt(B) directly.
+            # Units: [-] * [photons^0.5 / Pixel^0.5] = [photons^0.5 / Pixel^0.5]
+            eff_alpha_stat = alpha_z_score * local_noise_floor
+
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)  # [Pixel^0.5]
         yy, xx = jnp.indices((H, W))  # [Pixel^0.5]
         x_grid = jnp.array([yy, xx])  # [Pixel^0.5]
