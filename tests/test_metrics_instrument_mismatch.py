@@ -6,7 +6,7 @@ def test_mtz_exporter_sg_mismatch():
     Reproduces the bug where MTZExporter fails if the space group name
     is not recognized by gemmi during initialization.
     """
-    from subhkl.export import MTZExporter
+    from subhkl.io.export import MTZExporter
     import h5py
 
     indexed_h5 = "temp_dummy.h5"

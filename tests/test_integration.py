@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from subhkl.detector import Detector
+from subhkl.instrument.detector import Detector
 from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 

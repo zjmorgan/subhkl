@@ -1613,6 +1613,16 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-dependency"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c2/ea/84509533e0f6477960b8a9179d240d93c909c6543e4dd8209932026d7815/pytest_dependency-0.6.1.tar.gz", hash = "sha256:246c24d2a5fc743a942cec4408853640e56a05ba58d46e5b213a1d4b738a2464", size = 20837, upload-time = "2026-02-15T18:08:43.927Z" }
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -2094,12 +2104,13 @@ jax-rocm = [
     { name = "evosax" },
     { name = "jax", extra = ["rocm"] },
 ]
-lint = [
-    { name = "ruff" },
-]
-test = [
+
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pytest-dependency" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -2116,14 +2127,19 @@ requires-dist = [
     { name = "jax", extras = ["rocm"], marker = "extra == 'jax-rocm'" },
     { name = "matplotlib", specifier = ">=3.8.4" },
     { name = "opencv-python", specifier = ">=4.11.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.2,<8.1.0" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.1.0,<4.2.0" },
-    { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.2.0" },
     { name = "scikit-image", specifier = ">=0.23.2" },
     { name = "tdqm", specifier = ">=0.0.1" },
     { name = "typer", specifier = ">=0.12.3" },
 ]
-provides-extras = ["lint", "test", "jax", "jax-cuda12", "jax-cuda11", "jax-rocm"]
+provides-extras = ["jax", "jax-cuda12", "jax-cuda11", "jax-rocm"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0.2" },
+    { name = "pytest-cov", specifier = ">=4.1.0" },
+    { name = "pytest-dependency", specifier = ">=0.6.1" },
+    { name = "ruff", specifier = ">=0.2.0" },
+]
 
 [[package]]
 name = "tdqm"

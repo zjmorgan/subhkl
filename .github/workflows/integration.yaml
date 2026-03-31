@@ -36,15 +36,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies (NumPy backend)
         if: matrix.backend == 'numpy'
-        run: uv pip install -e ".[test]" --system
+        run: uv sync
       - name: Install dependencies (JAX backend)
         if: matrix.backend == 'jax'
-        run: uv pip install -e ".[test,jax]" --system
+        run: uv sync --extra jax
       - name: Verify backend
         run: |
-          python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
+          uv run python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
       - name: Run integration tests
-        run: pytest -v -m "integration" tests/test_mandi_mesolite.py::TestMandiMesoliteSingleRun
+        run: uv run pytest -v -m "integration" tests/test_mandi_mesolite.py::TestMandiMesoliteSingleRun
         env:
           MESOLITE_MAX_FILES: 1
       - name: Display test summary

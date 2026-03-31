@@ -183,7 +183,7 @@ def run_indexing_pipeline(input_h5, tmp_path, label):
         indexed_count = np.sum((h != 0))
         print(f"[{label}] Indexed peaks: {indexed_count} / {len(h)}")
 
-        from subhkl.metrics import compute_metrics
+        from subhkl.instrument.metrics import compute_metrics
 
         m = compute_metrics(str(indexed_h5))
         ang_err = m["median_ang_err"]

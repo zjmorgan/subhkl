@@ -4,13 +4,14 @@ import h5py
 import numpy as np
 import typer
 
-from subhkl.config.goniometer import (
+# NOTE(Vivek): deprecate and use Goniometer class to handler rotation calc
+from subhkl.instrument.goniometer import (
     calc_goniometer_rotation_matrix,
     get_rotation_data_from_nexus,
 )
-from subhkl.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
+from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
 from subhkl.integration import Peaks
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
 
 app = typer.Typer()
@@ -355,22 +356,8 @@ def finder(
 
     peaks.write_hdf5(
         output_filename=output_filename,
-        rotations=detector_peaks.R,
-        two_theta=detector_peaks.two_theta,
-        az_phi=detector_peaks.az_phi,
-        wavelength_mins=detector_peaks.wavelength_mins,
-        wavelength_maxes=detector_peaks.wavelength_maxes,
-        intensity=detector_peaks.intensity,
-        sigma=detector_peaks.sigma,
-        radii=detector_peaks.radii,
-        xyz=detector_peaks.xyz,  # Store XYZ
-        bank=detector_peaks.bank,
-        image_index=detector_peaks.image_index,
-        run_id=detector_peaks.run_id,
-        gonio_axes=detector_peaks.gonio_axes,
-        gonio_angles=detector_peaks.gonio_angles,
-        gonio_names=detector_peaks.gonio_names,
-        instrument_wavelength=[peaks.wavelength_min, peaks.wavelength_max],
+        detector_peaks=detector_peaks,
+        instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
     )
 
 
@@ -509,7 +496,7 @@ def indexer(
     # Logic to resolve SG
     sg_to_use = "P 1"
     if space_group:
-        from subhkl.spacegroup import get_space_group_object
+        from subhkl.core.spacegroup import get_space_group_object
 
         try:
             get_space_group_object(space_group)
@@ -795,7 +782,7 @@ def metrics(
     """
     CLI command to compute and display indexing quality metrics.
 
-    Calls compute_metrics from subhkl.metrics and formats output for display.
+    Calls compute_metrics from subhkl.instrument.metrics and formats output for display.
     """
     # Typer API might pass OptionInfo objects if called directly (e.g. in tests)
     if hasattr(found_peaks_file, "default"):
@@ -906,25 +893,25 @@ def peak_predictor(
     )
 
     print(
-        f"Predicting peaks for {len(peaks.ims)} images using solution from {indexed_hdf5_filename}"
+        f"Predicting peaks for {len(peaks.image.ims)} images using solution from {indexed_hdf5_filename}"
     )
 
     # 3. Calculate RUB Stack for Parallel Processing
     # We always start with the nominal geometry of the TARGET file (filename)
-    all_R = peaks.goniometer_rotation
+    all_R = peaks.goniometer.rotation
 
     # Then we apply refined parameters from the INDEXER file
     if offsets is not None:
         print(f"Applying refined goniometer offsets from indexer: {offsets}")
         # Re-calculate refined R stack for the TARGET images
         if (
-            peaks.goniometer_angles_raw is not None
-            and peaks.goniometer_axes_raw is not None
+            peaks.goniometer.angles_raw is not None
+            and peaks.goniometer.axes_raw is not None
         ):
-            angles_refined = peaks.goniometer_angles_raw + offsets[None, :]
+            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
             all_R = np.stack(
                 [
-                    calc_goniometer_rotation_matrix(peaks.goniometer_axes_raw, ang)
+                    calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
                     for ang in angles_refined
                 ]
             )
@@ -935,7 +922,7 @@ def peak_predictor(
     elif idx_R is not None:
         # Fallback: if the indexer has a stack that happens to match the image count,
         # we use it, but warn that this is less robust than offsets.
-        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.ims):
+        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.image.ims):
             print("Using R stack directly from indexer (matches image count).")
             all_R = idx_R
 
@@ -977,9 +964,9 @@ def peak_predictor(
         f["sample/c"] = c
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
-        sorted_keys = sorted(peaks.ims.keys())
+        sorted_keys = sorted(peaks.image.ims.keys())
         bank_ids = np.array(
-            [peaks.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
+            [peaks.image.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
         )
         f.create_dataset("bank_ids", data=bank_ids)
         f["sample/gamma"] = gamma
@@ -992,14 +979,14 @@ def peak_predictor(
         try:
             goniometer_angles_to_save = angles_refined
         except NameError:
-            goniometer_angles_to_save = peaks.goniometer_angles_raw
+            goniometer_angles_to_save = peaks.goniometer.angles_raw
 
         f["goniometer/angles"] = goniometer_angles_to_save
-        f["goniometer/axes"] = peaks.goniometer_axes_raw
-        if peaks.goniometer_names_raw:
+        f["goniometer/axes"] = peaks.goniometer.axes_raw
+        if peaks.goniometer.names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
-                "goniometer/names", data=peaks.goniometer_names_raw, dtype=dt
+                "goniometer/names", data=peaks.goniometer.names_raw, dtype=dt
             )
 
         f["sample/offset"] = sample_offset
@@ -1106,10 +1093,10 @@ def integrator(
     # Calculate RUB Stack from loaded parameters
     if all_R is None:
         print("Warning: Refined R stack not found in prediction file. Using nominal.")
-        all_R = peaks.goniometer_rotation
+        all_R = peaks.goniometer.rotation
 
     if angles_stack is None:
-        angles_stack = peaks.goniometer_angles_raw
+        angles_stack = peaks.goniometer.angles_raw
 
     UB = U @ B
     if all_R.ndim == 3:
@@ -1216,31 +1203,31 @@ def reduce(
         wavelength_max=wavelength_max,
     )
 
-    if not peaks_handler.ims:
+    if not peaks_handler.image.ims:
         print("Warning: No images found in file.")
         return
 
     # 2. Stack Data for Batch Processing
     # Ensure consistent ordering of banks
-    sorted_banks = sorted(peaks_handler.ims.keys())
+    sorted_banks = sorted(peaks_handler.image.ims.keys())
 
     # Stack images: (N_banks, H, W)
     # Note: Assumes all banks have the same shape, which is standard for one instrument.
-    image_stack = np.stack([peaks_handler.ims[b] for b in sorted_banks])
+    image_stack = np.stack([peaks_handler.image.ims[b] for b in sorted_banks])
 
     bank_ids = np.array(sorted_banks, dtype=np.int32)
     n_images = len(sorted_banks)
 
     # 3. Prepare Metadata
     # Repeat angles for each bank so they stay aligned after merging
-    if peaks_handler.goniometer_angles_raw is not None:
+    if peaks_handler.goniometer.angles_raw is not None:
         # shape (1, 3) -> (N_banks, 3)
-        angles_repeated = np.tile(peaks_handler.goniometer_angles_raw, (n_images, 1))
+        angles_repeated = np.tile(peaks_handler.goniometer.angles_raw, (n_images, 1))
     else:
         angles_repeated = np.zeros((n_images, 3))  # Fallback
 
-    if peaks_handler.goniometer_axes_raw is not None:
-        axes = np.array(peaks_handler.goniometer_axes_raw)
+    if peaks_handler.goniometer.axes_raw is not None:
+        axes = np.array(peaks_handler.goniometer.axes_raw)
     else:
         axes = np.array([0.0, 1.0, 0.0])  # Fallback
 
@@ -1257,17 +1244,17 @@ def reduce(
         # Metadata (Constant)
         f.create_dataset("goniometer/axes", data=axes)
 
-        if peaks_handler.goniometer_names_raw:
+        if peaks_handler.goniometer.names_raw:
             dt = h5py.string_dtype(encoding="utf-8")
             f.create_dataset(
                 "goniometer/names",
-                data=peaks_handler.goniometer_names_raw,
+                data=peaks_handler.goniometer.names_raw,
                 dtype=dt,
             )
 
         # Save Wavelength (Min/Max)
         # Using format compatible with downstream indexer
-        wl = [peaks_handler.wavelength_min, peaks_handler.wavelength_max]
+        wl = [peaks_handler.wavelength.min, peaks_handler.wavelength.max]
         f.create_dataset("instrument/wavelength", data=wl)
 
         # Save Instrument Name

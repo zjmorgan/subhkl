@@ -5,7 +5,7 @@ from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
 # Import JAX with fallback from utils (centralized)
-from subhkl.utils import (
+from subhkl.utils.shim import (
     HAS_JAX,
     jax,
     jit,

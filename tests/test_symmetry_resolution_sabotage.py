@@ -1,5 +1,5 @@
 import pytest
-from subhkl.spacegroup import is_systematically_absent, get_centering
+from subhkl.core.spacegroup import is_systematically_absent, get_centering
 
 
 def test_centering_mapping_vulnerability():

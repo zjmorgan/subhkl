@@ -40,13 +40,15 @@ def test_repro_multi_run_mapping_logic(tmp_path):
     peaks_handler = Peaks(master_h5, "MANDI")
 
     # Verify file_offsets were loaded correctly
-    assert peaks_handler.file_offsets is not None
-    assert np.array_equal(peaks_handler.file_offsets, [0, 2])
+    assert peaks_handler.image.file_offsets is not None
+    assert np.array_equal(peaks_handler.image.file_offsets, [0, 2])
 
     # 4. Simulate the loop in Peaks.integrate
     # For bank index 2 (which is the first bank of the SECOND file)
     bank_idx = 2
-    physical_bank = peaks_handler.bank_mapping.get(bank_idx, bank_idx)  # Should be 1
+    physical_bank = peaks_handler.image.bank_mapping.get(
+        bank_idx, bank_idx
+    )  # Should be 1
     run_id = peaks_handler.get_run_id(bank_idx)  # Should be 1
 
     assert physical_bank == 1
@@ -67,8 +69,8 @@ def test_repro_multi_run_mapping_logic(tmp_path):
                 match_idxs.append(i)
 
         # 2. Match via source files
-        if not match_idxs and peaks_handler.image_files_raw:
-            for src_file in peaks_handler.image_files_raw:
+        if not match_idxs and peaks_handler.image.raw_files:
+            for src_file in peaks_handler.image.raw_files:
                 src_name = os.path.basename(src_file)
                 for i, fname_bytes in enumerate(files_db):
                     fname_str = fname_bytes.decode("utf-8")

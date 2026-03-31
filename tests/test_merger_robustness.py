@@ -1,6 +1,6 @@
 import h5py
 import numpy as np
-from subhkl.export import BaseConcatenateMerger
+from subhkl.io.export import BaseConcatenateMerger
 
 
 def test_merger_run_offset_increment(tmp_path):

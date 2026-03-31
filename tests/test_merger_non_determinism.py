@@ -1,6 +1,6 @@
 import numpy as np
 import h5py
-from subhkl.export import FinderConcatenateMerger
+from subhkl.io.export import FinderConcatenateMerger
 
 
 def test_merger_input_order_dependency(tmp_path):

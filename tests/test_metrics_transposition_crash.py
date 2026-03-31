@@ -7,7 +7,7 @@ def test_generate_reflections_none_sg_crash():
     The code defaults to 'P 1' in the signature, but if passed explicitly
     as None, it will crash.
     """
-    from subhkl.utils import generate_reflections
+    from subhkl.core.crystallography import generate_reflections
 
     # Unit cell
     a, b, c = 10, 10, 10

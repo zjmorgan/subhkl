@@ -15,20 +15,7 @@ The mesolite test dataset (72 files, ~493 MB) is stored on Zenodo and automatica
 The data will be automatically downloaded on first test run. If you need to manually download all files:
 
 ```bash
-# Download all 72 files from Zenodo (in parallel)
-ZENODO_RECORD_ID="18475332"
-ZENODO_BASE_URL="https://zenodo.org/records/${ZENODO_RECORD_ID}/files"
-DATA_DIR="tests/data/MANDI/mesolite"
-
-mkdir -p "${DATA_DIR}"
-
-# Download in parallel for speed
-for i in {11613..11684}; do
-    filename="MANDI_${i}.nxs.h5"
-    wget "${ZENODO_BASE_URL}/${filename}" -O "${DATA_DIR}/${filename}" &
-done
-
-wait  # Wait for all downloads to complete
+uvx zenodo_get 18475332 -o tests/data/MANDI/mesolite
 ```
 
 **Limit files for faster testing:**

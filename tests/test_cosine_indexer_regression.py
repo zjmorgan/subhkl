@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from subhkl.io.parser import finder, indexer
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 
 MESOLITE_FILE = "MANDI_11613.nxs.h5"
 INSTRUMENT = "MANDI"

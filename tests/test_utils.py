@@ -1,6 +1,6 @@
 import pytest
 
-from subhkl.utils import scale_coordinates
+from subhkl.instrument.physics import scale_coordinates
 
 
 def test_scale_coordinates():

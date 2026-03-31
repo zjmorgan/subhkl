@@ -1,7 +1,7 @@
 import numpy as np
 import h5py
 from subhkl.io.parser import indexer
-from subhkl.metrics import compute_metrics
+from subhkl.instrument.metrics import compute_metrics
 
 
 def test_missing_xyz_rotation_regression(tmp_path):

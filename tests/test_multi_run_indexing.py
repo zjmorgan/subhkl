@@ -136,7 +136,7 @@ def test_clipping_logic_direct():
     idx_l = np.clip(l + r, 0, 2 * r).astype(np.int32)
     in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
     is_allowed = np.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
-    from subhkl.spacegroup import is_systematically_absent
+    from subhkl.core.spacegroup import is_systematically_absent
 
     expected_absent = is_systematically_absent(h[:2], k[:2], l[:2], "P 1 21 1")
     assert bool(is_allowed[0]) == (not expected_absent[0])
@@ -183,8 +183,8 @@ def test_sample_offset_refinement_multirun():
 
 
 def test_predictor_multirun_sample_rotation():
-    from subhkl.detector import Detector
-    from subhkl.utils import predict_reflections_on_panel
+    from subhkl.instrument.detector import Detector
+    from subhkl.instrument.physics import predict_reflections_on_panel
 
     det_config = {
         "m": 256,
