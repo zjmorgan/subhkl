@@ -851,46 +851,60 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes)
                 
-                # --- 1. Enforce 1-Shape-Per-Peak (Prevents composite halo traps) ---
-                y_sub = (patch - patch_bg).flatten()
+                # =====================================================================
+                # STAGE 1: RECTANGULAR SSN (Support Discovery & Halo Suppression)
+                # =====================================================================
+                A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)
                 
-                # Spatial masking ensures neighbors don't hijack the NCC of the target peak
-                pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2
-                closest_k = jnp.argmin(pixel_dists_k, axis=1)
-                pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
+                # The Besov prior dictates the SSN, preventing the halo trap!
+                sigmas_joint = jnp.tile(self.candidate_sigmas, K_NEIGHBORS)
+                weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma
+                alpha_vec_joint = eff_alpha_stat * weights_joint
                 
-                A_k = A_all.transpose(1, 0, 2) # (P*P, K_NEIGHBORS, N_shapes)
-                A_k_masked = A_k * pixel_masks[:, :, None]
-                y_sub_k = y_sub[:, None] * pixel_masks
+                c_warm_joint = jnp.zeros(K_NEIGHBORS * N_shapes, dtype=jnp.float32)
                 
-                A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6))
-                ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms
-                best_idx_k = jnp.argmax(ncc_k, axis=1) 
+                c_ssn = self._solve_ssn_unified(
+                    A_joint, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm_joint, 20
+                )
+                c_ssn_k = c_ssn.reshape(K_NEIGHBORS, N_shapes)
+                
+                # Extract the surviving physical shapes
+                best_idx_k = jnp.argmax(c_ssn_k, axis=1) 
+                
+                # Mask out crosstalk neighbors that were killed by the L1 penalty.
+                # We MUST keep the Target Peak (index 0) alive to measure weak high-q reflections!
+                is_target = jnp.arange(K_NEIGHBORS) == 0
+                surviving_mask = (jnp.max(c_ssn_k, axis=1) > 1e-9) | is_target
                 
                 indices = jnp.arange(K_NEIGHBORS)
-                A_best = A_k[:, indices, best_idx_k]       
-                best_sigmas = self.candidate_sigmas[best_idx_k]  
+                A_best = A_all[indices, :, best_idx_k].T # (P*P, K_NEIGHBORS)
+                A_best_masked = A_best * surviving_mask[None, :]
                 
-                # --- 2. Execute SSN with Target Forcing ---
-                weights_best = (best_sigmas / self.ref_sigma) ** self.gamma
-                alpha_vec_best = eff_alpha_stat * weights_best
-                c_warm_best = jnp.zeros(K_NEIGHBORS, dtype=jnp.float32)
+                # =====================================================================
+                # STAGE 2: UNCONSTRAINED OLS (Unbiased Measurement & Noise Preservation)
+                # =====================================================================
+                A_tilde = jnp.hstack([A_best_masked, jnp.ones((P*P, 1))])
                 
-                c_final_joint = self._solve_ssn_unified(
-                    A_best, patch.flatten(), patch_bg.flatten(), alpha_vec_best, loss_code, c_warm_best, 20, force_target=True
-                )
+                # We strictly avoid _solve_ssn_unified here to bypass Non-Negativity (c >= 0).
+                # Weak high-q peaks MUST be allowed to fluctuate negative to preserve Gaussian stats!
+                w = 1.0 / jnp.maximum(patch.flatten(), 1.0)
                 
-                c_final_target = c_final_joint[0]
-                best_sig_target = best_sigmas[0]
+                I_mat = A_tilde.T @ (w[:, None] * A_tilde)
+                C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))
+                
+                y_sub = (patch - patch_bg).flatten()
+                rhs = A_tilde.T @ (w * y_sub)
+                
+                # Unconstrained Direct Inverse 
+                c_ols = C_mat @ rhs
+                
+                c_final_target = c_ols[0]
+                best_sig_target = self.candidate_sigmas[best_idx_k[0]]
                 
                 volumes = jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
                 intensity = c_final_target * volumes
                 
-                # --- 3. Extract Fisher Information Variance (sigI) ---
-                A_tilde = jnp.hstack([A_best, jnp.ones((P*P, 1))])
-                w = 1.0 / jnp.maximum(patch.flatten(), 1.0)
-                I_mat = A_tilde.T @ (w[:, None] * A_tilde)
-                C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))
+                # Fisher Information (Variance/Uncertainty)
                 var_c0 = C_mat[0, 0]
                 sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0))
                 
@@ -899,7 +913,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                     local_rs[0], 
                     local_cs[0], 
                     best_sig_target, 
-                    sigI
+                    sigI # NEVER clamp sigI to zero! Downstream scaling needs the variance.
                 ])
                 
             return vmap(process_patch)(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
@@ -992,7 +1006,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
-        
+       
         # --- 1. HARMONIC DEDUPLICATION (EXACT CRYSTALLOGRAPHIC) ---
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
