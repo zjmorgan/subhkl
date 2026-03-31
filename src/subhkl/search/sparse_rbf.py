@@ -213,8 +213,7 @@ class SparseRBFPeakFinder:
         ========================================================================================
         Objective: Minimize J(c) = f(c) + h(c)
                    where f(c) is the smooth Negative Log-Likelihood (NLL)
-                   and   h(c) is the non-smooth volume penalty: λ ||c||_1 
-                   subject to c >= 0.
+                   and   h(c) is the non-smooth volume penalty subject to c >= 0.
         
         1. The Proximal Gradient Step (Forward-Backward Splitting)
         ----------------------------------------------------------
@@ -224,26 +223,21 @@ class SparseRBFPeakFinder:
         To handle the non-smooth penalty h(c), we apply the Proximal Operator:
             c_{k+1} = prox_{τh}(q) = argmin_x [ h(x) + (1/2τ) ||x - q||_2^2 ]
             
-        For h(x) = λ ||x||_1 and x >= 0, the analytical solution is the Non-Negative Soft Threshold:
-            c_{k+1} = max(0, q - τλ)
+        For a non-negative soft threshold, the analytical solution is:
+            c_{k+1} = max(0, q - Threshold)
             
-        [Mapping to Code]: 
-            τλ  => `tau_alpha` (The volume penalty threshold)
-            q   => `q_test` (The unconstrained coefficient estimate)
-            c   => `c_test = jnp.maximum(0.0, q_test - tau_alpha)`
-            
-        2. The Step Size / Physical Metric (τ)
+        2. The Fisher Information Threshold (The Dimensional Magic)
         ----------------------------------------------------------
-        In dimensional analysis, the coefficient c is a photon density [photons / Pixel^2].
-        The gradient ∇f(c) has units of [Pixel]. 
-        They cannot be added directly. τ acts as the physical metric to bridge them.
+        How do we define the Threshold? In dimensional analysis, the coefficient c is a 
+        photon density [photons / Pixel^2]. 
         
-        By defining τ based on the Lipschitz constant of the gradient (the max of the Hessian),
-        τ takes on the exact units required: [photons / Pixel^3].
+        The Hessian (∇²f(c)) represents the Fisher Information Matrix. Its inverse (τ) 
+        is the exact statistical variance of the coefficient (Cramer-Rao bound)!
+        Therefore, sqrt(τ) is the true standard deviation of the peak density.
         
-        When applied to the threshold: τ [photons/Pixel^3] * λ [Pixel] = [photons/Pixel^2].
-        This perfectly matches the units of q and c, making the proximal threshold dimensionally 
-        flawless and immune to arbitrary detector scaling!
+        By setting the threshold to: Z_score * Besov_Weight * sqrt(τ)
+        The threshold dimensionally and mathematically maps perfectly into [photons / Pixel^2],
+        making the solver inherently immune to arbitrary background or detector scaling.
             
         3. The Semi-Smooth Newton (SSN) Acceleration
         ----------------------------------------------------------
@@ -256,8 +250,8 @@ class SparseRBFPeakFinder:
         Generalized Jacobian (Clarke Subdifferential).
         
         The Active Set matrix D indicates which variables survived the proximal threshold:
-            D_ii = 1 if q_i > τλ  (Active Peak)
-            D_ii = 0 if q_i <= τλ (Crushed Halo/Noise)
+            D_ii = 1 if q_i > Threshold  (Active Peak)
+            D_ii = 0 if q_i <= Threshold (Crushed Halo/Noise)
             
         The generalized Hessian (DG) for the Newton step incorporates this active set:
             DG = (1/τ)(I - D) + H @ D    where H is the NLL Hessian (∇²f(c))
@@ -266,30 +260,40 @@ class SparseRBFPeakFinder:
         - Active peaks (D=1) get solved via the true 2nd-order Hessian (H).
         - Crushed peaks (D=0) get clamped via the metric (1/τ) and forced to 0.
         ========================================================================================
+        
+        Input Units:
+            A: [Pixel]
+            y, bg_flat: [photons / Pixel]
+            alpha_vec: [-] (Z-score * Besov shape weight)
+            c_warm: [photons / Pixel^2]
         """
         N_peaks = A.shape[1]
         N_params = N_peaks
-        q_init = c_warm.astype(jnp.float32)  # [photons/Pixel^2]
+        q_init = c_warm.astype(jnp.float32)  # [photons / Pixel^2]
 
-        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3).astype(jnp.float32)  # [photons/Pixel]
-        gamma_scale = jnp.where(loss_type == 1, bg_med, jnp.float32(1.0))  
-        scaled_alpha = gamma_scale * alpha_vec  # [Pixel]
+        bg_med = jnp.maximum(jnp.median(bg_flat), 1e-3).astype(jnp.float32)  # [photons / Pixel]
 
         def get_loss_grad_hess(c):
             u = A @ c + bg_flat  # [Pixel] * [photons/Pixel^2] + [photons/Pixel] = [photons/Pixel]
-            if loss_type == 1:
-                u_safe = jnp.maximum(u, 1e-6)  # [photons/Pixel]
-                nll = gamma_scale * jnp.sum(u_safe - y * jnp.log(u_safe))  
-                grad = gamma_scale * (A.T @ (1.0 - y / u_safe))  # [Pixel]
-                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)  # [Pixel / photons]
-                hess = gamma_scale * (A.T @ (W_diag[:, None] * A))  # [Pixel^3 / photons]
-            else:
-                nll = 0.5 * jnp.sum((u - y)**2)   
-                grad = A.T @ (u - y)  # [Pixel]
-                hess = A.T @ A  # [Pixel^2]
             
-            reg = jnp.sum(scaled_alpha * c)  
-            return nll + reg, grad, hess
+            if loss_type == 1:
+                # POISSON Loss
+                u_safe = jnp.maximum(u, 1e-6)  # [photons / Pixel]
+                nll = jnp.sum(u_safe - y * jnp.log(u_safe))  # [photons / Pixel]
+                
+                grad = A.T @ (1.0 - y / u_safe)  # [Pixel] * [-] = [Pixel]
+                
+                W_diag = 1.0 / jnp.maximum(u_safe, 1e-3)  # [Pixel / photons]
+                hess = A.T @ (W_diag[:, None] * A)  # [Pixel] * [Pixel/photons] * [Pixel] = [Pixel^3 / photons]
+            else:
+                # GAUSSIAN (OLS) Loss
+                nll = 0.5 * jnp.sum((u - y)**2)  # [photons^2 / Pixel^2]
+                
+                grad = A.T @ (u - y)  # [Pixel] * [photons/Pixel] = [photons]
+                
+                hess = A.T @ A  # [Pixel] * [Pixel] = [Pixel^2]
+                
+            return nll, grad, hess
 
         def cond_fn(state):
             step, _, _, dq_norm = state
@@ -297,27 +301,34 @@ class SparseRBFPeakFinder:
 
         def body_fn(state):
             step, q, c, _ = state
-            obj_val, grad, hess = get_loss_grad_hess(c)
+            nll, grad, hess = get_loss_grad_hess(c)
 
-            # 1. Compute the physical metric tau using the Lipschitz constant
-            # hess is [Pixel^2], so L is [Pixel^2] and tau is [Pixel^-2]
+            # 1. Compute physical metric tau (Inverse of Max Fisher Information)
             L = jnp.max(jnp.diag(hess)) + 1e-4
-            tau = 1.0 / L  # [Pixel^-2]
+            tau = 1.0 / L  # Poisson: [photons / Pixel^3], Gaussian: [Pixel^-2]
 
-            # 2. Dimensionally perfect residual: [photons/Pixel^2] / [Pixel^-2] + [photons] = [photons]
+            # 2. Extract Exact Statistical Variance (Cramer-Rao Lower Bound)
+            # Both paths mathematically converge to var_c = [photons / Pixel^3]
+            var_c = jnp.where(loss_type == 1, tau, bg_med * tau)
+            
+            # 3. Compute Dimensionally Pure Statistical Threshold 
+            # tau_alpha = [-] * sqrt([photons / Pixel^3]) -> [photons / Pixel^2] (Statistical equivalent)
+            tau_alpha = alpha_vec * jnp.sqrt(var_c)
+
+            # 4. Proximal Residual Mapping
+            # Poisson: [photons/Pixel^2] / [photons/Pixel^3] + [Pixel] = [Pixel] -> mapped via metric
+            # Gaussian: [photons/Pixel^2] / [Pixel^-2] + [photons] = [photons]
             Gq = (q - c) / tau + grad  
 
-            # 3. Apply tau metric to the volume threshold: [Pixel^-2] * [photons * Pixel^0.5] = [photons / Pixel^1.5]
-            tau_alpha = tau * scaled_alpha
-
+            # 5. Active Set Discovery (Shape/Halo Trap)
             D = (q > tau_alpha).astype(jnp.float32)  # [-]
             DP_mat = jnp.diag(D)  # [-]
             I = jnp.eye(N_params, dtype=jnp.float32)  # [-]
 
-            # 4. Generalized Hessian: [-] / [Pixel^-2] + [Pixel^2] = [Pixel^2]
+            # 6. Clarke Subdifferential Generalized Hessian
             DG = (I - DP_mat) / tau + hess @ DP_mat + 1e-4 * I  
-
-            # dq = [photons] / [Pixel^2] = [photons / Pixel^2] (Perfect coefficient update!)
+            
+            # dq mathematically evaluates perfectly to [photons / Pixel^2] in both pathways
             dq = jnp.linalg.solve(DG, -Gq).astype(jnp.float32)
 
             def bt_cond(bt_state):
@@ -329,17 +340,23 @@ class SparseRBFPeakFinder:
                 bt_i, step_size, _, _, _, j_curr = bt_state
                 step_size = jnp.float32(step_size * 0.5)  # [-]
                 
-                q_test = (q + step_size * dq).astype(jnp.float32)  # [photons/Pixel^2]
-                c_test = jnp.maximum(0.0, q_test - tau_alpha).astype(jnp.float32)  # [photons/Pixel^2]
+                q_test = (q + step_size * dq).astype(jnp.float32)  # [photons / Pixel^2]
+                c_test = jnp.maximum(0.0, q_test - tau_alpha).astype(jnp.float32)  # [photons / Pixel^2]
                 
                 j_test, _, _ = get_loss_grad_hess(c_test)
-                return (bt_i + 1, step_size, q_test, c_test, j_test, j_curr)
+                
+                # Re-add the exact threshold penalty to the objective space to check descent
+                reg_penalty = jnp.sum((tau_alpha / tau) * c_test)
+                return (bt_i + 1, step_size, q_test, c_test, j_test + reg_penalty, j_curr)
 
             q_test = (q + dq).astype(jnp.float32)
             c_test = jnp.maximum(0.0, q_test - tau_alpha).astype(jnp.float32)
             j_test, _, _ = get_loss_grad_hess(c_test)
+            
+            reg_penalty = jnp.sum((tau_alpha / tau) * c_test)
+            obj_val = nll + jnp.sum((tau_alpha / tau) * c)
 
-            bt_init = (0, jnp.float32(1.0), q_test, c_test, j_test, obj_val)
+            bt_init = (0, jnp.float32(1.0), q_test, c_test, j_test + reg_penalty, obj_val)
             bt_final = lax.while_loop(bt_cond, bt_body, bt_init)
             _, _, q_final, c_final, _, _ = bt_final
 
@@ -349,7 +366,7 @@ class SparseRBFPeakFinder:
         final_state = lax.while_loop(cond_fn, body_fn, init_state)
         _, _, c_l1, _ = final_state
 
-        # DEBIASING PHASE (If applicable for early exits/target forcing)
+        # DEBIASING PHASE
         active_mask = c_l1 > 1e-5  # [-]
 
         if force_target:
@@ -365,29 +382,28 @@ class SparseRBFPeakFinder:
             _, grad, hess = get_loss_grad_hess(c)
 
             H_diag = jnp.diag(hess)
-            eta = 1.0 / jnp.maximum(H_diag, 1e-6)  # [photons / Pixel^3]
+            eta = 1.0 / jnp.maximum(H_diag, 1e-6)  # Acts exactly as tau
 
             I = jnp.eye(N_params, dtype=jnp.float32)
             D_mat = jnp.diag(active_mask.astype(jnp.float32))
 
-            # eta * grad -> [photons / Pixel^3] * [Pixel] = [photons / Pixel^2]
-            F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)  # [photons/Pixel^2]
-            DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I  # [-]
+            F_c = (1.0 - active_mask) * c + active_mask * (eta * grad)  # [photons / Pixel^2]
+            DG = (I - D_mat) + (eta[:, None] * hess) @ D_mat + 1e-4 * I  
 
-            dc = jnp.linalg.solve(DG, -F_c).astype(jnp.float32)  # [photons/Pixel^2]
+            dc = jnp.linalg.solve(DG, -F_c).astype(jnp.float32)  # [photons / Pixel^2]
 
             tau_debias = jnp.where(loss_type == 1, jnp.float32(0.8), jnp.float32(1.0))  # [-]
             
-            c_new_raw = c + tau_debias * dc * active_mask  # [photons/Pixel^2]
-            c_new = jnp.maximum(0.0, c_new_raw) * active_mask  # [photons/Pixel^2]
+            c_new_raw = c + tau_debias * dc * active_mask  # [photons / Pixel^2]
+            c_new = jnp.maximum(0.0, c_new_raw) * active_mask  # [photons / Pixel^2]
 
-            actual_step = c_new - c  # [photons/Pixel^2]
+            actual_step = c_new - c  # [photons / Pixel^2]
             return (step + 1, c_new.astype(jnp.float32), jnp.linalg.norm(actual_step).astype(jnp.float32))
 
         debias_state = lax.while_loop(debias_cond, debias_body, (0, c_l1.astype(jnp.float32), jnp.float32(1e9)))
         _, c_final, _ = debias_state
 
-        return c_final.astype(jnp.float32)  # [photons/Pixel^2]
+        return c_final.astype(jnp.float32)  # [photons / Pixel^2]
 
     @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code', 'do_merge'])
     def _solve_dense(self, patch_stat, patch_bg, alpha_z_score, H, W, max_peaks_local, loss_code, do_merge):
@@ -395,22 +411,6 @@ class SparseRBFPeakFinder:
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
         local_noise_floor = jnp.sqrt(local_bg_med)  # [photons^0.5 / Pixel^0.5]
        
-        # alpha_z_score: [-]
-        # local_noise_floor (sqrt(B)): [photons^0.5 / Pixel^0.5]
-        
-        if loss_code == 1:
-            # POISSON LOSS
-            # The NLL naturally scales with the background B [photons/Pixel].
-            # To make the final threshold scale with sqrt(B), we divide by sqrt(B) here.
-            # Units: [-] / [photons^0.5 / Pixel^0.5] = [Pixel^0.5 / photons^0.5]
-            eff_alpha_stat = alpha_z_score / local_noise_floor 
-        else:
-            # GAUSSIAN LOSS
-            # The OLS NLL is unscaled [-]. 
-            # To make the threshold scale with sqrt(B), we multiply by sqrt(B) directly.
-            # Units: [-] * [photons^0.5 / Pixel^0.5] = [photons^0.5 / Pixel^0.5]
-            eff_alpha_stat = alpha_z_score * local_noise_floor
-
         bounds = (float(H), float(W), self.min_sigma, self.max_sigma)  # [Pixel^0.5]
         yy, xx = jnp.indices((H, W))  # [Pixel^0.5]
         x_grid = jnp.array([yy, xx])  # [Pixel^0.5]
@@ -477,11 +477,10 @@ class SparseRBFPeakFinder:
                 scale_score = dual_var[r_valid, c_valid] / jnp.sqrt(kernel_sq_norm)  # [photons / Pixel]
 
                 # Exact dimensional recovery of volumetric density:
-                c_matched = dual_var[r_valid, c_valid] / kernel_sq_norm  # [photons * Pixel / Pixel^2]
+                c_matched = dual_var[r_valid, c_valid] / kernel_sq_norm  # [photons / Pixel^2]
                 c_init = jnp.maximum(c_matched, 0.0)  # [photons/Pixel^2]
 
-                # Return true matched-filter photon scale score for accurate SNR thresholding
-                return dual_var[r_valid, c_valid], jnp.array([c_init, r_idx, c_idx, s])
+                return scale_score, jnp.array([c_init, r_idx, c_idx, s])
 
             vals, candidates = vmap(check_sigma)(self.candidate_sigmas)
             best_idx = jnp.argmax(vals)
@@ -517,7 +516,7 @@ class SparseRBFPeakFinder:
 
                 volumes = (jnp.pi / 2.0) * (sigma**2)  # [Pixel]
                 weights = (sigma / self.ref_sigma) ** self.gamma  # [-]
-                alpha_vec_stat = eff_alpha_stat * volumes * weights  # [Pixel]
+                alpha_vec_stat = alpha_z_score * weights  # [Pixel]
                 
                 c_phys_masked = c_init * a_mask  # [photons/Pixel^2]
                 
@@ -570,7 +569,7 @@ class SparseRBFPeakFinder:
            
             volumes_aug = (jnp.pi / 2.0) * (sigma_aug**2)  # [Pixel]
             weights_aug = (sigma_aug / self.ref_sigma) ** self.gamma  # [-]
-            alpha_vec_stat_aug = eff_alpha_stat * volumes_aug * weights_aug  # [Pixel]
+            alpha_vec_stat_aug = alpha_z_score * weights_aug  # [Pixel]
 
             c_sparse_stat_aug = self._solve_ssn_unified(A_aug_masked, patch_stat.flatten(), patch_bg.flatten(), alpha_vec_stat_aug, loss_code, c_warm_raw)  # [photons/Pixel^2]
             
@@ -962,6 +961,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
                 bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
+                noise_floor = jnp.sqrt(bg_med)  # [photons^0.5 / Pixel^0.5]
                 
                 dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2  # [Pixel]
                 frame_penalty = jnp.where(all_fs_jnp == f_global, 0.0, 1e9)  # [-]
@@ -1004,8 +1004,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 volumes_joint = (jnp.pi / 2.0) * (sigmas_joint**2)  # [Pixel]
                 weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
                 
-                # alpha_vec_joint = [-] * [Pixel] * [-] = [Pixel]
-                alpha_vec_joint = eff_alpha_stat * volumes_joint * weights_joint  
+                alpha_vec_joint = alpha_z_score * weights_joint  
                 
                 c_warm_joint = jnp.zeros(K_NEIGHBORS * N_shapes, dtype=jnp.float32)  # [photons/Pixel^2]
                 
@@ -1019,15 +1018,20 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 
                 # Fallback to NCC shape if solver crushed it
                 best_idx_k = jnp.where(max_c_ssn > 1e-9, best_idx_ssn, best_idx_ncc)
-                
+
                 is_target = jnp.arange(K_NEIGHBORS) == 0
                 surviving_mask = (max_c_ssn > 1e-9) | is_target
-                
+
+                # --- THE BUG FIX ---
+                # A_k is safely formatted as (P*P, K_NEIGHBORS, N_shapes)
                 indices = jnp.arange(K_NEIGHBORS)
-                A_best = A_all[indices, :, best_idx_k].T  # [Pixel]
+
+                # Extract the best footprint for each neighbor safely along the last axis
+                A_best = A_k[:, indices, best_idx_k]  # Shape: (P*P, K_NEIGHBORS)
+
                 best_sigmas = self.candidate_sigmas[best_idx_k]  # [Pixel^0.5]
                 A_best_masked = A_best * surviving_mask[None, :]  # [Pixel]
-                
+
                 # =====================================================================
                 # STAGE 2: UNCONSTRAINED OLS (Unbiased Measurement & Noise Preservation)
                 # =====================================================================
