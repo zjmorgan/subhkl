@@ -895,7 +895,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     
     Units:
         alpha: [-] (Z-score threshold)
-        min_sigma / max_sigma: [Pixel^0.5]
+        min_sigma / max_sigma / nominal_sigma: [Pixel^0.5]
         gamma: [-]
         Returns integrations containing sigI: [photons^0.5 / Pixel^0.5]
     """
@@ -906,12 +906,14 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  gamma=2.0,
                  loss='poisson',
                  border_width=0,
-                 num_sigmas=32):
+                 num_sigmas=32,
+                 nominal_sigma=1.5):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
             loss=loss, border_width=border_width, num_sigmas=num_sigmas,
             show_steps=False
         )
+        self.nominal_sigma = nominal_sigma
 
     def integrate_reflections(self, images_batch, frames, rs, cs):
         """
@@ -1054,14 +1056,32 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_ssn_k = c_ssn.reshape(K_NEIGHBORS, N_shapes)  # [photons/Pixel^2]
                 max_c_ssn = jnp.max(c_ssn_k, axis=1)  # [photons/Pixel^2]
                 best_idx_ssn = jnp.argmax(c_ssn_k, axis=1)
-                
-                # Fallback to NCC shape if solver crushed it
-                best_idx_k = jnp.where(max_c_ssn > 1e-9, best_idx_ssn, best_idx_ncc)
+
+                # For peaks that cannot be integrated, we must fallback on a
+                # "empty" result that is still informative for downstream processing
+                # i.e. a typical peak with ~zero intensity but typical shape and variance
+
+                # statistical shape fallback for crushed peak
+                surviving_mask_strict = max_c_ssn > 1e-9
+                num_survivors = jnp.sum(surviving_mask_strict)
+
+                # fallback to nominal peak width
+                nominal_idx = jnp.argmin(jnp.abs(self.candidate_sigmas - self.nominal_sigma))
+
+                # local consensus fallback (average shape of surviving neighbors)
+                sum_survivor_indices = jnp.sum(best_idx_ssn * surviving_mask_strict)
+                local_fallback_idx = jnp.where(
+                    num_survivors > 0,
+                    jnp.int32(jnp.round(sum_survivor_indices / jnp.maximum(num_survivors, 1))),
+                    nominal_idx
+                )
+
+                # apply the fallback safely
+                best_idx_k = jnp.where(surviving_mask_strict, best_idx_ssn, local_fallback_idx)
 
                 is_target = jnp.arange(K_NEIGHBORS) == 0
-                surviving_mask = (max_c_ssn > 1e-9) | is_target
+                surviving_mask = surviving_mask_strict | is_target
 
-                # --- THE BUG FIX ---
                 # A_k is safely formatted as (P*P, K_NEIGHBORS, N_shapes)
                 indices = jnp.arange(K_NEIGHBORS)
 
