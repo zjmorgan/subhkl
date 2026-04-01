@@ -1384,8 +1384,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             max_workers = os.cpu_count()
 
         max_workers = min(max_workers, len(plot_tasks))
-        
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+
+        import multiprocessing
+        ctx = multiprocessing.get_context("spawn")
+        with concurrent.futures.ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             # Wrap with tqdm to see the parallel rendering progress
             list(tqdm(
                 executor.map(_render_and_save_rbf_plot, plot_tasks), 
