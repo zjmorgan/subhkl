@@ -907,7 +907,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  loss='poisson',
                  border_width=0,
                  num_sigmas=32,
-                 nominal_sigma=1.5):
+                 nominal_sigma=1.0):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
             loss=loss, border_width=border_width, num_sigmas=num_sigmas,
@@ -1234,8 +1234,8 @@ def _render_and_save_rbf_plot(args):
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            border_width: int = 0, create_visualizations: bool = False,
-                            max_workers: int = None):
+                            nominal_sigma: float = 1.0, border_width: int = 0,
+                            create_visualizations: bool = False, max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
