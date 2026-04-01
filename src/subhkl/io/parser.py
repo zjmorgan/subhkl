@@ -1313,6 +1313,7 @@ def rbf_integrator(
     alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
     gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
     sigmas: str = typer.Option("1.0,2.0,5.0", "--sigmas", help="Comma-separated RBF sigma widths (pixels)"),
+    nominal_sigma: float = typer.Option(1.0, help="The standard deviation of a typical peak, used as a fill-in for weak reflections"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
@@ -1378,6 +1379,7 @@ def rbf_integrator(
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
         border_width=border_width,
+        nominal_sigma=nominal_sigma,
         create_visualizations=create_visualizations,
         max_workers=max_workers,
     )
