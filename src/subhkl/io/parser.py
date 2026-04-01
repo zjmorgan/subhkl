@@ -1317,6 +1317,7 @@ def rbf_integrator(
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
     create_visualizations: bool = False,
+    max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
 ):
     """
     Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
@@ -1377,7 +1378,8 @@ def rbf_integrator(
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
         border_width=border_width,
-        create_visualizations=create_visualizations
+        create_visualizations=create_visualizations,
+        max_workers=max_workers,
     )
 
     print(f"Saving RBF integrated peaks to {output_filename}")
