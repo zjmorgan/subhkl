@@ -1169,7 +1169,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
         
-        # --- 1. HARMONIC DEDUPLICATION (EXACT CRYSTALLOGRAPHIC) ---
+        # --- 1. EXACT CRYSTALLOGRAPHIC HARMONIC DEDUPLICATION ---
+        # Because we are already iterating inside a specific `img_key` (which uniquely
+        # defines the run and bank), any peaks with the same fundamental HKL are guaranteed
+        # to be quasi-Laue harmonics on the exact same reciprocal ray.
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
@@ -1180,12 +1183,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
 
-            # Reintroduce loc_key to protect spatially-separated harmonics from being deleted!
-            loc_key = (int(np.round(i_arr[idx]/5.0)), int(np.round(j_arr[idx]/5.0)))  # [Pixel^0.5 / 5]
-            unique_key = (fund_hkl, loc_key)
-
-            if unique_key not in unique_peaks or hkl_sq[idx] < unique_peaks[unique_key]['hkl_sq']:
-                unique_peaks[unique_key] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+            # Keep the reflection with the lowest h^2 + k^2 + l^2 on this ray
+            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
+                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         actual_peaks_count = len(keep_indices)
