@@ -973,6 +973,45 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 local_rs = nbr_rs - r_start  # [Pixel^0.5]
                 local_cs = nbr_cs - c_start  # [Pixel^0.5]
                 
+                # =====================================================================
+                # SUBPIXEL RELAXATION (Log-Parabolic Target Snapping)
+                # =====================================================================
+
+                # 1. Quick smoothing to stabilize the log-parabola against Poisson noise
+                y_sub_raw = patch - patch_bg
+                nominal_sig_sq2 = self.ref_sigma * jnp.sqrt(2.0) + 1e-6
+                k_grid = jnp.arange(-2, 3)
+                k_1d = jax.scipy.special.erf((k_grid + 0.5) / nominal_sig_sq2) - jax.scipy.special.erf((k_grid - 0.5) / nominal_sig_sq2)
+                
+                temp = jax.scipy.signal.correlate2d(y_sub_raw, k_1d[:, None], mode='same')
+                dual_var_smooth = jax.scipy.signal.correlate2d(temp, k_1d[None, :], mode='same')
+                
+                # 2. Get integer coordinates of the predicted target peak
+                r_int = jnp.clip(jnp.int32(jnp.round(local_rs[0])), 1, P - 2)
+                c_int = jnp.clip(jnp.int32(jnp.round(local_cs[0])), 1, P - 2)
+                
+                # 3. Log-parabolic fit
+                safe_dv = jnp.maximum(dual_var_smooth, 1e-6)
+                val    = jnp.log(safe_dv[r_int, c_int])
+                val_up = jnp.log(safe_dv[r_int - 1, c_int])
+                val_dn = jnp.log(safe_dv[r_int + 1, c_int])
+                val_lf = jnp.log(safe_dv[r_int, c_int - 1])
+                val_rt = jnp.log(safe_dv[r_int, c_int + 1])
+                
+                den_r = jnp.minimum(val_up - 2.0 * val + val_dn, -1e-6) 
+                dr = 0.5 * (val_up - val_dn) / den_r
+                
+                den_c = jnp.minimum(val_lf - 2.0 * val + val_rt, -1e-6)
+                dc = 0.5 * (val_lf - val_rt) / den_c
+                
+                # 4. Constrain the drift (e.g., max 1.5 pixels) to prevent wandering into neighbors
+                dr = jnp.clip(dr, -1.5, 1.5)
+                dc = jnp.clip(dc, -1.5, 1.5)
+                
+                # Safely update the continuous coordinate of the target peak (index 0)
+                local_rs = local_rs.at[0].add(dr)
+                local_cs = local_cs.at[0].add(dc)
+
                 def eval_neighbor(nr, nc):
                     def eval_shape(si):
                         return self._rbf_basis(x_grid, jnp.array([nr, nc]), si).flatten()  # [Pixel]
