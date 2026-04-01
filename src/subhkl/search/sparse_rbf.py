@@ -1261,7 +1261,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
-        loss='poisson', border_width=border_width,
+        loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
     )
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)  # [Pixel^0.5]
     integrator.show_steps = show_progress
