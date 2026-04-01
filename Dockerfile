@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.10-bookworm-slim AS build 
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS build 
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -24,7 +24,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN uv pip install -U pip setuptools wheel toml \
 	&& uv build
 
-FROM python:3.10-slim AS tool
+FROM python:3.13-slim AS tool
 
 RUN apt-get update
 RUN apt-get install -y libgl1 libglib2.0-0 libxcb1 
@@ -33,6 +33,7 @@ RUN apt-get install -y libgl1 libglib2.0-0 libxcb1
 COPY --from=build /build/dist/subhkl-0.1.0-py3-none-any.whl subhkl-0.1.0-py3-none-any.whl
 #ENV PATH="/opt/venv/bin:$PATH"
 
+RUN python -m pip install jax[cuda12]
 RUN python -m pip install subhkl-0.1.0-py3-none-any.whl
 RUN rm subhkl-0.1.0-py3-none-any.whl
 
