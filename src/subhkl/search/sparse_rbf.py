@@ -1175,7 +1175,8 @@ def _render_and_save_rbf_plot(args):
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            border_width: int = 0, create_visualizations: bool = False):
+                            border_width: int = 0, create_visualizations: bool = False,
+                            max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
@@ -1340,7 +1341,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
     if create_visualizations and plot_tasks:
-        max_workers = min(os.cpu_count() or 4, len(plot_tasks))
+        if max_workers is None:
+            max_workers = os.cpu_count()
+
+        max_workers = min(max_workers, len(plot_tasks))
         
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             # Wrap with tqdm to see the parallel rendering progress
