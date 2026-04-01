@@ -1113,6 +1113,65 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
 from typing import Dict, List
 
+def _render_and_save_rbf_plot(args):
+    """Standalone plotting function for multiprocessing."""
+    (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
+     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes) = args
+
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle
+    import matplotlib.lines as mlines
+    import matplotlib.cm as cm
+    import numpy as np
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    im = ax.imshow(image_raw, cmap="viridis", origin="lower")
+
+    ax.set_xlim(0, image_raw.shape[1])
+    ax.set_ylim(0, image_raw.shape[0])
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
+            transform=ax.transAxes, ha='left', va='top', fontsize=16,
+            color='white', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
+
+    ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
+    color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
+
+    for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
+        is_active = intensity > 0
+        if is_active:
+            active_sig = img_spatial_sigmas[s_idx]
+            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig)))
+            color = color_map[best_c_idx]
+
+            circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
+            ax.add_patch(circle)
+
+    handles, labels = ax.get_legend_handles_labels()
+    for s_idx in range(N_shapes):
+        color = color_map[s_idx]
+        active_sig = sigmas[s_idx]
+        circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+        handles.append(circle_key)
+        labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
+
+    ax.legend(
+        handles=handles, labels=labels, loc='lower center',
+        ncol=len(handles) // 2 + 1, frameon=True, fontsize=10,
+        facecolor='black', edgecolor='none', labelcolor='white'
+    )
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
+    fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
+    plt.close(fig)
+
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
@@ -1223,9 +1282,14 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
     from collections import defaultdict
+    import os
+    import concurrent.futures
+
     results_by_img = defaultdict(list)
     for i in range(len(meta_keys)):
         results_by_img[meta_keys[i]].append(i)
+
+    plot_tasks = []
 
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -1262,62 +1326,29 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
+        # Defer plotting by storing the necessary static data
         if create_visualizations:
-            import matplotlib.pyplot as plt
-            from matplotlib.patches import Circle
-            import matplotlib.lines as mlines
-            import matplotlib.cm as cm
-
-            if plt.get_backend().lower() != "agg":
-                plt.switch_backend("Agg")
-
             N_shapes = len(integrator.candidate_sigmas)
-            fig, ax = plt.subplots(figsize=(10, 10))
-            im = ax.imshow(image_raw, cmap="viridis", origin="lower")
+            ref_rs = [float(integrated_results[idx, 1]) for idx in indices]
+            ref_cs = [float(integrated_results[idx, 2]) for idx in indices]
+            
+            plot_tasks.append((
+                image_raw, physical_bank, run_id, img_key, 
+                img_rs, img_cs, ref_rs, ref_cs, 
+                img_intensities, img_spatial_sigmas, sigmas, N_shapes
+            ))
 
-            ax.set_xlim(0, image_raw.shape[1])
-            ax.set_ylim(0, image_raw.shape[0])
-
-            ax.set_xticks([])
-            ax.set_yticks([])
-
-            ax.text(0.02, 0.98, f"Bank {physical_bank} (Run {run_id})",
-                    transform=ax.transAxes, ha='left', va='top', fontsize=16, 
-                    color='white', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
-
-            ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
-            color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
-
-            ref_rs = [float(integrated_results[idx, 1]) for idx in indices]  # [Pixel^0.5]
-            ref_cs = [float(integrated_results[idx, 2]) for idx in indices]  # [Pixel^0.5]
-
-            for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
-                is_active = intensity > 0
-                if is_active:
-                    active_sig = img_spatial_sigmas[s_idx]
-                    best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig)))
-                    color = color_map[best_c_idx]
-
-                    circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
-                    ax.add_patch(circle)
-
-            handles, labels = ax.get_legend_handles_labels()
-            for s_idx in range(N_shapes):
-                color = color_map[s_idx]
-                active_sig = sigmas[s_idx]
-                circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
-                handles.append(circle_key)
-                labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
-
-            ax.legend(
-                handles=handles, labels=labels, loc='lower center',
-                ncol=len(handles) // 2 + 1, frameon=True, fontsize=10, 
-                facecolor='black', edgecolor='none', labelcolor='white'
-            )
-            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-            out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
-            fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
-            plt.close(fig)
+    # --- PHASE 4: PARALLEL VISUALIZATION ---
+    if create_visualizations and plot_tasks:
+        max_workers = min(os.cpu_count() or 4, len(plot_tasks))
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Wrap with tqdm to see the parallel rendering progress
+            list(tqdm(
+                executor.map(_render_and_save_rbf_plot, plot_tasks), 
+                total=len(plot_tasks), 
+                desc="Rendering Plots", 
+                disable=not show_progress
+            ))
 
     return res
