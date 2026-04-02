@@ -1317,7 +1317,6 @@ def rbf_integrator(
     mosaicity_eta: float = typer.Option(1.5, help="Mosaicity at theta=90deg [pixels]"),
     core_pixel_res: float = typer.Option(0.75, help="Resolution for detecting the core peak [pixels]"),
     anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
-    sigma_short: float = typer.Option(1.0, help="Short axis of an anisotropic peak (along the azimuthal direction"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),

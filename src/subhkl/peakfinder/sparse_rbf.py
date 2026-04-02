@@ -1073,9 +1073,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                         return self._rbf_basis(
                             x_grid, jnp.array([nr, nc]), si_long, 
                             theta=theta_global, phi=phi_global, 
-                            anisotropic=self.anisotropic, sigma_short=self.sigma_short
+                            anisotropic=self.anisotropic, sigma_short=dynamic_sigma_short
                         ).flatten()
-                    return vmap(eval_shape)(self.candidate_sigmas).T
+                    return vmap(eval_shape)(dynamic_sigmas).T
 
                 A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes) [Pixel]
                 
