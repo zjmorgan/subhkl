@@ -128,21 +128,48 @@ class SparseRBFPeakFinder:
         self.candidate_sigmas = jnp.linspace(min_sigma, max_sigma, num_sigmas)  # [Pixel^0.5]
 
     @staticmethod
-    def _rbf_basis(x_grid, y, sigma):
-        """
-        Analytic 2D pixel integral of the unnormalized continuous Gaussian.
-        
-        Args:
-            x_grid: [Pixel^0.5]
-            y: [Pixel^0.5]
-            sigma: [Pixel^0.5]
-        Returns:
-            [Pixel]
-        """
-        sig_sq2 = sigma * jnp.sqrt(2.0) + 1e-6  # [Pixel^0.5]
-        erf_r = jax.scipy.special.erf((x_grid[0] + 0.5 - y[0]) / sig_sq2) - jax.scipy.special.erf((x_grid[0] - 0.5 - y[0]) / sig_sq2)  # [-]
-        erf_c = jax.scipy.special.erf((x_grid[1] + 0.5 - y[1]) / sig_sq2) - jax.scipy.special.erf((x_grid[1] - 0.5 - y[1]) / sig_sq2)  # [-]
-        return (jnp.pi / 2.0) * (sigma**2) * erf_r * erf_c  # [Pixel]
+    def _rbf_basis(x_grid, y, sigma_long, theta=0.0, phi=0.0, anisotropic=False, sigma_short=1.5):
+        if not anisotropic:
+            # ORIGINAL ISOTROPIC ERF LOGIC
+            sig_sq2 = sigma_long * jnp.sqrt(2.0) + 1e-6
+            erf_r = jax.scipy.special.erf((x_grid[0] + 0.5 - y[0]) / sig_sq2) - jax.scipy.special.erf((x_grid[0] - 0.5 - y[0]) / sig_sq2)
+            erf_c = jax.scipy.special.erf((x_grid[1] + 0.5 - y[1]) / sig_sq2) - jax.scipy.special.erf((x_grid[1] - 0.5 - y[1]) / sig_sq2)
+            return (jnp.pi / 2.0) * (sigma_long**2) * erf_r * erf_c
+
+        else:
+            # ANISOTROPIC 4x4 QUADRATURE LOGIC
+            # 1. Build the Precision Matrix (Sigma^-1)
+            cos_p = jnp.cos(phi)
+            sin_p = jnp.sin(phi)
+
+            var_l = jnp.maximum(sigma_long**2, 1e-6)
+            var_s = jnp.maximum(sigma_short**2, 1e-6)
+
+            a = (cos_p**2) / var_l + (sin_p**2) / var_s
+            b = sin_p * cos_p * (1.0 / var_l - 1.0 / var_s)
+            c = (sin_p**2) / var_l + (cos_p**2) / var_s
+
+            # 2. Setup 4x4 Sub-pixel Offsets (-0.375, -0.125, 0.125, 0.375)
+            sub_offsets = jnp.array([-0.375, -0.125, 0.125, 0.375])
+            ox, oy = jnp.meshgrid(sub_offsets, sub_offsets)
+
+            # Distance from predicted center to pixel centers
+            dr_center = x_grid[0] - y[0]
+            dc_center = x_grid[1] - y[1]
+
+            # 3. Evaluate Gaussian at sub-points
+            def eval_subpoint(ox_i, oy_i):
+                dr = dr_center + ox_i
+                dc = dc_center + oy_i
+                # Evaluate exponent: -0.5 * (a*dr^2 + 2*b*dr*dc + c*dc^2)
+                return jnp.exp(-0.5 * (a * dr**2 + 2.0 * b * dr * dc + c * dc**2))
+
+            # Vectorize over the 4x4 grid of offsets
+            sub_evals = vmap(vmap(eval_subpoint))(ox, oy)
+
+            # 4. Average the 16 evaluations and scale by analytic volume
+            area_scalar = 2.0 * jnp.pi * sigma_long * sigma_short
+            return jnp.mean(sub_evals, axis=(0, 1)) * area_scalar
 
     @staticmethod
     def _to_physical(params_raw, H, W, min_s, max_s):
@@ -895,7 +922,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     
     Units:
         alpha: [-] (Z-score threshold)
-        min_sigma / max_sigma / nominal_sigma: [Pixel^0.5]
+        min_sigma / max_sigma / nominal_sigma / sigma_short: [Pixel^0.5]
         gamma: [-]
         Returns integrations containing sigI: [photons^0.5 / Pixel^0.5]
     """
@@ -907,13 +934,17 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  loss='poisson',
                  border_width=0,
                  num_sigmas=32,
-                 nominal_sigma=1.0):
+                 nominal_sigma=1.0,
+                 anisotropic=False,
+                 sigma_short=1.5):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
             loss=loss, border_width=border_width, num_sigmas=num_sigmas,
             show_steps=False
         )
         self.nominal_sigma = nominal_sigma
+        self.anisotropic = anisotropic
+        self.sigma_short = sigma_short
 
     def integrate_reflections(self, images_batch, frames, rs, cs):
         """
@@ -1015,10 +1046,14 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 local_cs = local_cs.at[0].add(dc)
 
                 def eval_neighbor(nr, nc):
-                    def eval_shape(si):
-                        return self._rbf_basis(x_grid, jnp.array([nr, nc]), si).flatten()  # [Pixel]
+                    def eval_shape(si_long):
+                        return self._rbf_basis(
+                            x_grid, jnp.array([nr, nc]), si_long, 
+                            theta=theta_global, phi=phi_global, 
+                            anisotropic=self.anisotropic, sigma_short=self.sigma_short
+                        ).flatten()
                     return vmap(eval_shape)(self.candidate_sigmas).T
-                
+
                 A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes) [Pixel]
                 
                 # --- 1. Enforce 1-Shape-Per-Peak (Prevents composite halo traps) ---
@@ -1042,7 +1077,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)  # [Pixel]
                 
                 sigmas_joint = jnp.tile(self.candidate_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
-                volumes_joint = (jnp.pi / 2.0) * (sigmas_joint**2)  # [Pixel]
                 weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
                 
                 alpha_vec_joint = alpha_z_score * weights_joint  
@@ -1112,7 +1146,12 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 c_final_target = c_ols[0]  # [photons/Pixel^2]
                 best_sig_target = best_sigmas[0]  # [Pixel^0.5]
                 
-                volumes = jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)  # [Pixel]
+                volumes = jnp.where(
+                    getattr(self, 'anisotropic', False),
+                    jnp.float32(2.0 * jnp.pi) * best_sig_target * getattr(self, 'sigma_short', 1.5),
+                    jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
+                )  # [Pixel]
+
                 intensity = c_final_target * volumes  # [photons/Pixel^2] * [Pixel] = [photons/Pixel]
                 
                 var_c0 = C_mat[0, 0]  # [photons / Pixel^3]
@@ -1175,10 +1214,11 @@ from typing import Dict, List
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
-     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes) = args
+     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes,
+     phis, sigma_short, is_anisotropic) = args
 
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle
+    from matplotlib.patches import Circle, Ellipse
     import matplotlib.lines as mlines
     import matplotlib.cm as cm
     import numpy as np
@@ -1202,23 +1242,40 @@ def _render_and_save_rbf_plot(args):
     ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
     color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
 
-    for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
+    for s_idx, (cx, cy, intensity, phi) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis)):
         is_active = intensity > 0
         if is_active:
-            active_sig = img_spatial_sigmas[s_idx]
-            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig)))
+            active_sig_long = img_spatial_sigmas[s_idx]
+            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig_long)))
             color = color_map[best_c_idx]
 
-            circle = Circle((cx, cy), 2.0 * active_sig, edgecolor=color, facecolor='none', lw=1.5)
-            ax.add_patch(circle)
+            if is_anisotropic:
+                # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
+                # Angle must be in degrees for Matplotlib
+                w = 4.0 * active_sig_long
+                h = 4.0 * sigma_short
+                angle_deg = np.degrees(phi)
+                patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
+                                edgecolor=color, facecolor='none', lw=1.5)
+            else:
+                patch = Circle((cx, cy), 2.0 * active_sig_long,
+                               edgecolor=color, facecolor='none', lw=1.5)
+
+            ax.add_patch(patch)
 
     handles, labels = ax.get_legend_handles_labels()
     for s_idx in range(N_shapes):
         color = color_map[s_idx]
         active_sig = sigmas[s_idx]
-        circle_key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
-        handles.append(circle_key)
-        labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
+        if is_anisotropic:
+            # For the legend, just use a circle marker for the color key
+            key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+            handles.append(key)
+            labels.append(rf'$2\sigma_L={2.0 * active_sig:.1f}$')
+        else:
+            key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+            handles.append(key)
+            labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
 
     ax.legend(
         handles=handles, labels=labels, loc='lower center',
@@ -1277,6 +1334,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     img_keys_ordered = sorted(peak_dict.keys())
 
     from tqdm import tqdm
+
+    all_thetas, all_phis = [], []
+
     for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
         p_data = peak_dict[img_key]
         i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data  # i_arr, j_arr: [Pixel^0.5]
@@ -1305,6 +1365,25 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             # Keep the reflection with the lowest h^2 + k^2 + l^2 on this ray
             if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
                 unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+
+        # Calculate angles for the batch immediately
+        det = peaks_obj.get_detector(img_key)
+        run_id = peaks_obj.image.get_run_id(img_key)
+
+        if all_R is not None and all_R.ndim == 3:
+            current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
+        else:
+            current_R_val = all_R
+
+        s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
+
+        # Calculate for the filtered indices
+        batch_rs = np.array([i_arr[idx] for idx in keep_indices])
+        batch_cs = np.array([j_arr[idx] for idx in keep_indices])
+        bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
+
+        all_thetas.extend(bank_tt / 2.0) # Bragg Theta
+        all_phis.extend(bank_az)         # Azimuthal Phi
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         actual_peaks_count = len(keep_indices)
@@ -1338,7 +1417,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     frames = np.array(all_frames, dtype=int)
 
     # --- PHASE 2: GPU INTEGRATION ---
-    integrated_results = integrator.integrate_reflections(images_batch, frames, all_rs, all_cs)
+    integrated_results = integrator.integrate_reflections(
+        images_batch, frames, all_rs, all_cs,
+        thetas=np.array(all_thetas), phis=np.array(all_phis)
+    )
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
     from collections import defaultdict
@@ -1392,10 +1474,15 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             ref_rs = [float(integrated_results[idx, 1]) for idx in indices]
             ref_cs = [float(integrated_results[idx, 2]) for idx in indices]
             
+            # Safely fetch flags (defaults to False/1.5 if not yet added to integrator __init__)
+            is_aniso = getattr(integrator, 'anisotropic', False)
+            sig_short = getattr(integrator, 'sigma_short', 1.5)
+            
             plot_tasks.append((
                 image_raw, physical_bank, run_id, img_key, 
                 img_rs, img_cs, ref_rs, ref_cs, 
-                img_intensities, img_spatial_sigmas, sigmas, N_shapes
+                img_intensities, img_spatial_sigmas, sigmas, N_shapes,
+                bank_az, sig_short, is_aniso
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
