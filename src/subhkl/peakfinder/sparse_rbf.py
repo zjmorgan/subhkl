@@ -1391,7 +1391,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     Args:
         peak_dict: Dictionary containing peak arrays
         peaks_obj: Instrument mapping object
-        sigmas: List of spectral bandwidth factors
+        sigmas: List of unstretched peak radii
         nominal_sigma: Fallback sigma for crushed peaks
     Returns:
         res: RBFResult containing intensities and sigI
