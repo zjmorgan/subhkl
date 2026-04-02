@@ -927,30 +927,40 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     
     Units:
         alpha: [-] (Z-score threshold)
-        min_sigma / max_sigma / nominal_sigma / sigma_short: [Pixel^0.5]
+        min_kappa / max_kappa / nominal_kappa: [-]
+        mosaicity_eta: [Pixel^0.5] (?)
         gamma: [-]
+        core_pixel_res: [Pixel^0.5]
         Returns integrations containing sigI: [photons^0.5 / Pixel^0.5]
     """
     def __init__(self,
                  alpha=0.05,
-                 min_sigma=0.5,
-                 max_sigma=5.0,
+                 min_kappa=0.1,    # [Pixels] at theta=45
+                 max_kappa=15.0,   # [Pixels] at theta=45
                  gamma=2.0,
                  loss='poisson',
                  border_width=0,
-                 num_sigmas=32,
-                 nominal_sigma=1.0,
+                 num_kappas=32,
+                 nominal_kappa=2.0,
                  anisotropic=False,
-                 sigma_short=1.5,
+                 mosaicity_eta=1.5,   # [Pixels] at theta=90
+                 core_pixel_res=0.75, # [Pixels]
                  chunk_size=1024):
+
+        # 1. Initialize parent with safe dummy pixel values to keep it functional 
+        # (in case you ever call super().find_peaks_batch)
         super().__init__(
-            alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
-            loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
+            alpha=alpha, gamma=gamma, min_sigma=0.5, max_sigma=5.0,
+            loss=loss, border_width=border_width, num_sigmas=num_kappas, chunk_size=chunk_size,
             show_steps=False
         )
-        self.nominal_sigma = nominal_sigma
+        
+        # 2. Define the Child's distinct Physics-Space parameters
+        self.candidate_kappas = jnp.linspace(min_kappa, max_kappa, num_kappas)
+        self.nominal_kappa = nominal_kappa
         self.anisotropic = anisotropic
-        self.sigma_short = sigma_short
+        self.mosaicity_eta = mosaicity_eta
+        self.core_pixel_res = core_pixel_res
 
     def integrate_reflections(self, images_batch, frames, rs, cs, thetas, phis):
         """
@@ -1055,6 +1065,8 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 local_rs = local_rs.at[0].add(dr)
                 local_cs = local_cs.at[0].add(dc)
 
+                dynamic_sigmas = jnp.sqrt(self.core_pixel_res**2 + (self.candidate_kappas * jnp.tan(theta_global))**2)
+                dynamic_sigma_short = jnp.sqrt(self.core_pixel_res**2 + (self.mosaicity_eta * jnp.sin(theta_global))**2)
 
                 def eval_neighbor(nr, nc):
                     def eval_shape(si_long):
@@ -1110,8 +1122,8 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 surviving_mask_strict = max_c_ssn > 1e-9
                 num_survivors = jnp.sum(surviving_mask_strict)
 
-                # fallback to nominal peak width
-                nominal_idx = jnp.argmin(jnp.abs(self.candidate_sigmas - self.nominal_sigma))
+                # Fallback uses candidate_kappas
+                nominal_idx = jnp.argmin(jnp.abs(self.candidate_kappas - self.nominal_kappa))
 
                 # local consensus fallback (average shape of surviving neighbors)
                 sum_survivor_indices = jnp.sum(best_idx_ssn * surviving_mask_strict)
@@ -1133,7 +1145,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 # Extract the best footprint for each neighbor safely along the last axis
                 A_best = A_k[:, indices, best_idx_k]  # Shape: (P*P, K_NEIGHBORS)
 
-                best_sigmas = self.candidate_sigmas[best_idx_k]  # [Pixel^0.5]
+                best_sigmas = dynamic_sigmas[best_idx_k]
                 A_best_masked = A_best * surviving_mask[None, :]  # [Pixel]
 
                 # =====================================================================
@@ -1216,18 +1228,22 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
         return np.vstack(refined_peaks)
 
-
 # =====================================================================
 # API WRAPPER FOR BACKWARD COMPATIBILITY
 # =====================================================================
 
 from typing import Dict, List
+import multiprocessing
+import concurrent.futures
+from tqdm import tqdm
+from collections import defaultdict
+import os
 
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
-     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-     phis, sigma_short, is_anisotropic) = args
+     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, kappas, N_shapes,
+     phis, thetas, mosaicity_eta, core_pixel_res, is_anisotropic) = args
 
     import matplotlib.pyplot as plt
     from matplotlib.patches import Circle, Ellipse
@@ -1254,19 +1270,27 @@ def _render_and_save_rbf_plot(args):
     ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
     color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
 
-    for s_idx, (cx, cy, intensity, phi) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis)):
+    for s_idx, (cx, cy, intensity, phi, theta) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis, thetas)):
         is_active = intensity > 0
         if is_active:
+            # The solver returned the dynamic pixel size (sigma_long)
             active_sig_long = img_spatial_sigmas[s_idx]
-            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_sig_long)))
+
+            # Reverse-engineer the Kappa factor to find the right color legend
+            tan_theta = max(np.tan(theta), 1e-6)
+            active_kappa = np.sqrt(max(0, active_sig_long**2 - core_pixel_res**2)) / tan_theta
+
+            best_c_idx = int(np.argmin(np.abs(np.array(kappas) - active_kappa)))
             color = color_map[best_c_idx]
 
             if is_anisotropic:
+                # Forward-calculate the physical short axis (Mosaicity) for this specific theta
+                dynamic_sigma_short = np.sqrt(core_pixel_res**2 + (mosaicity_eta * np.sin(theta))**2)
+
                 # --- THE SMART CLAMP FIX FOR VISUALS ---
-                actual_sigma_short = min(sigma_short, active_sig_long)
-                
+                actual_sigma_short = min(dynamic_sigma_short, active_sig_long)
+
                 # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
-                # Angle must be in degrees for Matplotlib
                 w = 4.0 * active_sig_long
                 h = 4.0 * actual_sigma_short
                 angle_deg = np.degrees(phi)
@@ -1281,16 +1305,10 @@ def _render_and_save_rbf_plot(args):
     handles, labels = ax.get_legend_handles_labels()
     for s_idx in range(N_shapes):
         color = color_map[s_idx]
-        active_sig = sigmas[s_idx]
-        if is_anisotropic:
-            # For the legend, just use a circle marker for the color key
-            key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
-            handles.append(key)
-            labels.append(rf'$2\sigma_L={2.0 * active_sig:.1f}$')
-        else:
-            key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
-            handles.append(key)
-            labels.append(rf'$2\sigma={2.0 * active_sig:.1f}$')
+        active_kap = kappas[s_idx]
+        key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
+        handles.append(key)
+        labels.append(rf'$\kappa={active_kap:.1f}$')
 
     ax.legend(
         handles=handles, labels=labels, loc='lower center',
@@ -1303,46 +1321,31 @@ def _render_and_save_rbf_plot(args):
     fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
     plt.close(fig)
 
-def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
+def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            nominal_sigma: float = 1.0, anisotropic: bool = False,
-                            sigma_short: float = 1.5, border_width: int = 0,
+                            nominal_kappa: float = 2.0, anisotropic: bool = False,
+                            mosaicity_eta: float = 1.5, core_pixel_res: float = 0.75,
+                            mosaicity_model: bool = True, border_width: int = 0,
                             chunk_size: int = 1024, create_visualizations: bool = False,
                             max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
         peaks_obj: Instrument mapping object
-        sigmas: List of [Pixel^0.5]
-        nominal_sigma: Fallback sigma for weak peaks
-        sigma_short: Anisotropic standard deviation [Pixel^.5]
-        alpha: [-] (Z-score threshold)
-        gamma: [-] (Besov weight)
-        max_peaks: [-]
+        kappas: List of spectral bandwidth factors
+        nominal_kappa: Fallback kappa for crushed peaks
+        mosaicity_eta: Mosaicity angular broadening factor
+        core_pixel_res: The absolute minimum optical resolution in pixels
+        mosaicity_model: If True, rotates footprints 90 deg to align with tangential smearing
     Returns:
-        res: RBFResult containing intensities [photons/Pixel] and sigmas [photons^0.5 / Pixel^0.5]
+        res: RBFResult containing intensities and sigI
     """
-
-    def calculate_panel_phi(xyz_lab, uhat, vhat):
-        """
-        Calculates the true 2D rotation angle (phi) of a peak on a flat detector face.
-        """
-        n_scat = np.column_stack([
-            -xyz_lab[:, 1], 
-            xyz_lab[:, 0], 
-            np.zeros_like(xyz_lab[:, 0])
-        ])
-        
-        du = np.sum(n_scat * vhat, axis=1)
-        dv = -np.sum(n_scat * uhat, axis=1)
-        
-        return np.arctan2(dv, du)
 
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
-            self.intensity, self.sigma = [], []  # intensity: [photons/Pixel], sigma: [photons^0.5 / Pixel^0.5]
+            self.intensity, self.sigma = [], []
             self.tt, self.az, self.wavelength = [], [], []
             self.run_id, self.bank, self.xyz = [], [], []
 
@@ -1351,60 +1354,53 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         sample_offset = np.zeros(3)
 
     integrator = SparseLaueIntegrator(
-        alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
-        loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
-        anisotropic=anisotropic, sigma_short=sigma_short, chunk_size=chunk_size,
+        alpha=alpha,  min_kappa=min(kappas), max_kappa=max(kappas), gamma=gamma,
+        loss='poisson', border_width=border_width, nominal_kappa=nominal_kappa,
+        anisotropic=anisotropic, mosaicity_eta=mosaicity_eta, core_pixel_res=core_pixel_res,
+        chunk_size=chunk_size,
     )
-    integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)  # [Pixel^0.5]
+    # Ensure the solver dictionary perfectly matches the provided list
+    integrator.candidate_kappas = jnp.array(kappas, dtype=jnp.float32)
     integrator.show_steps = show_progress
 
     # --- PHASE 1: GATHER AND BATCH ---
     images_list = []
     all_frames = []
-    all_rs, all_cs = [], []  # [Pixel^0.5]
+    all_rs, all_cs = [], []
     meta_h, meta_k, meta_l, meta_wl = [], [], [], []
     meta_keys = []
 
     frame_counter = 0
     img_keys_ordered = sorted(peak_dict.keys())
-
-    from tqdm import tqdm
-
     all_thetas, all_phis = [], []
 
     for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
         p_data = peak_dict[img_key]
-        i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data  # i_arr, j_arr: [Pixel^0.5]
-        
+        i_arr, j_arr, h_arr, k_arr, l_arr, wl_arr = p_data
+
         initial_peaks_count = len(i_arr)
-        if initial_peaks_count == 0: 
+        if initial_peaks_count == 0:
             continue
 
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
-        
-        # --- 1. EXACT CRYSTALLOGRAPHIC HARMONIC DEDUPLICATION ---
-        # Because we are already iterating inside a specific `img_key` (which uniquely
-        # defines the run and bank), any peaks with the same fundamental HKL are guaranteed
-        # to be quasi-Laue harmonics on the exact same reciprocal ray.
+
+        # Exact crystallographic harmonic deduplication
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
             if h == 0 and k == 0 and l == 0:
-                continue # Safety skip for origin
-                
-            # Find the fundamental ray using the Greatest Common Divisor
+                continue
+
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
 
-            # Keep the reflection with the lowest h^2 + k^2 + l^2 on this ray
             if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
                 unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
         keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
         actual_peaks_count = len(keep_indices)
 
-        # Calculate angles for the batch immediately
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
@@ -1415,46 +1411,44 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
-        # Calculate for the filtered indices
         batch_rs = np.array([i_arr[idx] for idx in keep_indices])
         batch_cs = np.array([j_arr[idx] for idx in keep_indices])
-        
-        xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
 
-        # get the spherical angles (in degrees)
+        xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
 
-        # Store Bragg theta in radians
-        all_thetas.extend(np.deg2rad(bank_tt) / 2.0) 
+        # Store Bragg theta in RADIANS
+        all_thetas.extend(np.deg2rad(bank_tt) / 2.0)
 
-        # cartesian panel projection
+        # --- CARTESIAN PANEL PROJECTION ---
         k_f = xyz_lab - s_lab
-
-        # Normal of the scattering plane (k_i x k_f), assuming incident beam is +Z [0,0,1]
         n_scat = np.column_stack([-k_f[:, 1], k_f[:, 0], np.zeros_like(k_f[:, 0])])
 
-        # project streak direction onto the local panel axes via vector triple product
         du = np.sum(n_scat * det.vhat, axis=1)
         dv = -np.sum(n_scat * det.uhat, axis=1)
 
-        # arctan2 returns radians
         panel_phi = np.arctan2(dv, du)
+
+        # --- THE PHYSICS PIVOT (Mosaicity Tangent vs Spectral Radial) ---
+        if mosaicity_model:
+            panel_phi += np.pi / 2.0
+
         all_phis.extend(panel_phi)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
             comp_ratio = (1.0 - actual_peaks_count / initial_peaks_count) * 100
-            tqdm.write(f"Bank {physical_b} [Run {peaks_obj.image.get_run_id(img_key)}]: "
+            tqdm.write(f"Bank {physical_b} [Run {run_id}]: "
                        f"Harmonics Filtered {initial_peaks_count} -> {actual_peaks_count} "
                        f"({comp_ratio:.1f}% compression)")
 
-        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)  # [photons/Pixel]
+        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         images_list.append(image_raw)
 
         for idx in keep_indices:
             all_frames.append(frame_counter)
-            all_rs.append(i_arr[idx])  # [Pixel^0.5]
-            all_cs.append(j_arr[idx])  # [Pixel^0.5]
+            all_rs.append(i_arr[idx])
+            all_cs.append(j_arr[idx])
             meta_h.append(h_arr[idx])
             meta_k.append(k_arr[idx])
             meta_l.append(l_arr[idx])
@@ -1466,7 +1460,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     if not images_list:
         return res
 
-    images_batch = np.stack(images_list)  # [photons/Pixel]
+    images_batch = np.stack(images_list)
     frames = np.array(all_frames, dtype=int)
 
     # --- PHASE 2: GPU INTEGRATION ---
@@ -1476,10 +1470,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     )
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
-    from collections import defaultdict
-    import os
-    import concurrent.futures
-
     results_by_img = defaultdict(list)
     for i in range(len(meta_keys)):
         results_by_img[meta_keys[i]].append(i)
@@ -1491,7 +1481,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
-        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)  # [photons/Pixel]
+        image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         H, W = image_raw.shape
         bw = border_width
 
@@ -1502,30 +1492,27 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
-        img_rs = [all_rs[idx] for idx in indices]  # [Pixel^0.5]
-        img_cs = [all_cs[idx] for idx in indices]  # [Pixel^0.5]
+        img_rs = [all_rs[idx] for idx in indices]
+        img_cs = [all_cs[idx] for idx in indices]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
 
-        # Edge masking
+        # --- EDGE MASKING FIX ---
         valid_global_indices = []
         valid_local_indices = []
-        
+
         for local_idx, global_idx in enumerate(indices):
-            # Use the relaxed coordinates to check boundaries
             r = float(integrated_results[global_idx, 1])
             c = float(integrated_results[global_idx, 2])
-            
             if (bw <= r < H - bw) and (bw <= c < W - bw):
                 valid_global_indices.append(global_idx)
                 valid_local_indices.append(local_idx)
 
-        # If all peaks were on the border, safely skip to next image
         if not valid_global_indices:
             continue
 
-        img_intensities = [float(integrated_results[idx, 0]) for idx in valid_global_indices]  # [photons/Pixel]
-        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in valid_global_indices]  # [Pixel^0.5]
-        img_sigI = [float(integrated_results[idx, 4]) for idx in valid_global_indices]  # [photons^0.5 / Pixel^0.5]
+        img_intensities = [float(integrated_results[idx, 0]) for idx in valid_global_indices]
+        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in valid_global_indices]
+        img_sigI = [float(integrated_results[idx, 4]) for idx in valid_global_indices]
 
         res.intensity += img_intensities
         res.sigma += img_sigI
@@ -1542,24 +1529,25 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         # Defer plotting by storing the necessary static data
         if create_visualizations:
-            N_shapes = len(integrator.candidate_sigmas)
+            N_shapes = len(integrator.candidate_kappas)
             filt_img_rs = [img_rs[i] for i in valid_local_indices]
             filt_img_cs = [img_cs[i] for i in valid_local_indices]
             filt_ref_rs = [float(integrated_results[idx, 1]) for idx in valid_global_indices]
             filt_ref_cs = [float(integrated_results[idx, 2]) for idx in valid_global_indices]
-            
-            # Ensure we use the true panel phis we calculated in Phase 1
+
             filt_phis = [all_phis[idx] for idx in valid_global_indices]
-            
-            # Safely fetch flags
-            is_aniso = getattr(integrator, 'anisotropic', False)
-            sig_short = getattr(integrator, 'sigma_short', 1.5)
-            
+            filt_thetas = [all_thetas[idx] for idx in valid_global_indices]
+
+            # Safely fetch physics flags
+            is_aniso = getattr(integrator, 'anisotropic', anisotropic)
+            eta = getattr(integrator, 'mosaicity_eta', mosaicity_eta)
+            core_res = getattr(integrator, 'core_pixel_res', core_pixel_res)
+
             plot_tasks.append((
-                image_raw, physical_bank, run_id, img_key, 
-                filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs, 
-                img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-                filt_phis, sig_short, is_aniso
+                image_raw, physical_bank, run_id, img_key,
+                filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs,
+                img_intensities, img_spatial_sigmas, kappas, N_shapes,
+                filt_phis, filt_thetas, eta, core_res, is_aniso
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
@@ -1569,14 +1557,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         max_workers = min(max_workers, len(plot_tasks))
 
-        import multiprocessing
         ctx = multiprocessing.get_context("spawn")
         with concurrent.futures.ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            # Wrap with tqdm to see the parallel rendering progress
             list(tqdm(
-                executor.map(_render_and_save_rbf_plot, plot_tasks), 
-                total=len(plot_tasks), 
-                desc="Rendering Plots", 
+                executor.map(_render_and_save_rbf_plot, plot_tasks),
+                total=len(plot_tasks),
+                desc="Rendering Plots",
                 disable=not show_progress
             ))
 
