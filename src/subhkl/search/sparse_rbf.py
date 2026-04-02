@@ -1418,13 +1418,33 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         k_f_z = np.cos(bank_tt)
         xyz_lab_proxy = np.column_stack([k_f_x, k_f_y, k_f_z])
 
-        # 2. Fetch the detector's local pixel basis vectors
+        # We must calculate the exact orientation of the scattering plane 
+        # on the flat detector face, accounting for its 3D center offset.
+        center = np.array(det.center)
         uhat = np.array(det.uhat)
         vhat = np.array(det.vhat)
 
-        # 3. Project the scattering plane onto the detector face
-        panel_phi = calculate_panel_phi(xyz_lab_proxy, uhat, vhat)
-        all_phis.extend(panel_phi)       # True 2D Anisotropic Rotation Angle 
+        # Normalize just in case the instrument axes are scaled
+        u_unit = uhat / np.linalg.norm(uhat)
+        v_unit = vhat / np.linalg.norm(vhat)
+
+        # Get pixel sizes
+        pw = det.width / det.m
+        ph = det.height / det.n
+
+        # Exact 3D lab coordinates of the pixels
+        xyz_lab = center + batch_cs[:, None] * pw * uhat + batch_rs[:, None] * ph * vhat
+        k_f = xyz_lab - s_lab
+
+        # Normal of the scattering plane (k_i x k_f, where incident k_i = [0,0,1])
+        n_scat = np.column_stack([-k_f[:, 1], k_f[:, 0], np.zeros_like(k_f[:, 0])])
+
+        # Project streak direction onto the local panel axes using vector triple product
+        du = np.sum(n_scat * v_unit, axis=1)
+        dv = -np.sum(n_scat * u_unit, axis=1)
+
+        panel_phi = np.arctan2(dv, du)
+        all_phis.extend(panel_phi)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
