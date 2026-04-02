@@ -1495,6 +1495,7 @@ def rbf_integrator(
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
     create_visualizations: bool = False,
+    chunk_size: int = 1024,
     max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
 ):
     """
@@ -1559,6 +1560,7 @@ def rbf_integrator(
         nominal_sigma=nominal_sigma,
         anisotropic=anisotropic,
         sigma_short=sigma_short,
+        chunk_size=chunk_size,
         create_visualizations=create_visualizations,
         max_workers=max_workers,
     )
