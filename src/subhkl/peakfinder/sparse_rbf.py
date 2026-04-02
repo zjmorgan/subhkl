@@ -1287,7 +1287,7 @@ def _render_and_save_rbf_plot(args):
 
                 # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
                 w = 4.0 * active_sig_long
-                h = 4.0 * sigma_short
+                h = 4.0 * dynamic_sigma_short
                 angle_deg = np.degrees(phi)
                 patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
                                 edgecolor=color, facecolor='none', lw=1.5)
