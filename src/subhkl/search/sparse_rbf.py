@@ -1237,6 +1237,66 @@ from tqdm import tqdm
 from collections import defaultdict
 import os
 
+def _render_and_save_diagnostic(twothetas, kappas, core_res):
+    """Generates a binned scatter plot to verify core optical calibration and prints a compact summary."""
+    import matplotlib.pyplot as plt
+    from scipy.stats import binned_statistic
+    import numpy as np
+
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    tt_arr = np.array(twothetas)
+    k_arr = np.array(kappas)
+
+    if len(tt_arr) == 0:
+        plt.close(fig)
+        return
+
+    # --- TERMINAL SUMMARY (Compact 10-bin horizontal output) ---
+    c_bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 11) # 10 bins
+    c_medians, c_edges, _ = binned_statistic(tt_arr, k_arr, statistic='median', bins=c_bins)
+    c_centers = 0.5 * (c_edges[1:] + c_edges[:-1])
+    c_valid = ~np.isnan(c_medians)
+
+    print(f"\n[Optics Diagnostic] Median \u03ba vs 2\u03b8 (Core = {core_res:.2f} px):")
+    tt_str = "  2Theta: " + " | ".join([f"{x:4.1f}\u00b0" for x in c_centers[c_valid]])
+    kap_str = "  Kappa:  " + " | ".join([f"{x:5.2f}" for x in c_medians[c_valid]])
+    print(tt_str)
+    print(kap_str + "\n")
+
+    # --- PLOTTING (High-res 40-bin output) ---
+    # 1. Plot all individual peaks as semi-transparent dots
+    ax.scatter(tt_arr, k_arr, alpha=0.15, s=15, color='dodgerblue', label='Fitted Peaks')
+
+    # 2. Calculate and plot the robust rolling median
+    bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 40)
+    bin_medians, bin_edges, _ = binned_statistic(tt_arr, k_arr, statistic='median', bins=bins)
+    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+
+    # Filter out empty bins
+    valid_bins = ~np.isnan(bin_medians)
+
+    ax.plot(bin_centers[valid_bins], bin_medians[valid_bins],
+            color='red', lw=3, label='Rolling Median $\kappa$')
+
+    # Formatting
+    ax.set_xlabel(r'Scattering Angle $2\theta$ (degrees)', fontsize=14)
+    ax.set_ylabel(r'Fitted Spectral Bandwidth ($\kappa$)', fontsize=14)
+    ax.set_title(f'Optics Calibration Diagnostic (Core Res: {core_res:.2f} px)', fontsize=16)
+
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend(fontsize=12)
+
+    # Set Y-axis to start at 0 so the scale is honest
+    ax.set_ylim(bottom=0)
+
+    fig.tight_layout()
+    fig.savefig("kappa_calibration_diagnostic.png", dpi=200)
+    plt.close(fig)
+
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
@@ -1465,6 +1525,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
 
     plot_tasks = []
 
+    # diagnostic data arrays
+    diag_2theta = []
+    diag_kappa = []
+
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector(img_key)
@@ -1516,6 +1580,20 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
+            # --- COLLECT DIAGNOSTIC DATA ---
+            # Only record kappa for peaks that successfully integrated (Intensity > 0)
+            intensity = float(integrated_results[global_idx, 0])
+            if intensity > 0:
+                theta_rad = all_thetas[global_idx]
+                sigma_long = float(integrated_results[global_idx, 3])
+
+                # Reverse engineer the physical kappa chosen by the solver
+                tan_theta = max(np.tan(theta_rad), 1e-6)
+                fitted_kappa = np.sqrt(max(0, sigma_long**2 - core_pixel_res**2)) / tan_theta
+
+                diag_2theta.append(float(bank_tt[local_idx])) # 2Theta in degrees
+                diag_kappa.append(fitted_kappa)
+
         # Defer plotting by storing the necessary static data
         if create_visualizations:
             N_shapes = len(integrator.candidate_kappas)
@@ -1541,6 +1619,10 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
     if create_visualizations and plot_tasks:
+        # Render the global diagnostic plot in the main thread
+        if len(diag_kappa) > 0:
+            _render_and_save_diagnostic(diag_2theta, diag_kappa, core_pixel_res)
+
         if max_workers is None:
             max_workers = os.cpu_count()
 
