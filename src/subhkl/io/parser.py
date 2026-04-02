@@ -1335,10 +1335,8 @@ def rbf_integrator(
     from subhkl.integration import Peaks
     from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
 
-    sigma_list = [float(s.strip()) for s in sigmas.split(",")]
-
     print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigmas={sigma_list}, Max Peaks Padding={max_peaks}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Kappa=[{min_kappa}..{max_kappa}] (N={num_kappas}), Max Peaks Padding={max_peaks}")
 
     peak_dict = {}
 
