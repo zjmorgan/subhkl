@@ -1314,6 +1314,21 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         res: RBFResult containing intensities [photons/Pixel] and sigmas [photons^0.5 / Pixel^0.5]
     """
 
+    def calculate_panel_phi(xyz_lab, uhat, vhat):
+        """
+        Calculates the true 2D rotation angle (phi) of a peak on a flat detector face.
+        """
+        n_scat = np.column_stack([
+            -xyz_lab[:, 1], 
+            xyz_lab[:, 0], 
+            np.zeros_like(xyz_lab[:, 0])
+        ])
+        
+        du = np.sum(n_scat * vhat, axis=1)
+        dv = -np.sum(n_scat * uhat, axis=1)
+        
+        return np.arctan2(dv, du)
+
     class RBFResult:
         def __init__(self):
             self.h, self.k, self.l = [], [], []
@@ -1396,7 +1411,20 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
 
         all_thetas.extend(bank_tt / 2.0) # Bragg Theta
-        all_phis.extend(bank_az)         # Azimuthal Phi
+
+        # 1. Reconstruct the scattered ray direction in the laboratory frame
+        k_f_x = np.sin(bank_tt) * np.cos(bank_az)
+        k_f_y = np.sin(bank_tt) * np.sin(bank_az)
+        k_f_z = np.cos(bank_tt)
+        xyz_lab_proxy = np.column_stack([k_f_x, k_f_y, k_f_z])
+
+        # 2. Fetch the detector's local pixel basis vectors
+        uhat = np.array(det.uhat)
+        vhat = np.array(det.vhat)
+
+        # 3. Project the scattering plane onto the detector face
+        panel_phi = calculate_panel_phi(xyz_lab_proxy, uhat, vhat)
+        all_phis.extend(panel_phi)       # True 2D Anisotropic Rotation Angle 
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
