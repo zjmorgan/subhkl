@@ -1495,7 +1495,7 @@ def rbf_integrator(
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
     create_visualizations: bool = False,
-    chunk_size: int = 1024,
+    chunk_size: int = 256,
     max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
 ):
     """
