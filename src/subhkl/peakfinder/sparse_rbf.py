@@ -135,21 +135,22 @@ class SparseRBFPeakFinder:
             erf_r = jax.scipy.special.erf((x_grid[0] + 0.5 - y[0]) / sig_sq2) - jax.scipy.special.erf((x_grid[0] - 0.5 - y[0]) / sig_sq2)
             erf_c = jax.scipy.special.erf((x_grid[1] + 0.5 - y[1]) / sig_sq2) - jax.scipy.special.erf((x_grid[1] - 0.5 - y[1]) / sig_sq2)
             return (jnp.pi / 2.0) * (sigma_long**2) * erf_r * erf_c
-
         else:
             # ANISOTROPIC 4x4 QUADRATURE LOGIC
+            actual_sigma_short = jnp.minimum(sigma_short, sigma_long)
+
             # 1. Build the Precision Matrix (Sigma^-1)
             cos_p = jnp.cos(phi)
             sin_p = jnp.sin(phi)
 
             var_l = jnp.maximum(sigma_long**2, 1e-6)
-            var_s = jnp.maximum(sigma_short**2, 1e-6)
+            var_s = jnp.maximum(actual_sigma_short**2, 1e-6)
 
             a = (cos_p**2) / var_l + (sin_p**2) / var_s
             b = sin_p * cos_p * (1.0 / var_l - 1.0 / var_s)
             c = (sin_p**2) / var_l + (cos_p**2) / var_s
 
-            # 2. Setup 4x4 Sub-pixel Offsets (-0.375, -0.125, 0.125, 0.375)
+            # Setup 4x4 Sub-pixel Offsets (-0.375, -0.125, 0.125, 0.375)
             sub_offsets = jnp.array([-0.375, -0.125, 0.125, 0.375])
             ox, oy = jnp.meshgrid(sub_offsets, sub_offsets)
 
@@ -165,11 +166,10 @@ class SparseRBFPeakFinder:
                 # 'a' applies to X (cols, dc), 'c' applies to Y (rows, dr)
                 return jnp.exp(-0.5 * (a * dc**2 + 2.0 * b * dr * dc + c * dr**2))
 
-            # Vectorize over the 4x4 grid of offsets
             sub_evals = vmap(vmap(eval_subpoint))(ox, oy)
 
             # 4. Average the 16 evaluations and scale by analytic volume
-            area_scalar = 2.0 * jnp.pi * sigma_long * sigma_short
+            area_scalar = 2.0 * jnp.pi * sigma_long * actual_sigma_short
             return jnp.mean(sub_evals, axis=(0, 1)) * area_scalar
 
     @staticmethod
@@ -542,7 +542,11 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T  # [Pixel]
                 A_masked = A * a_mask
 
-                volumes = (jnp.pi / 2.0) * (sigma**2)  # [Pixel]
+                volumes = jnp.where(
+                    getattr(self, 'anisotropic', False),
+                    jnp.float32(2.0 * jnp.pi) * best_sig_target * jnp.minimum(getattr(self, 'sigma_short', 1.5), best_sig_target),
+                    jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
+                )  # [Pixel]
                 weights = (sigma / self.ref_sigma) ** self.gamma  # [-]
                 alpha_vec_stat = alpha_z_score * weights  # [Pixel]
                 
@@ -1258,10 +1262,13 @@ def _render_and_save_rbf_plot(args):
             color = color_map[best_c_idx]
 
             if is_anisotropic:
+                # --- THE SMART CLAMP FIX FOR VISUALS ---
+                actual_sigma_short = min(sigma_short, active_sig_long)
+                
                 # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
                 # Angle must be in degrees for Matplotlib
                 w = 4.0 * active_sig_long
-                h = 4.0 * sigma_short
+                h = 4.0 * actual_sigma_short
                 angle_deg = np.degrees(phi)
                 patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
                                 edgecolor=color, facecolor='none', lw=1.5)
