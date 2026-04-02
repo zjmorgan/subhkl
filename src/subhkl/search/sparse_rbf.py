@@ -1303,7 +1303,7 @@ def _render_and_save_rbf_plot(args):
         active_kap = kappas[s_idx]
         key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
         handles.append(key)
-        labels.append(rf'$\kappa={active_kap:.1f}$')
+        labels.append(rf'$\kappa={active_kap:.2f}$')
 
     ax.legend(
         handles=handles, labels=labels, loc='lower center',
