@@ -1487,9 +1487,7 @@ def rbf_integrator(
     output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
     alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
     gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
-    min_kappa: float = typer.Option(0.1, help="Minimum radial elgonation at theta=45deg [Pixels]"),
-    max_kappa: float = typer.Option(15.0, help="Maximum radial elongation at theta=45deg [Pixels]"),
-    num_kappas: int = typer.Option(32, help="Number of kappa values to choose from"),
+    kappas: str = typer.Option("1.0,2.0,4.0", help="Radial elongation at \theta=45deg (pixels)"),
     nominal_kappa: float = typer.Option(1.0, help="The bandwidth of a typical peak, used as a fallback for weak reflections"),
     mosaicity_eta: float = typer.Option(1.5, help="Mosaicity at theta=90deg [pixels]"),
     core_pixel_res: float = typer.Option(0.75, help="Resolution for detecting the core peak [pixels]"),
@@ -1510,8 +1508,9 @@ def rbf_integrator(
     from subhkl.integration import Peaks
     from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
 
+    kappa_list = [float(k.strip()) for k in kappas.split(",")]
     print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Kappa=[{min_kappa}..{max_kappa}] (N={num_kappas}), Max Peaks Padding={max_peaks}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Kappa={kappa_list}, Max Peaks Padding={max_peaks}")
 
     peak_dict = {}
 
@@ -1552,10 +1551,8 @@ def rbf_integrator(
         peak_dict=peak_dict,
         peaks_obj=peaks,             # Pass the full Peaks object
         alpha=alpha,
-        min_kappa=min_kappa,
-        max_kappa=max_kappa,
+        kappas=kappa_list,
         gamma=gamma,
-        num_kappas=num_kappas,
         nominal_kappa=nominal_kappa,
         max_peaks=max_peaks,
         show_progress=show_progress,
