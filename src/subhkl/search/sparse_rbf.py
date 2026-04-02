@@ -1408,27 +1408,26 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         # Calculate for the filtered indices
         batch_rs = np.array([i_arr[idx] for idx in keep_indices])
         batch_cs = np.array([j_arr[idx] for idx in keep_indices])
+        
+        xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
+
+        # get the spherical angles (in degrees)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
 
-        all_thetas.extend(bank_tt / 2.0) # Bragg Theta
-        
-        # 1. Reconstruct the scattered ray direction (unit vector) from calibrated angles
-        k_f_x = np.sin(bank_tt) * np.cos(bank_az)
-        k_f_y = np.sin(bank_tt) * np.sin(bank_az)
-        k_f_z = np.cos(bank_tt)
-        k_f = np.column_stack([k_f_x, k_f_y, k_f_z])
-        
-        # 2. Normal of the scattering plane (k_i x k_f), assuming incident beam is +Z [0,0,1]
+        # Store Bragg theta in radians
+        all_thetas.extend(np.deg2rad(bank_tt) / 2.0) 
+
+        # cartesian panel projection
+        k_f = xyz_lab - s_lab
+
+        # Normal of the scattering plane (k_i x k_f), assuming incident beam is +Z [0,0,1]
         n_scat = np.column_stack([-k_f[:, 1], k_f[:, 0], np.zeros_like(k_f[:, 0])])
-        
-        # 3. Fetch and strictly normalize the detector's local pixel basis vectors
-        u_unit = np.array(det.uhat) / np.linalg.norm(np.array(det.uhat))
-        v_unit = np.array(det.vhat) / np.linalg.norm(np.array(det.vhat))
-        
-        # 4. Project streak direction onto the local panel axes via vector triple product
-        du = np.sum(n_scat * v_unit, axis=1)
-        dv = -np.sum(n_scat * u_unit, axis=1)
-        
+
+        # project streak direction onto the local panel axes via vector triple product
+        du = np.sum(n_scat * det.vhat, axis=1)
+        dv = -np.sum(n_scat * det.uhat, axis=1)
+
+        # arctan2 returns radians
         panel_phi = np.arctan2(dv, du)
         all_phis.extend(panel_phi)
 
