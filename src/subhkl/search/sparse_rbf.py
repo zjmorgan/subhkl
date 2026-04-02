@@ -988,13 +988,14 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             return vmap(slice_img)(f_idx, r_start, c_start), vmap(slice_bg)(f_idx, r_start, c_start), r_start, c_start
 
         @jit
-        def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp):
+        def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp,
+                          thetas_jnp, phis_jnp):
             N_shapes = len(self.candidate_sigmas)
             alpha_z_score = self.alpha
             
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
-                theta_global = thetas[f_global]
-                phi_global = phis[f_global]
+                theta_global = thetas_jnp[f_global]
+                phi_global = phis_jnp[f_global]
 
                 bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
                 noise_floor = jnp.sqrt(bg_med)  # [photons^0.5 / Pixel^0.5]
@@ -1193,7 +1194,8 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 
                 patches, patches_bg, r_starts, c_starts = extract_patches(img_jax_padded, bg_jax_padded, chunk_f, chunk_r, chunk_c)
 
-                res = solve_patches(patches, patches_bg, chunk_f, chunk_r, chunk_c, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp)
+                res = solve_patches(patches, patches_bg, chunk_f, chunk_r, chunk_c, r_starts, c_starts,
+                                    all_fs_jnp, all_rs_jnp, all_cs_jnp, thetas, phis)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
