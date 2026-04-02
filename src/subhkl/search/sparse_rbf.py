@@ -1106,7 +1106,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 # =====================================================================
                 A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)  # [Pixel]
                 
-                sigmas_joint = jnp.tile(dynamic_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
+                sigmas_joint = jnp.tile(self.candidate_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
                 weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
                 
                 alpha_vec_joint = alpha_z_score * weights_joint  
@@ -1152,7 +1152,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 # Extract the best footprint for each neighbor safely along the last axis
                 A_best = A_k[:, indices, best_idx_k]  # Shape: (P*P, K_NEIGHBORS)
 
-                best_sigmas = dynamic_sigmas[best_idx_k]
+                best_sigmas = self.candidate_sigmas[best_idx_k]
                 A_best_masked = A_best * surviving_mask[None, :]  # [Pixel]
 
                 # =====================================================================
@@ -1391,7 +1391,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     Args:
         peak_dict: Dictionary containing peak arrays
         peaks_obj: Instrument mapping object
-        sigmas: List of spectral bandwidth factors
+        sigmas: List of unstretched peak radii
         nominal_sigma: Fallback sigma for crushed peaks
     Returns:
         res: RBFResult containing intensities and sigI
