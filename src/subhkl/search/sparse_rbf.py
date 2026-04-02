@@ -159,10 +159,11 @@ class SparseRBFPeakFinder:
 
             # 3. Evaluate Gaussian at sub-points
             def eval_subpoint(ox_i, oy_i):
-                dr = dr_center + ox_i
-                dc = dc_center + oy_i
-                # Evaluate exponent: -0.5 * (a*dr^2 + 2*b*dr*dc + c*dc^2)
-                return jnp.exp(-0.5 * (a * dr**2 + 2.0 * b * dr * dc + c * dc**2))
+                dr = dr_center + ox_i  # row diff (Y)
+                dc = dc_center + oy_i  # col diff (X)
+
+                # 'a' applies to X (cols, dc), 'c' applies to Y (rows, dr)
+                return jnp.exp(-0.5 * (a * dc**2 + 2.0 * b * dr * dc + c * dr**2))
 
             # Vectorize over the 4x4 grid of offsets
             sub_evals = vmap(vmap(eval_subpoint))(ox, oy)
@@ -1513,13 +1514,16 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
+        # Extract the true 2D projected panel angles we calculated in Phase 1
+        img_panel_phis = [all_phis[idx] for idx in indices]
+
         # Defer plotting by storing the necessary static data
         if create_visualizations:
             N_shapes = len(integrator.candidate_sigmas)
             ref_rs = [float(integrated_results[idx, 1]) for idx in indices]
             ref_cs = [float(integrated_results[idx, 2]) for idx in indices]
             
-            # Safely fetch flags (defaults to False/1.5 if not yet added to integrator __init__)
+            # Safely fetch flags
             is_aniso = getattr(integrator, 'anisotropic', False)
             sig_short = getattr(integrator, 'sigma_short', 1.5)
             
@@ -1527,7 +1531,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 image_raw, physical_bank, run_id, img_key, 
                 img_rs, img_cs, ref_rs, ref_cs, 
                 img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-                bank_az, sig_short, is_aniso
+                img_panel_phis, sig_short, is_aniso  # <--- FIX: Pass the true panel phis here
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
