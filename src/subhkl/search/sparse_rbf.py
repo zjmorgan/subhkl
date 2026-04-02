@@ -946,7 +946,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         self.anisotropic = anisotropic
         self.sigma_short = sigma_short
 
-    def integrate_reflections(self, images_batch, frames, rs, cs):
+    def integrate_reflections(self, images_batch, frames, rs, cs, thetas, phis):
         """
         Args:
             images_batch: [photons/Pixel]
@@ -993,6 +993,9 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             alpha_z_score = self.alpha
             
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
+                theta_global = thetas[f_global]
+                phi_global = phis[f_global]
+
                 bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
                 noise_floor = jnp.sqrt(bg_med)  # [photons^0.5 / Pixel^0.5]
                 
@@ -1044,6 +1047,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 # Safely update the continuous coordinate of the target peak (index 0)
                 local_rs = local_rs.at[0].add(dr)
                 local_cs = local_cs.at[0].add(dc)
+
 
                 def eval_neighbor(nr, nc):
                     def eval_shape(si_long):
