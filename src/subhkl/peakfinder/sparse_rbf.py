@@ -1492,6 +1492,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         run_id = peaks_obj.image.get_run_id(img_key)
 
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)  # [photons/Pixel]
+        H, W = image_raw.shape
+        bw = border_width
 
         if all_R is not None and all_R.ndim == 3:
             current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
@@ -1504,14 +1506,31 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_cs = [all_cs[idx] for idx in indices]  # [Pixel^0.5]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
 
-        img_intensities = [float(integrated_results[idx, 0]) for idx in indices]  # [photons/Pixel]
-        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in indices]  # [Pixel^0.5]
-        img_sigI = [float(integrated_results[idx, 4]) for idx in indices]  # [photons^0.5 / Pixel^0.5]
+        # Edge masking
+        valid_global_indices = []
+        valid_local_indices = []
+        
+        for local_idx, global_idx in enumerate(indices):
+            # Use the relaxed coordinates to check boundaries
+            r = float(integrated_results[global_idx, 1])
+            c = float(integrated_results[global_idx, 2])
+            
+            if (bw <= r < H - bw) and (bw <= c < W - bw):
+                valid_global_indices.append(global_idx)
+                valid_local_indices.append(local_idx)
+
+        # If all peaks were on the border, safely skip to next image
+        if not valid_global_indices:
+            continue
+
+        img_intensities = [float(integrated_results[idx, 0]) for idx in valid_global_indices]  # [photons/Pixel]
+        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in valid_global_indices]  # [Pixel^0.5]
+        img_sigI = [float(integrated_results[idx, 4]) for idx in valid_global_indices]  # [photons^0.5 / Pixel^0.5]
 
         res.intensity += img_intensities
         res.sigma += img_sigI
 
-        for local_idx, global_idx in enumerate(indices):
+        for local_idx, global_idx in zip(valid_local_indices, valid_global_indices):
             res.h.append(meta_h[global_idx])
             res.k.append(meta_k[global_idx])
             res.l.append(meta_l[global_idx])
@@ -1521,14 +1540,16 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
-        # Extract the true 2D projected panel angles we calculated in Phase 1
-        img_panel_phis = [all_phis[idx] for idx in indices]
-
         # Defer plotting by storing the necessary static data
         if create_visualizations:
             N_shapes = len(integrator.candidate_sigmas)
-            ref_rs = [float(integrated_results[idx, 1]) for idx in indices]
-            ref_cs = [float(integrated_results[idx, 2]) for idx in indices]
+            filt_img_rs = [img_rs[i] for i in valid_local_indices]
+            filt_img_cs = [img_cs[i] for i in valid_local_indices]
+            filt_ref_rs = [float(integrated_results[idx, 1]) for idx in valid_global_indices]
+            filt_ref_cs = [float(integrated_results[idx, 2]) for idx in valid_global_indices]
+            
+            # Ensure we use the true panel phis we calculated in Phase 1
+            filt_phis = [all_phis[idx] for idx in valid_global_indices]
             
             # Safely fetch flags
             is_aniso = getattr(integrator, 'anisotropic', False)
@@ -1536,9 +1557,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             
             plot_tasks.append((
                 image_raw, physical_bank, run_id, img_key, 
-                img_rs, img_cs, ref_rs, ref_cs, 
+                filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs, 
                 img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-                img_panel_phis, sig_short, is_aniso  # <--- FIX: Pass the true panel phis here
+                filt_phis, sig_short, is_aniso
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
