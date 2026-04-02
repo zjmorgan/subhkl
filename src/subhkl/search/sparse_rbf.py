@@ -1006,7 +1006,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         @jit
         def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp,
                           thetas_jnp, phis_jnp):
-            N_shapes = len(self.candidate_sigmas)
+            N_shapes = len(self.candidate_kappas)
             alpha_z_score = self.alpha
             
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
@@ -1099,7 +1099,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 # =====================================================================
                 A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)  # [Pixel]
                 
-                sigmas_joint = jnp.tile(self.candidate_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
+                sigmas_joint = jnp.tile(dynamic_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
                 weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
                 
                 alpha_vec_joint = alpha_z_score * weights_joint  
