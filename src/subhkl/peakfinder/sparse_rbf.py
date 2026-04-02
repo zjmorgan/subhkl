@@ -936,10 +936,11 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  num_sigmas=32,
                  nominal_sigma=1.0,
                  anisotropic=False,
-                 sigma_short=1.5):
+                 sigma_short=1.5,
+                 chunk_size=1024):
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=min_sigma, max_sigma=max_sigma,
-            loss=loss, border_width=border_width, num_sigmas=num_sigmas,
+            loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
             show_steps=False
         )
         self.nominal_sigma = nominal_sigma
@@ -1299,7 +1300,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
                             nominal_sigma: float = 1.0, anisotropic: bool = False,
                             sigma_short: float = 1.5, border_width: int = 0,
-                            create_visualizations: bool = False, max_workers: int = None):
+                            chunk_size: int = 1024, create_visualizations: bool = False,
+                            max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
@@ -1343,7 +1345,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
         loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
-        anisotropic=anisotropic, sigma_short=sigma_short,
+        anisotropic=anisotropic, sigma_short=sigma_short, chunk_size=chunk_size,
     )
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)  # [Pixel^0.5]
     integrator.show_steps = show_progress
