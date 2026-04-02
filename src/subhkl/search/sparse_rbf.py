@@ -150,16 +150,19 @@ class SparseRBFPeakFinder:
 
             # Setup 4x4 Sub-pixel Offsets (-0.375, -0.125, 0.125, 0.375)
             sub_offsets = jnp.array([-0.375, -0.125, 0.125, 0.375])
+
+            # meshgrid 'xy' indexing: ox varies across cols (X), oy varies across rows (Y)
             ox, oy = jnp.meshgrid(sub_offsets, sub_offsets)
 
             # Distance from predicted center to pixel centers
+            # x_grid[0] is yy (rows), x_grid[1] is xx (cols)
             dr_center = x_grid[0] - y[0]
             dc_center = x_grid[1] - y[1]
 
             # 3. Evaluate Gaussian at sub-points
             def eval_subpoint(ox_i, oy_i):
-                dr = dr_center + ox_i  # row diff (Y)
-                dc = dc_center + oy_i  # col diff (X)
+                dr = dr_center + oy_i  # row diff (Y) gets oy_i
+                dc = dc_center + ox_i  # col diff (X) gets ox_i
 
                 # 'a' applies to X (cols, dc), 'c' applies to Y (rows, dr)
                 return jnp.exp(-0.5 * (a * dc**2 + 2.0 * b * dr * dc + c * dr**2))
