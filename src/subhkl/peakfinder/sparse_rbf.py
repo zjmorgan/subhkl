@@ -928,42 +928,37 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
     
     Units:
         alpha: [-] (Z-score threshold)
-        min_kappa / max_kappa / nominal_kappa: [-]
+        min_sigma / max_sigma / nominal_sigma: [-]
         mosaicity_eta: [Pixel^0.5] (?)
         gamma: [-]
-        core_pixel_res: [Pixel^0.5]
         Returns integrations containing sigI: [photons^0.5 / Pixel^0.5]
     """
     def __init__(self,
                  alpha=0.05,
-                 min_kappa=0.1,    # [Pixels] at theta=45
-                 max_kappa=15.0,   # [Pixels] at theta=45
+                 min_sigma=0.1,    # [Pixels] at theta=45
+                 max_sigma=15.0,   # [Pixels] at theta=45
                  gamma=2.0,
                  loss='poisson',
                  border_width=0,
-                 num_kappas=32,
-                 nominal_kappa=2.0,
+                 num_sigmas=32,
+                 nominal_sigma=2.0,
                  anisotropic=False,
-                 mosaicity_eta=1.5,   # [Pixels] at theta=90
-                 core_pixel_res=0.75, # [Pixels]
                  chunk_size=1024):
 
         # 1. Initialize parent with safe dummy pixel values to keep it functional 
         # (in case you ever call super().find_peaks_batch)
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=0.5, max_sigma=5.0,
-            loss=loss, border_width=border_width, num_sigmas=num_kappas, chunk_size=chunk_size,
+            loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
             show_steps=False
         )
         
         # 2. Define the Child's distinct Physics-Space parameters
-        self.candidate_kappas = jnp.linspace(min_kappa, max_kappa, num_kappas)
-        self.nominal_kappa = nominal_kappa
+        self.candidate_sigmas = jnp.linspace(min_sigma, max_sigma, num_sigmas)
+        self.nominal_sigma = nominal_sigma
         self.anisotropic = anisotropic
-        self.mosaicity_eta = mosaicity_eta
-        self.core_pixel_res = core_pixel_res
 
-    def integrate_reflections(self, images_batch, frames, rs, cs, thetas, phis):
+    def integrate_reflections(self, images_batch, frames, rs, cs, thetas, phis, stretches):
         """
         Args:
             images_batch: [photons/Pixel]
@@ -1005,9 +1000,10 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             return vmap(slice_img)(f_idx, r_start, c_start), vmap(slice_bg)(f_idx, r_start, c_start), r_start, c_start
 
         @jit
-        def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts, all_fs_jnp, all_rs_jnp, all_cs_jnp,
-                          thetas_jnp, phis_jnp):
-            N_shapes = len(self.candidate_kappas)
+        def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts,
+                          all_fs_jnp, all_rs_jnp, all_cs_jnp,
+                          thetas_jnp, phis_jnp, stretch_factors_jnp):
+            N_shapes = len(self.candidate_sigmas)
             alpha_z_score = self.alpha
             
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
@@ -1066,17 +1062,27 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 local_rs = local_rs.at[0].add(dr)
                 local_cs = local_cs.at[0].add(dc)
 
-                dynamic_sigmas = jnp.sqrt(self.core_pixel_res**2 + (self.candidate_kappas * jnp.tan(theta_global))**2)
-                dynamic_sigma_short = jnp.sqrt(self.core_pixel_res**2 + (self.mosaicity_eta * jnp.sin(theta_global))**2)
+                stretch_global = stretch_factors_jnp[f_global]
+
+                # 1. The dictionary represents the base, un-stretched radius (minor axis)
+                dynamic_sigma_minor = self.candidate_sigmas
+
+                # 2. The major axis is geometrically stretched by the secant effect
+                dynamic_sigma_major = self.candidate_sigmas * stretch_global
 
                 def eval_neighbor(nr, nc):
-                    def eval_shape(si_long):
+                    # We must iterate over BOTH arrays simultaneously
+                    def eval_shape(sig_maj, sig_min):
                         return self._rbf_basis(
-                            x_grid, jnp.array([nr, nc]), si_long, 
-                            theta=theta_global, phi=phi_global, 
-                            anisotropic=self.anisotropic, sigma_short=dynamic_sigma_short
+                            x_grid, jnp.array([nr, nc]), 
+                            sigma_long=sig_maj,            # The stretched axis
+                            theta=0.0, 
+                            phi=phi_global,                # The oblique projection angle
+                            anisotropic=True, 
+                            sigma_short=sig_min            # The base minor axis
                         ).flatten()
-                    return vmap(eval_shape)(dynamic_sigmas).T
+                    
+                    return vmap(eval_shape)(dynamic_sigma_major, dynamic_sigma_minor).T
 
                 A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes) [Pixel]
                 
@@ -1123,8 +1129,8 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 surviving_mask_strict = max_c_ssn > 1e-9
                 num_survivors = jnp.sum(surviving_mask_strict)
 
-                # Fallback uses candidate_kappas
-                nominal_idx = jnp.argmin(jnp.abs(self.candidate_kappas - self.nominal_kappa))
+                # Fallback uses candidate_sigmas
+                nominal_idx = jnp.argmin(jnp.abs(self.candidate_sigmas - self.nominal_sigma))
 
                 # local consensus fallback (average shape of surviving neighbors)
                 sum_survivor_indices = jnp.sum(best_idx_ssn * surviving_mask_strict)
@@ -1214,7 +1220,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 patches, patches_bg, r_starts, c_starts = extract_patches(img_jax_padded, bg_jax_padded, chunk_f, chunk_r, chunk_c)
 
                 res = solve_patches(patches, patches_bg, chunk_f, chunk_r, chunk_c, r_starts, c_starts,
-                                    all_fs_jnp, all_rs_jnp, all_cs_jnp, thetas, phis)
+                                    all_fs_jnp, all_rs_jnp, all_cs_jnp, thetas, phis, stretches)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
@@ -1240,71 +1246,70 @@ from tqdm import tqdm
 from collections import defaultdict
 import os
 
-def _render_and_save_diagnostic(twothetas, kappas, core_res):
-    """Generates a binned scatter plot to verify core optical calibration and prints a compact summary."""
+def _render_and_save_diagnostic(twothetas, sigmas):
+    """Generates a binned scatter plot to verify geometric footprint baseline."""
     import matplotlib.pyplot as plt
     from scipy.stats import binned_statistic
     import numpy as np
 
     if plt.get_backend().lower() != "agg":
         plt.switch_backend("Agg")
-
+        
     fig, ax = plt.subplots(figsize=(10, 6))
-
+    
     tt_arr = np.array(twothetas)
-    k_arr = np.array(kappas)
-
+    sig_arr = np.array(sigmas)
+    
     if len(tt_arr) == 0:
         plt.close(fig)
         return
-
+        
     # --- TERMINAL SUMMARY (Compact 10-bin horizontal output) ---
     c_bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 11) # 10 bins
-    c_medians, c_edges, _ = binned_statistic(tt_arr, k_arr, statistic='median', bins=c_bins)
+    c_medians, c_edges, _ = binned_statistic(tt_arr, sig_arr, statistic='median', bins=c_bins)
     c_centers = 0.5 * (c_edges[1:] + c_edges[:-1])
     c_valid = ~np.isnan(c_medians)
-
-    print(f"\n[Optics Diagnostic] Median \u03ba vs 2\u03b8 (Core = {core_res:.2f} px):")
+    
+    print(f"\n[Optics Diagnostic] Median Base Radius (\u03c3_0) vs 2\u03b8:")
     tt_str = "  2Theta: " + " | ".join([f"{x:4.1f}\u00b0" for x in c_centers[c_valid]])
-    kap_str = "  Kappa:  " + " | ".join([f"{x:5.2f}" for x in c_medians[c_valid]])
+    sig_str = "  Sigma:  " + " | ".join([f"{x:5.2f}px" for x in c_medians[c_valid]])
     print(tt_str)
-    print(kap_str + "\n")
-
+    print(sig_str + "\n")
+    
     # --- PLOTTING (High-res 40-bin output) ---
     # 1. Plot all individual peaks as semi-transparent dots
-    ax.scatter(tt_arr, k_arr, alpha=0.15, s=15, color='dodgerblue', label='Fitted Peaks')
-
+    ax.scatter(tt_arr, sig_arr, alpha=0.25, s=15, color='dodgerblue', label='Strong Fitted Peaks (SNR > 3)')
+    
     # 2. Calculate and plot the robust rolling median
     bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 40)
-    bin_medians, bin_edges, _ = binned_statistic(tt_arr, k_arr, statistic='median', bins=bins)
+    bin_medians, bin_edges, _ = binned_statistic(tt_arr, sig_arr, statistic='median', bins=bins)
     bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-
+    
     # Filter out empty bins
     valid_bins = ~np.isnan(bin_medians)
-
-    ax.plot(bin_centers[valid_bins], bin_medians[valid_bins],
-            color='red', lw=3, label='Rolling Median $\kappa$')
-
+    
+    ax.plot(bin_centers[valid_bins], bin_medians[valid_bins], 
+            color='red', lw=3, label='Rolling Median $\sigma_0$')
+    
     # Formatting
     ax.set_xlabel(r'Scattering Angle $2\theta$ (degrees)', fontsize=14)
-    ax.set_ylabel(r'Fitted Spectral Bandwidth ($\kappa$)', fontsize=14)
-    ax.set_title(f'Optics Calibration Diagnostic (Core Res: {core_res:.2f} px)', fontsize=16)
-
+    ax.set_ylabel(r'Fitted Base Radius $\sigma_0$ (Pixels)', fontsize=14)
+    ax.set_title('Stationary Laue Geometric Footprint Diagnostic', fontsize=16)
+    
     ax.grid(True, linestyle='--', alpha=0.6)
     ax.legend(fontsize=12)
-
+    
     # Set Y-axis to start at 0 so the scale is honest
     ax.set_ylim(bottom=0)
-
+    
     fig.tight_layout()
-    fig.savefig("kappa_calibration_diagnostic.png", dpi=200)
+    fig.savefig("sigma_calibration_diagnostic.png", dpi=200)
     plt.close(fig)
 
 def _render_and_save_rbf_plot(args):
-    """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
-     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, kappas, N_shapes,
-     phis, thetas, mosaicity_eta, core_pixel_res, is_anisotropic) = args
+     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes,
+     phis, stretches, is_anisotropic) = args
 
     import matplotlib.pyplot as plt
     from matplotlib.patches import Circle, Ellipse
@@ -1331,31 +1336,28 @@ def _render_and_save_rbf_plot(args):
     ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
     color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
 
-    for s_idx, (cx, cy, intensity, phi, theta) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis, thetas)):
+    for s_idx, (cx, cy, intensity, phi, stretch) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis, stretches)):
         is_active = intensity > 0
         if is_active:
-            # The solver returned the dynamic pixel size (sigma_long)
-            active_sig_long = img_spatial_sigmas[s_idx]
+            # 2. The solver returned the pure, un-stretched Base Radius (sigma_0)
+            active_base_sig = img_spatial_sigmas[s_idx]
 
-            # Reverse-engineer the Kappa factor to find the right color legend
-            tan_theta = max(np.tan(theta), 1e-6)
-            active_kappa = np.sqrt(max(0, active_sig_long**2 - core_pixel_res**2)) / tan_theta
-
-            best_c_idx = int(np.argmin(np.abs(np.array(kappas) - active_kappa)))
+            # Color map based directly on the base radius dictionary
+            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_base_sig)))
             color = color_map[best_c_idx]
 
             if is_anisotropic:
-                # Forward-calculate the physical short axis (Mosaicity) for this specific theta
-                dynamic_sigma_short = np.sqrt(core_pixel_res**2 + (mosaicity_eta * np.sin(theta))**2)
-
-                # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
-                w = 4.0 * active_sig_long
-                h = 4.0 * dynamic_sigma_short
+                # 3. Reconstruct the physical ellipse footprint
+                # Minor axis = Base isotropic footprint
+                # Major axis = Stretched by the secant effect of the panel tilt
+                w = 4.0 * (active_base_sig * stretch)  # Stretched direction
+                h = 4.0 * active_base_sig              # Un-stretched direction
+                
                 angle_deg = np.degrees(phi)
                 patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
                                 edgecolor=color, facecolor='none', lw=1.5)
             else:
-                patch = Circle((cx, cy), 2.0 * active_sig_long,
+                patch = Circle((cx, cy), 2.0 * active_base_sig,
                                edgecolor=color, facecolor='none', lw=1.5)
 
             ax.add_patch(patch)
@@ -1363,10 +1365,10 @@ def _render_and_save_rbf_plot(args):
     handles, labels = ax.get_legend_handles_labels()
     for s_idx in range(N_shapes):
         color = color_map[s_idx]
-        active_kap = kappas[s_idx]
+        active_kap = sigmas[s_idx]
         key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
         handles.append(key)
-        labels.append(rf'$\kappa={active_kap:.2f}$')
+        labels.append(rf'$\sigma={active_kap:.2f}$')
 
     ax.legend(
         handles=handles, labels=labels, loc='lower center',
@@ -1379,21 +1381,18 @@ def _render_and_save_rbf_plot(args):
     fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
     plt.close(fig)
 
-def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
+def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            nominal_kappa: float = 2.0, anisotropic: bool = False,
-                            mosaicity_eta: float = 1.5, core_pixel_res: float = 0.75,
+                            nominal_sigma: float = 2.0, anisotropic: bool = False,
                             border_width: int = 0, chunk_size: int = 1024,
                             create_visualizations: bool = False, max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
         peaks_obj: Instrument mapping object
-        kappas: List of spectral bandwidth factors
-        nominal_kappa: Fallback kappa for crushed peaks
-        mosaicity_eta: Mosaicity angular broadening factor
-        core_pixel_res: The absolute minimum optical resolution in pixels
+        sigmas: List of spectral bandwidth factors
+        nominal_sigma: Fallback sigma for crushed peaks
     Returns:
         res: RBFResult containing intensities and sigI
     """
@@ -1410,13 +1409,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
         sample_offset = np.zeros(3)
 
     integrator = SparseLaueIntegrator(
-        alpha=alpha,  min_kappa=min(kappas), max_kappa=max(kappas), gamma=gamma,
-        loss='poisson', border_width=border_width, nominal_kappa=nominal_kappa,
-        anisotropic=anisotropic, mosaicity_eta=mosaicity_eta, core_pixel_res=core_pixel_res,
-        chunk_size=chunk_size,
+        alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
+        loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
+        anisotropic=anisotropic, chunk_size=chunk_size,
     )
     # Ensure the solver dictionary perfectly matches the provided list
-    integrator.candidate_kappas = jnp.array(kappas, dtype=jnp.float32)
+    integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)
     integrator.show_steps = show_progress
 
     # --- PHASE 1: GATHER AND BATCH ---
@@ -1428,7 +1426,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
 
     frame_counter = 0
     img_keys_ordered = sorted(peak_dict.keys())
-    all_thetas, all_phis = [], []
+    all_thetas, all_phis, all_stretches = [], [], []
 
     for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
         p_data = peak_dict[img_key]
@@ -1476,16 +1474,32 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
         # Store Bragg theta in RADIANS
         all_thetas.extend(np.deg2rad(bank_tt) / 2.0)
 
-        # --- CARTESIAN PANEL PROJECTION ---
-        k_f = xyz_lab - s_lab
-        n_scat = np.column_stack([-k_f[:, 1], k_f[:, 0], np.zeros_like(k_f[:, 0])])
+        # Oblique incidence geometry
+        k_f = xyz_lab - s_lab  # Vector from sample to pixel
+        k_f_norm = np.linalg.norm(k_f, axis=1, keepdims=True)
+        k_f_hat = k_f / k_f_norm
 
-        du = np.sum(n_scat * det.vhat, axis=1)
-        dv = -np.sum(n_scat * det.uhat, axis=1)
+        # 1. Detector normal (Cross product of pixel axes)
+        n_det = np.cross(det.uhat, det.vhat)
+        n_det_hat = n_det / np.linalg.norm(n_det)
 
-        panel_phi = np.arctan2(dv, du)
+        # 2. Calculate Stretch Factor (1 / cos(alpha))
+        cos_alpha = np.abs(np.dot(k_f_hat, n_det_hat))  # Shape: (N,)
+        stretch_factor = 1.0 / np.clip(cos_alpha, 0.1, 1.0) # Protect against 90-deg edges
 
-        all_phis.extend(panel_phi)
+        # 3. Calculate Orientation (Project scattered ray onto detector plane)
+        # d_stretch is the vector in the panel plane pointing in the direction of steepest tilt
+        dot_product_expanded = np.dot(k_f_hat, n_det_hat)[:, np.newaxis]
+        d_stretch = k_f_hat - (dot_product_expanded * n_det_hat)
+
+        # Project d_stretch onto the pixel axes (u, v) to get the 2D panel angle
+        du = np.sum(d_stretch * det.uhat, axis=1)
+        dv = np.sum(d_stretch * det.vhat, axis=1)
+        
+        phi_oblique = np.arctan2(dv, du)
+
+        all_phis.extend(phi_oblique)
+        all_stretches.extend(stretch_factor)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -1518,7 +1532,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
         images_batch, frames, all_rs, all_cs,
-        thetas=np.array(all_thetas), phis=np.array(all_phis)
+        thetas=np.array(all_thetas), phis=np.array(all_phis),
+        stretches=np.array(all_stretches)
     )
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
@@ -1530,7 +1545,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
 
     # diagnostic data arrays
     diag_2theta = []
-    diag_kappa = []
+    diag_sigma = []
 
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -1583,48 +1598,44 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
-            # --- COLLECT DIAGNOSTIC DATA ---
-            # Only record kappa for peaks that successfully integrated (Intensity > 0)
+            # Only record sigma for peaks that successfully integrated (Intensity > 0)
             intensity = float(integrated_results[global_idx, 0])
+            sigI = float(integrated_results[global_idx, 4])
+
+            # ONLY record sigma for strong peaks (e.g., SNR > 3.0) to ignore crushed noise
             if intensity > 0:
-                theta_rad = all_thetas[global_idx]
-                sigma_long = float(integrated_results[global_idx, 3])
-
-                # Reverse engineer the physical kappa chosen by the solver
-                tan_theta = max(np.tan(theta_rad), 1e-6)
-                fitted_kappa = np.sqrt(max(0, sigma_long**2 - core_pixel_res**2)) / tan_theta
-
+                # The solver now directly returns the Base Radius (sigma_0) from the dictionary
+                fitted_sigma = float(integrated_results[global_idx, 3])
                 diag_2theta.append(float(bank_tt[local_idx])) # 2Theta in degrees
-                diag_kappa.append(fitted_kappa)
+                diag_sigma.append(fitted_sigma)
 
         # Defer plotting by storing the necessary static data
         if create_visualizations:
-            N_shapes = len(integrator.candidate_kappas)
+            N_shapes = len(integrator.candidate_sigmas)
             filt_img_rs = [img_rs[i] for i in valid_local_indices]
             filt_img_cs = [img_cs[i] for i in valid_local_indices]
             filt_ref_rs = [float(integrated_results[idx, 1]) for idx in valid_global_indices]
             filt_ref_cs = [float(integrated_results[idx, 2]) for idx in valid_global_indices]
 
             filt_phis = [all_phis[idx] for idx in valid_global_indices]
-            filt_thetas = [all_thetas[idx] for idx in valid_global_indices]
+            
+            # Extract the stretches for the valid peaks
+            filt_stretches = [all_stretches[idx] for idx in valid_global_indices]
 
-            # Safely fetch physics flags
             is_aniso = getattr(integrator, 'anisotropic', anisotropic)
-            eta = getattr(integrator, 'mosaicity_eta', mosaicity_eta)
-            core_res = getattr(integrator, 'core_pixel_res', core_pixel_res)
 
             plot_tasks.append((
                 image_raw, physical_bank, run_id, img_key,
                 filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs,
-                img_intensities, img_spatial_sigmas, kappas, N_shapes,
-                filt_phis, filt_thetas, eta, core_res, is_aniso
+                img_intensities, img_spatial_sigmas, sigmas, N_shapes,
+                filt_phis, filt_stretches, is_aniso
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
     if create_visualizations and plot_tasks:
         # Render the global diagnostic plot in the main thread
-        if len(diag_kappa) > 0:
-            _render_and_save_diagnostic(diag_2theta, diag_kappa, core_pixel_res)
+        if len(diag_sigma) > 0:
+            _render_and_save_diagnostic(diag_2theta, diag_sigma)
 
         if max_workers is None:
             max_workers = os.cpu_count()

@@ -1312,10 +1312,8 @@ def rbf_integrator(
     output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
     alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
     gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
-    kappas: str = typer.Option("1.0,2.0,4.0", help="Radial elongation at \theta=45deg (pixels)"),
-    nominal_kappa: float = typer.Option(1.0, help="The bandwidth of a typical peak, used as a fallback for weak reflections"),
-    mosaicity_eta: float = typer.Option(1.5, help="Mosaicity at theta=90deg [pixels]"),
-    core_pixel_res: float = typer.Option(0.75, help="Resolution for detecting the core peak [pixels]"),
+    sigmas: str = typer.Option("1.0,2.0,4.0", help="Unstretched peak radii"),
+    nominal_sigma: float = typer.Option(1.0, help="The typical peak radius, used as a fallback for weak reflections"),
     anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
@@ -1332,9 +1330,9 @@ def rbf_integrator(
     from subhkl.integration import Peaks
     from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
 
-    kappa_list = [float(k.strip()) for k in kappas.split(",")]
+    sigma_list = [float(k.strip()) for k in sigmas.split(",")]
     print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Kappa={kappa_list}, Max Peaks Padding={max_peaks}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}")
 
     peak_dict = {}
 
@@ -1375,16 +1373,14 @@ def rbf_integrator(
         peak_dict=peak_dict,
         peaks_obj=peaks,             # Pass the full Peaks object
         alpha=alpha,
-        kappas=kappa_list,
+        sigmas=sigma_list,
         gamma=gamma,
-        nominal_kappa=nominal_kappa,
+        nominal_sigma=nominal_sigma,
         max_peaks=max_peaks,
         show_progress=show_progress,
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
         anisotropic=anisotropic,
-        mosaicity_eta=mosaicity_eta,
-        core_pixel_res=core_pixel_res,
         border_width=border_width,
         chunk_size=chunk_size,
         create_visualizations=create_visualizations,
