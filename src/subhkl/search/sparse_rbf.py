@@ -137,14 +137,12 @@ class SparseRBFPeakFinder:
             return (jnp.pi / 2.0) * (sigma_long**2) * erf_r * erf_c
         else:
             # ANISOTROPIC 4x4 QUADRATURE LOGIC
-            actual_sigma_short = jnp.minimum(sigma_short, sigma_long)
-
             # 1. Build the Precision Matrix (Sigma^-1)
             cos_p = jnp.cos(phi)
             sin_p = jnp.sin(phi)
 
             var_l = jnp.maximum(sigma_long**2, 1e-6)
-            var_s = jnp.maximum(actual_sigma_short**2, 1e-6)
+            var_s = jnp.maximum(sigma_short**2, 1e-6)
 
             a = (cos_p**2) / var_l + (sin_p**2) / var_s
             b = sin_p * cos_p * (1.0 / var_l - 1.0 / var_s)
@@ -169,7 +167,7 @@ class SparseRBFPeakFinder:
             sub_evals = vmap(vmap(eval_subpoint))(ox, oy)
 
             # 4. Average the 16 evaluations and scale by analytic volume
-            area_scalar = 2.0 * jnp.pi * sigma_long * actual_sigma_short
+            area_scalar = 2.0 * jnp.pi * sigma_long * sigma_short
             return jnp.mean(sub_evals, axis=(0, 1)) * area_scalar
 
     @staticmethod
@@ -1287,12 +1285,9 @@ def _render_and_save_rbf_plot(args):
                 # Forward-calculate the physical short axis (Mosaicity) for this specific theta
                 dynamic_sigma_short = np.sqrt(core_pixel_res**2 + (mosaicity_eta * np.sin(theta))**2)
 
-                # --- THE SMART CLAMP FIX FOR VISUALS ---
-                actual_sigma_short = min(dynamic_sigma_short, active_sig_long)
-
                 # Ellipse requires full diameters: 2 * (2 * sigma) = 4 * sigma
                 w = 4.0 * active_sig_long
-                h = 4.0 * actual_sigma_short
+                h = 4.0 * sigma_short
                 angle_deg = np.degrees(phi)
                 patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
                                 edgecolor=color, facecolor='none', lw=1.5)
@@ -1326,9 +1321,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
                             nominal_kappa: float = 2.0, anisotropic: bool = False,
                             mosaicity_eta: float = 1.5, core_pixel_res: float = 0.75,
-                            mosaicity_model: bool = True, border_width: int = 0,
-                            chunk_size: int = 1024, create_visualizations: bool = False,
-                            max_workers: int = None):
+                            border_width: int = 0, chunk_size: int = 1024,
+                            create_visualizations: bool = False, max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
@@ -1337,7 +1331,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
         nominal_kappa: Fallback kappa for crushed peaks
         mosaicity_eta: Mosaicity angular broadening factor
         core_pixel_res: The absolute minimum optical resolution in pixels
-        mosaicity_model: If True, rotates footprints 90 deg to align with tangential smearing
     Returns:
         res: RBFResult containing intensities and sigI
     """
@@ -1428,10 +1421,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, kappas: List[float],
         dv = -np.sum(n_scat * det.uhat, axis=1)
 
         panel_phi = np.arctan2(dv, du)
-
-        # --- THE PHYSICS PIVOT (Mosaicity Tangent vs Spectral Radial) ---
-        if mosaicity_model:
-            panel_phi += np.pi / 2.0
 
         all_phis.extend(panel_phi)
 
