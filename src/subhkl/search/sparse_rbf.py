@@ -1291,13 +1291,16 @@ def _render_and_save_rbf_plot(args):
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            nominal_sigma: float = 1.0, border_width: int = 0,
+                            nominal_sigma: float = 1.0, anisotropic: bool = False,
+                            sigma_short: float = 1.5, border_width: int = 0,
                             create_visualizations: bool = False, max_workers: int = None):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
         peaks_obj: Instrument mapping object
         sigmas: List of [Pixel^0.5]
+        nominal_sigma: Fallback sigma for weak peaks
+        sigma_short: Anisotropic standard deviation [Pixel^.5]
         alpha: [-] (Z-score threshold)
         gamma: [-] (Besov weight)
         max_peaks: [-]
@@ -1319,6 +1322,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
         loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
+        anisotropic=anisotropic, sigma_short=sigma_short,
     )
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)  # [Pixel^0.5]
     integrator.show_steps = show_progress
