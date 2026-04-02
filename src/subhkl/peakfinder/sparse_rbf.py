@@ -1370,6 +1370,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
                 unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
 
+        keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
+        actual_peaks_count = len(keep_indices)
+
         # Calculate angles for the batch immediately
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
@@ -1388,9 +1391,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         all_thetas.extend(bank_tt / 2.0) # Bragg Theta
         all_phis.extend(bank_az)         # Azimuthal Phi
-
-        keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
-        actual_peaks_count = len(keep_indices)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
