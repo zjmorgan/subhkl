@@ -1511,7 +1511,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         images_list.append(image_raw)
 
         for data in keep_data:
-            idx = data['idx']
+            idx = data['rep_idx']
             all_frames.append(frame_counter)
             all_rs.append(i_arr[idx])
             all_cs.append(j_arr[idx])
