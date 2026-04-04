@@ -1518,7 +1518,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             opt_dists.append(all_distances[idx])
 
     # 4. Run the Global Optimizer
-    Sigma_3D_jnp = optimize_global_crystal(
+    res_x = optimize_global_crystal(
         jnp.array(opt_patches), jnp.array(opt_bgs), 
         jnp.array(opt_drs), jnp.array(opt_dcs),
         jnp.array(opt_Pmats), jnp.array(opt_dists)
