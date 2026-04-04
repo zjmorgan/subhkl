@@ -980,41 +980,57 @@ def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, distances, pa
 val_and_grad_fn = jit(jax.value_and_grad(global_shape_objective), static_argnames=['patch_size'])
 
 def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
-    """Finds the optimal 6 global parameters for the 3D crystal tensor."""
-    def scipy_objective(x_np):
-        val, grad = val_and_grad_fn(jnp.array(x_np), patches, bgs, drs, dcs, P_mats, distances, patches.shape[-1])
-        return np.array(val, dtype=np.float64), np.array(grad, dtype=np.float64)
+    # 1. Define the characteristic scales of the physical parameters.
+    # We expect 1mm (1e-3 m) radii and 1mrad (1e-3 rad) mosaicity.
+    # scales = [L11, L21, L22, L31, L32, L33, eta]
+    scales = np.array([1e-3, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3])
 
-    # Initial guess: 1.0mm sphere (0.001m) + 0.001 rad mosaicity
-    x0 = np.array([0.001, 0.0, 0.001, 0.0, 0.0, 0.001, 0.001])
+    def scipy_objective(x_opt):
+        # Forward Pass: Optimizer Space -> Physical Space
+        x_phys = x_opt * scales
 
-    print("\n  > Optimizing 3D Global Crystal Tensor...")
-    res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
+        # Evaluate exact JAX physics
+        val, grad_phys = val_and_grad_fn(
+            jnp.array(x_phys), patches, bgs, drs, dcs, P_mats, distances, patches.shape[-1]
+        )
+
+        # Backward Pass: Chain Rule for the Gradient
+        # d(val)/d(x_opt) = d(val)/d(x_phys) * scales
+        grad_opt = np.array(grad_phys, dtype=np.float64) * scales
+
+        return np.array(val, dtype=np.float64), grad_opt
+
+    # 2. Initial guess defined in Physical Space (meters/radians)
+    # A 1.0 mm isotropic sphere + 1.0 mrad mosaicity
+    x0_phys = np.array([1e-3, 0.0, 1e-3, 0.0, 0.0, 1e-3, 1e-3])
+
+    # 3. Transform initial guess into Optimizer Space (now perfectly O(1))
+    x0_opt = x0_phys / scales
+
+    print("\n  > Optimizing 3D Global Crystal Tensor + Mosaicity...")
+
+    # SciPy runs entirely in the normalized Optimizer Space
+    res = scipy.optimize.minimize(scipy_objective, x0_opt, method='L-BFGS-B', jac=True)
 
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
 
+    # 4. Transform the final result back to Physical Space for downstream use
+    x_final_phys = res.x * scales
+
     # --- EXTRACT PHYSICAL DIMENSIONS ---
-    # 1. Build the optimal shape tensor (units: m^2)
-    Sigma_shape_opt = np.array(build_3d_cov(jnp.array(res.x[:6])))
-
-    # 2. Calculate eigenvalues (variances along principal axes in m^2)
-    # Using eigvalsh because covariance matrices are symmetric positive semi-definite
+    Sigma_shape_opt = np.array(build_3d_cov(jnp.array(x_final_phys[:6])))
     eigvals = np.linalg.eigvalsh(Sigma_shape_opt)
-
-    # 3. Square root to get 1-sigma radii in meters
     principal_axes_m = np.sqrt(np.maximum(eigvals, 0.0))
-
-    # 4. Convert to millimeters
     principal_axes_mm = principal_axes_m * 1000.0
 
     print("  [Physical Sample Properties]")
-    print(f"  > Mosaicity (\u03b7): {abs(res.x[6])*1000:.3f} mrad")
+    print(f"  > Mosaicity (\u03b7): {abs(x_final_phys[6])*1000:.3f} mrad")
     print(f"  > Crystal Principal Axes (1\u03c3 radii):")
     print(f"      Minor: {principal_axes_mm[0]:.4f} mm")
     print(f"      Mid:   {principal_axes_mm[1]:.4f} mm")
     print(f"      Major: {principal_axes_mm[2]:.4f} mm\n")
 
-    return res.x
+    return x_final_phys
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
