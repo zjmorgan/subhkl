@@ -1490,6 +1490,8 @@ def rbf_integrator(
     sigmas: str = typer.Option("1.0,2.0,4.0", help="Unstretched peak radii"),
     nominal_sigma: float = typer.Option(1.0, help="The typical peak radius, used as a fallback for weak reflections"),
     anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
+    fit_mosaicity: bool = typer.Option(False, help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. "
+                                                   "Only use in non-spherical detector geometries."),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
     show_progress: bool = typer.Option(True, "--show-progress"),
@@ -1556,6 +1558,7 @@ def rbf_integrator(
         all_R=all_R,                 # Pass rotation and offset downstream
         sample_offset=sample_offset,
         anisotropic=anisotropic,
+        fit_mosaicity=fit_mosaicity,
         border_width=border_width,
         chunk_size=chunk_size,
         create_visualizations=create_visualizations,
