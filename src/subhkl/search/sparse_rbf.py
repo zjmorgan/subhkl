@@ -984,8 +984,8 @@ def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
         val, grad = val_and_grad_fn(jnp.array(x_np), patches, bgs, drs, dcs, P_mats, distances, patches.shape[-1])
         return np.array(val, dtype=np.float64), np.array(grad, dtype=np.float64)
 
-    # Initial guess: Isotropic 1.0 pixel sphere
-    x0 = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.001])
+    # Initial guess: 1.0mm sphere (0.001m) + 0.001 rad mosaicity
+    x0 = np.array([0.001, 0.0, 0.001, 0.0, 0.0, 0.001, 0.001])
 
     print("\n  > Optimizing 3D Global Crystal Tensor...")
     res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
