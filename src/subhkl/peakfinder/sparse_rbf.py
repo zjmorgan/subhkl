@@ -1200,7 +1200,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 local_cs = local_cs.at[0].add(dc)
 
                 # =====================================================================
-                # ANALYTIC GAUSSIAN EVALUATION (No Dictionary Search!)
+                # ANALYTIC GAUSSIAN EVALUATION 
                 # =====================================================================
                 def eval_neighbor(nr, nc):
                     det_sigma = jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)
@@ -1209,14 +1209,17 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                     b = -peak_cov_uv / det_sigma
                     c = peak_var_u / det_sigma
 
-                    dr_grid = x_grid[0] - nr # rows (V)
-                    dc_grid = x_grid[1] - nc # cols (U)
+                    dr_grid = x_grid[0] - nr 
+                    dc_grid = x_grid[1] - nc 
 
                     gaussian = jnp.exp(-0.5 * (a * dc_grid**2 + 2.0 * b * dr_grid * dc_grid + c * dr_grid**2))
+                    
+                    # 1. The analytic volume of this specific 2D footprint
                     area_scalar = 2.0 * jnp.pi * jnp.sqrt(det_sigma)
-
-                    # Flatten returns directly to (P*P) because N_shapes is gone!
-                    return (gaussian * area_scalar).flatten() 
+                    
+                    # 2. Divide by the volume so the basis sums exactly to 1.0.
+                    # This guarantees the solver parameter 'c' perfectly equals TOTAL PHOTON FLUX.
+                    return (gaussian / area_scalar).flatten() 
 
                 A_all = vmap(eval_neighbor)(local_rs, local_cs) 
                 y_sub = (patch - patch_bg).flatten() 
@@ -1225,17 +1228,16 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 closest_k = jnp.argmin(pixel_dists_k, axis=1)
                 pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
 
-                A_k = A_all.T # (P*P, K_NEIGHBORS)
+                A_k = A_all.T 
                 A_k_masked = A_k * pixel_masks 
 
-                # Calculate effective scalar size for the L1 threshold
+                # We use the scalar effective sigma solely for weighting the L1 Z-score threshold
                 effective_sigma = jnp.sqrt(jnp.sqrt(jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)))
                 weight = (effective_sigma / self.ref_sigma) ** self.gamma 
                 alpha_vec_joint = jnp.full(K_NEIGHBORS, alpha_z_score * weight) 
 
                 c_warm_joint = jnp.zeros(K_NEIGHBORS, dtype=jnp.float32) 
 
-                # The SSN Solver runs ONCE per neighbor set. Extremely fast.
                 c_ssn = self._solve_ssn_unified(
                     A_k_masked, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm_joint, 20, force_target=False
                 )
@@ -1257,12 +1259,12 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 rhs = A_tilde.T @ (w * y_sub)  
                 c_ols = C_mat @ rhs 
 
-                c_final_target = c_ols[0] 
-                volumes = jnp.float32(2.0 * jnp.pi) * jnp.sqrt(jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)) 
-
-                intensity = c_final_target * volumes 
+                # Because the basis is normalized, c_ols is literally the total unpenalized photon count!
+                intensity = c_final_target = c_ols[0] 
+                
+                # The variance of the flux parameter from the Fisher Information diagonal
                 var_c0 = C_mat[0, 0] 
-                sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0)) 
+                sigI = jnp.sqrt(jnp.maximum(var_c0, 0.0)) 
 
                 return jnp.array([
                     intensity, 
