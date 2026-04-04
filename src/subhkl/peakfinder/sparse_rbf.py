@@ -1550,8 +1550,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         Skew = np.eye(3) - np.outer(k_f_hat, n_det_hat) / cos_alpha
         
         # Pixel Pitch Scaling Matrix
-        pixel_pitch_u = det.width / det.m
-        pixel_pitch_v = det.height / det.n
+        pixel_pitch_u = det.width / (det.m - 1)
+        pixel_pitch_v = det.height / (det.n - 1)
         S_pix = np.diag([1.0 / pixel_pitch_u, 1.0 / pixel_pitch_v])
         
         # The Ultimate Projection Matrix 
