@@ -1456,25 +1456,32 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
 
-        # Exact crystallographic harmonic deduplication
+        # Exact crystallographic harmonic deduplication for TOF Unmixing
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
             if h == 0 and k == 0 and l == 0:
                 continue
 
+            # 1. Identify the fundamental ray
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
 
+            # 2. Store the EXACT observed harmonic and its wavelength
+            # We group them by their spatial/TOF coordinate so we don't double-count 
+            # if the indexer reported multiple harmonics for a single merged blob.
             if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
-                # Explicitly compute and store the physical fundamental properties
                 unique_peaks[fund_hkl] = {
                     'idx': idx, 
                     'hkl_sq': hkl_sq[idx],
-                    'fund_h': h // g,
-                    'fund_k': k // g,
-                    'fund_l': l // g,
-                    'fund_wl': wl_arr[idx] * g  # Exact physical wavelength scaling
+                    'fund_h': h // g,      # H_0
+                    'fund_k': k // g,      # K_0
+                    'fund_l': l // g,      # L_0
+                    'obs_h': h,            # Hobs
+                    'obs_k': k,            # Kobs
+                    'obs_l': l,            # Lobs
+                    'harmonic_id': g,      # The harmonic order
+                    'obs_wl': wl_arr[idx]  # The EXACT observed wavelength of this harmonic
                 }
 
         # Extract the processed data, sorted by original index to maintain determinism
@@ -1517,7 +1524,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             meta_h.append(data['fund_h'])
             meta_k.append(data['fund_k'])
             meta_l.append(data['fund_l'])
-            meta_wl.append(data['fund_wl'])
+            meta_wl.append(data['obs_wl'])
             meta_keys.append(img_key)
 
         frame_counter += 1
