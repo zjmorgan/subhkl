@@ -1481,6 +1481,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     bw = max(border_width, 5)
 
     all_P_mats = []
+    all_distances = []
     
     for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector(img_key)
