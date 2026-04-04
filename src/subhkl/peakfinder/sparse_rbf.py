@@ -1554,13 +1554,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         jnp.array(opt_patches), jnp.array(opt_bgs), 
         jnp.array(opt_drs), jnp.array(opt_dcs), 
         jnp.array(opt_Pmats), jnp.array(opt_dists),
-        fit_mosaicity=fit_mosaicity  # Passed from the class init
+        fit_mosaicity=fit_mosaicity
     )
 
     # 5. Project the EXACT 2D footprints for ALL peaks
     Sigma_shape_jnp = build_3d_cov(jnp.array(res_x[:6]))
     
-    if self.fit_mosaicity:
+    if fit_mosaicity:
         Sigma_eta_jnp = jnp.eye(3) * (abs(res_x[6])**2 + 1e-12)
     else:
         Sigma_eta_jnp = jnp.zeros((3, 3))
