@@ -1435,13 +1435,46 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     frames = np.array(all_frames, dtype=int)
 
     # --- PHASE 1.5: GLOBAL TENSOR OPTIMIZATION ---
-    # 1. Build P matrices for all peaks
-    # P maps [X, Y, Z]_lab to [Cols, Rows]_det
+    B, H, W = images_batch.shape
+    bw = max(border_width, 5)
+
+    # 1. Build the exact P_true matrices for all peaks
     all_P_mats = []
-    for img_key, idx in zip(meta_keys, range(len(all_rs))):
+    
+    for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector(img_key)
-        # uhat = cols (X), vhat = rows (Y)
-        all_P_mats.append(np.vstack([det.uhat, det.vhat])) 
+        run_id = frames[idx] 
+        
+        # Get sample offset
+        if all_R is not None and all_R.ndim == 3:
+            current_R = all_R[run_id] if run_id < len(all_R) else all_R[0]
+        else:
+            current_R = all_R
+        s_lab = current_R @ sample_offset if current_R is not None else sample_offset
+        
+        # 1a. Ray vector (k_f)
+        pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
+        k_f = pixel_xyz - s_lab
+        k_f_hat = k_f / np.linalg.norm(k_f)
+        
+        # 1b. Detector Normal (n)
+        n_det = np.cross(det.uhat, det.vhat)
+        n_det_hat = n_det / np.linalg.norm(n_det)
+        
+        # 1c. Orthogonal Projection
+        P_ortho = np.vstack([det.uhat, det.vhat]) # (2, 3)
+        
+        # 1d. The Central Projection Skew Matrix
+        cos_alpha = np.dot(k_f_hat, n_det_hat)
+        # Protect against rays parallel to the detector (edge cases)
+        cos_alpha = np.sign(cos_alpha) * max(abs(cos_alpha), 0.01) 
+        
+        Skew = np.eye(3) - np.outer(k_f_hat, n_det_hat) / cos_alpha
+        
+        # 1e. The final P matrix for this specific peak
+        P_true = P_ortho @ Skew
+        all_P_mats.append(P_true)
+        
     all_P_mats = np.array(all_P_mats)
 
     # 2. Identify the Top 500 strongest peaks using a rapid 3x3 pixel sum proxy
@@ -1461,10 +1494,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     for idx in top_indices:
         f, r, c = frames[idx], all_rs[idx], all_cs[idx]
         ri, ci = int(round(r)), int(round(c))
-        if 10 < ri < H-10 and 10 < ci < W-10:
+        
+        if bw < ri < H - bw and bw < ci < W - bw:
             patch = images_batch[f, ri-opt_half:ri+opt_half+1, ci-opt_half:ci+opt_half+1]
             opt_patches.append(patch)
-            opt_bgs.append(np.median(patch)) # Simple median bg for the optimizer
+            opt_bgs.append(np.median(patch)) 
             opt_drs.append(r - (ri - opt_half))
             opt_dcs.append(c - (ci - opt_half))
             opt_Pmats.append(all_P_mats[idx])
