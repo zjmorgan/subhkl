@@ -935,13 +935,21 @@ def build_3d_cov(params):
     return L @ L.T
 
 @partial(jit, static_argnames=['patch_size'])
-def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, patch_size):
-    Sigma_3D = build_3d_cov(params)
-    yy, xx = jnp.indices((patch_size, patch_size))
+def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, distances, patch_size):
+    # Constant shape tensor
+    Sigma_shape = build_3d_cov(params[:6])
 
-    def fit_one_peak(patch, bg, dr, dc, P):
-        # 1. Exact 2D Projection
-        Sigma_2D = P @ Sigma_3D @ P.T
+    # Extract the isotropic mosaicity (radians)
+    eta = jnp.abs(params[6]) + 1e-6
+    Sigma_eta_base = jnp.eye(3) * (eta**2)
+
+    yy, xx = jnp.indices((patch_size, patch_size))
+    def fit_one_peak(patch, bg, dr, dc, P, D_i):
+        # Add the distance-dependent mosaicity tensor
+        Sigma_total_3D = Sigma_shape + (D_i**2) * Sigma_eta_base
+
+        # Project using the central projection matrix
+        Sigma_2D = P_true @ Sigma_total_3D @ P_true.T
         det_sigma = jnp.maximum(Sigma_2D[0,0] * Sigma_2D[1,1] - Sigma_2D[0,1]**2, 1e-6)
 
         # 2. Analytic Precision Matrix
@@ -964,26 +972,27 @@ def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, patch_size):
         residual = y_sub - amp * template
         return jnp.sum(residual**2)
 
-    mses = vmap(fit_one_peak)(patches, bgs, drs, dcs, P_mats)
+    mses = vmap(fit_one_peak)(patches, bgs, drs, dcs, P_mats, distances)
     return jnp.mean(mses)
 
 # Generate the fast gradient function
 val_and_grad_fn = jit(jax.value_and_grad(global_shape_objective), static_argnames=['patch_size'])
 
-def optimize_global_crystal(patches, bgs, drs, dcs, P_mats):
+def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
     """Finds the optimal 6 global parameters for the 3D crystal tensor."""
     def scipy_objective(x_np):
-        val, grad = val_and_grad_fn(jnp.array(x_np), patches, bgs, drs, dcs, P_mats, patches.shape[-1])
+        val, grad = val_and_grad_fn(jnp.array(x_np), patches, bgs, drs, dcs, P_mats, distances, patches.shape[-1])
         return np.array(val, dtype=np.float64), np.array(grad, dtype=np.float64)
 
     # Initial guess: Isotropic 1.0 pixel sphere
-    x0 = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+    x0 = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.001])
 
     print("\n  > Optimizing 3D Global Crystal Tensor...")
     res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
 
     Sigma_3D = build_3d_cov(jnp.array(res.x))
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
+    print(f"  > Recovered Mosaicity (eta): {abs(res.x[6])*1000:.3f} mrad")
     return Sigma_3D
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
@@ -1440,6 +1449,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     # 1. Build the exact P_true matrices for all peaks
     all_P_mats = []
+    all_distances = []
     
     for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector(img_key)
@@ -1455,7 +1465,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         # 1a. Ray vector (k_f)
         pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
         k_f = pixel_xyz - s_lab
-        k_f_hat = k_f / np.linalg.norm(k_f)
+        distance = np.linalg.norm(k_f)
+        all_distances.append(distance)
+        k_f_hat = k_f / distance
         
         # 1b. Detector Normal (n)
         n_det = np.cross(det.uhat, det.vhat)
@@ -1476,6 +1488,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         all_P_mats.append(P_true)
         
     all_P_mats = np.array(all_P_mats)
+    all_distances = np.array(all_distances)
 
     # 2. Identify the Top 500 strongest peaks using a rapid 3x3 pixel sum proxy
     P_proxy = 3
@@ -1502,26 +1515,31 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             opt_drs.append(r - (ri - opt_half))
             opt_dcs.append(c - (ci - opt_half))
             opt_Pmats.append(all_P_mats[idx])
+            opt_dists.append(all_distances[idx])
 
     # 4. Run the Global Optimizer
     Sigma_3D_jnp = optimize_global_crystal(
         jnp.array(opt_patches), jnp.array(opt_bgs), 
-        jnp.array(opt_drs), jnp.array(opt_dcs), jnp.array(opt_Pmats)
+        jnp.array(opt_drs), jnp.array(opt_dcs),
+        jnp.array(opt_Pmats), jnp.array(opt_dists)
     )
 
-    # 5. Project the Optimized 3D Crystal to EXACT 2D footprints for ALL peaks
-    all_P_jnp = jnp.array(all_P_mats)
-    
-    @jit
-    def project_all_shapes(P_mats):
-        def project_one(P):
-            return P @ Sigma_3D_jnp @ P.T
-        return vmap(project_one)(P_mats)
+    # 5. Project the EXACT 2D footprints for ALL peaks
+    Sigma_shape_jnp = build_3d_cov(jnp.array(res_x[:6]))
+    Sigma_eta_jnp = jnp.eye(3) * (abs(res_x[6])**2 + 1e-12)
 
-    all_Sigma_2D = project_all_shapes(all_P_jnp)
-    all_var_u = np.array(all_Sigma_2D[:, 0, 0])
-    all_var_v = np.array(all_Sigma_2D[:, 1, 1])
-    all_cov_uv = np.array(all_Sigma_2D[:, 0, 1])
+    @jit
+    def project_all_shapes(P_mats, dists):
+        def project_one(P, D_i):
+            # The convolution of shape and mosaicity!
+            Sigma_total = Sigma_shape_jnp + (D_i**2) * Sigma_eta_jnp
+            return P @ Sigma_total @ P.T
+        return vmap(project_one)(P_mats, dists)
+
+    all_Sigma_2D = project_all_shapes(jnp.array(all_P_mats), jnp.array(all_distances))
+    all_var_u = all_Sigma_2D[:, 0, 0]
+    all_var_v = all_Sigma_2D[:, 1, 1]
+    all_cov_uv = all_Sigma_2D[:, 0, 1]
 
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
