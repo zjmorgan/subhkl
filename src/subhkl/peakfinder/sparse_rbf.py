@@ -991,7 +991,28 @@ def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
     res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
 
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
-    print(f"  > Recovered Mosaicity (eta): {abs(res.x[6])*1000:.3f} mrad")
+
+    # --- EXTRACT PHYSICAL DIMENSIONS ---
+    # 1. Build the optimal shape tensor (units: m^2)
+    Sigma_shape_opt = np.array(build_3d_cov(jnp.array(res.x[:6])))
+
+    # 2. Calculate eigenvalues (variances along principal axes in m^2)
+    # Using eigvalsh because covariance matrices are symmetric positive semi-definite
+    eigvals = np.linalg.eigvalsh(Sigma_shape_opt)
+
+    # 3. Square root to get 1-sigma radii in meters
+    principal_axes_m = np.sqrt(np.maximum(eigvals, 0.0))
+
+    # 4. Convert to millimeters
+    principal_axes_mm = principal_axes_m * 1000.0
+
+    print("  [Physical Sample Properties]")
+    print(f"  > Mosaicity (\u03b7): {abs(res.x[6])*1000:.3f} mrad")
+    print(f"  > Crystal Principal Axes (1\u03c3 radii):")
+    print(f"      Minor: {principal_axes_mm[0]:.4f} mm")
+    print(f"      Mid:   {principal_axes_mm[1]:.4f} mm")
+    print(f"      Major: {principal_axes_mm[2]:.4f} mm\n")
+
     return res.x
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
