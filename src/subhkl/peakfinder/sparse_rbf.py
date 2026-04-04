@@ -1446,45 +1446,47 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     B, H, W = images_batch.shape
     bw = max(border_width, 5)
 
-    # 1. Build the exact P_true matrices for all peaks
     all_P_mats = []
-    all_distances = []
+    all_distances = [] 
     
     for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector(img_key)
         run_id = frames[idx] 
         
-        # Get sample offset
         if all_R is not None and all_R.ndim == 3:
             current_R = all_R[run_id] if run_id < len(all_R) else all_R[0]
         else:
             current_R = all_R
         s_lab = current_R @ sample_offset if current_R is not None else sample_offset
         
-        # 1a. Ray vector (k_f)
         pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
         k_f = pixel_xyz - s_lab
+        
+        # 1a. Distance and Normalized Ray
         distance = np.linalg.norm(k_f)
         all_distances.append(distance)
         k_f_hat = k_f / distance
         
-        # 1b. Detector Normal (n)
+        # 1b. Detector Normal & Orthogonal Projection
         n_det = np.cross(det.uhat, det.vhat)
         n_det_hat = n_det / np.linalg.norm(n_det)
+        P_ortho = np.vstack([det.uhat, det.vhat]) # Maps 3D mm to 2D mm
         
-        # 1c. Orthogonal Projection
-        P_ortho = np.vstack([det.uhat, det.vhat]) # (2, 3)
-        
-        # 1d. The Central Projection Skew Matrix
+        # 1c. The Central Projection Skew Matrix
         cos_alpha = np.dot(k_f_hat, n_det_hat)
-        # Protect against rays parallel to the detector (edge cases)
         cos_alpha = np.sign(cos_alpha) * max(abs(cos_alpha), 0.01) 
-        
         Skew = np.eye(3) - np.outer(k_f_hat, n_det_hat) / cos_alpha
         
-        # 1e. The final P matrix for this specific peak
-        P_true = P_ortho @ Skew
-        all_P_mats.append(P_true)
+        # 1d. Pixel Pitch Scaling Matrix
+        # Allows for non-square pixels just in case!
+        pixel_pitch_u = det.width / det.m
+        pixel_pitch_v = det.height / det.n
+        S_pix = np.diag([1.0 / pixel_pitch_u, 1.0 / pixel_pitch_v])
+        
+        # 1e. The Ultimate Projection Matrix 
+        # Maps [X, Y, Z]_lab (m) -> [Col, Row]_det (Pixels)
+        P_final = S_pix @ P_ortho @ Skew
+        all_P_mats.append(P_final)
         
     all_P_mats = np.array(all_P_mats)
     all_distances = np.array(all_distances)
