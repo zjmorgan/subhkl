@@ -543,11 +543,6 @@ class SparseRBFPeakFinder:
                 A = vmap(eval_one)(r, col, sigma).T  # [Pixel]
                 A_masked = A * a_mask
 
-                volumes = jnp.where(
-                    getattr(self, 'anisotropic', False),
-                    jnp.float32(2.0 * jnp.pi) * best_sig_target * jnp.minimum(getattr(self, 'sigma_short', 1.5), best_sig_target),
-                    jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
-                )  # [Pixel]
                 weights = (sigma / self.ref_sigma) ** self.gamma  # [-]
                 alpha_vec_stat = alpha_z_score * weights  # [Pixel]
                 
