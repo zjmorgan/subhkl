@@ -1467,10 +1467,19 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             fund_hkl = (h//g, k//g, l//g)
 
             if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
-                unique_peaks[fund_hkl] = {'idx': idx, 'hkl_sq': hkl_sq[idx]}
+                # Explicitly compute and store the physical fundamental properties
+                unique_peaks[fund_hkl] = {
+                    'idx': idx, 
+                    'hkl_sq': hkl_sq[idx],
+                    'fund_h': h // g,
+                    'fund_k': k // g,
+                    'fund_l': l // g,
+                    'fund_wl': wl_arr[idx] * g  # Exact physical wavelength scaling
+                }
 
-        keep_indices = sorted([v['idx'] for v in unique_peaks.values()])
-        actual_peaks_count = len(keep_indices)
+        # Extract the processed data, sorted by original index to maintain determinism
+        keep_data = sorted(unique_peaks.values(), key=lambda x: x['idx'])
+        actual_peaks_count = len(keep_data)
 
         det = peaks_obj.get_detector(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
@@ -1482,8 +1491,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
-        batch_rs = np.array([i_arr[idx] for idx in keep_indices])
-        batch_cs = np.array([j_arr[idx] for idx in keep_indices])
+        batch_rs = np.array([i_arr[d['idx']] for d in keep_data])
+        batch_cs = np.array([j_arr[d['idx']] for d in keep_data])
 
         xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
@@ -1498,14 +1507,17 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         images_list.append(image_raw)
 
-        for idx in keep_indices:
+        for data in keep_data:
+            idx = data['idx']
             all_frames.append(frame_counter)
             all_rs.append(i_arr[idx])
             all_cs.append(j_arr[idx])
-            meta_h.append(h_arr[idx])
-            meta_k.append(k_arr[idx])
-            meta_l.append(l_arr[idx])
-            meta_wl.append(wl_arr[idx])
+            
+            # Append the absolute fundamentals for downstream unmixing
+            meta_h.append(data['fund_h'])
+            meta_k.append(data['fund_k'])
+            meta_l.append(data['fund_l'])
+            meta_wl.append(data['fund_wl'])
             meta_keys.append(img_key)
 
         frame_counter += 1
