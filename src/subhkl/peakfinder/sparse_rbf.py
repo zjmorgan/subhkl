@@ -1481,7 +1481,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                     unique_peaks[fund_hkl]['hkl_sq'] = hkl_sq[idx]
 
         # Extract the processed data, sorted by original index to maintain determinism
-        keep_data = sorted(unique_peaks.values(), key=lambda x: x['idx'])
+        keep_data = sorted(unique_peaks.values(), key=lambda x: x['rep_idx'])
         actual_peaks_count = len(keep_data)
 
         det = peaks_obj.get_detector(img_key)
