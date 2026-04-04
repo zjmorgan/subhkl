@@ -944,7 +944,7 @@ def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, distances, pa
     Sigma_eta_base = jnp.eye(3) * (eta**2)
 
     yy, xx = jnp.indices((patch_size, patch_size))
-    def fit_one_peak(patch, bg, dr, dc, P, D_i):
+    def fit_one_peak(patch, bg, dr, dc, P_true, D_i):
         # Add the distance-dependent mosaicity tensor
         Sigma_total_3D = Sigma_shape + (D_i**2) * Sigma_eta_base
 
