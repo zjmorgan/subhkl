@@ -1559,9 +1559,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         return vmap(project_one)(P_mats, dists)
 
     all_Sigma_2D = project_all_shapes(jnp.array(all_P_mats), jnp.array(all_distances))
-    all_var_u = all_Sigma_2D[:, 0, 0]
-    all_var_v = all_Sigma_2D[:, 1, 1]
-    all_cov_uv = all_Sigma_2D[:, 0, 1]
+    all_var_u = np.array(all_Sigma_2D[:, 0, 0])
+    all_var_v = np.array(all_Sigma_2D[:, 1, 1])
+    all_cov_uv = np.array(all_Sigma_2D[:, 0, 1])
 
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
