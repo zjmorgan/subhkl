@@ -1526,7 +1526,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
         images_batch, frames, all_rs, all_cs,
-        var_us_jnp=all_var_u, var_vs_jnp=all_var_v, cov_uvs_jnp=all_cov_uv
+        var_us=all_var_u, var_vs=all_var_v, cov_uvs=all_cov_uv
     )
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
