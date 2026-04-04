@@ -990,10 +990,9 @@ def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
     print("\n  > Optimizing 3D Global Crystal Tensor...")
     res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
 
-    Sigma_3D = build_3d_cov(jnp.array(res.x))
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
     print(f"  > Recovered Mosaicity (eta): {abs(res.x[6])*1000:.3f} mrad")
-    return Sigma_3D
+    return res.x
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
