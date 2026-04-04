@@ -1074,17 +1074,30 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         self.nominal_sigma = nominal_sigma
         self.anisotropic = anisotropic
 
-    def integrate_reflections(self, images_batch, frames, rs, cs, var_us, var_vs, cov_uvs):
+    def integrate_reflections(self, images_batch, frames, rs, cs, var_us=None, var_vs=None, cov_uvs=None):
         """
         Args:
             images_batch: [photons/Pixel]
             frames: [-]
             rs, cs: [Pixel^0.5]
+            var_us, var_vs, cov_uvs: Pre-computed 2D projection tensors from the global optimizer.
         Returns:
             [intensity: [photons/Pixel], r: [Pixel^0.5], c: [Pixel^0.5], sigma: [Pixel^0.5], sigI: [photons^0.5 / Pixel^0.5]]
         """
         B, H, W = images_batch.shape
         N_spots = len(frames)
+
+        # api backward compatibility for unit tests
+        if var_us is None or var_vs is None or cov_uvs is None:
+            # Fall back to a perfect isotropic circle using the nominal_sigma property
+            var_us = jnp.full(N_spots, self.nominal_sigma**2, dtype=jnp.float32)
+            var_vs = jnp.full(N_spots, self.nominal_sigma**2, dtype=jnp.float32)
+            cov_uvs = jnp.zeros(N_spots, dtype=jnp.float32)
+        else:
+            # Ensure they are JAX arrays for the JIT compiler
+            var_us = jnp.array(var_us, dtype=jnp.float32)
+            var_vs = jnp.array(var_vs, dtype=jnp.float32)
+            cov_uvs = jnp.array(cov_uvs, dtype=jnp.float32)
 
         P = self.refine_patch_size  # [Pixel^0.5]
         half_p = P // 2  # [Pixel^0.5]
@@ -1274,7 +1287,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         all_rs_jnp = jnp.array(rs_full, dtype=jnp.float32)  # [Pixel^0.5]
         all_cs_jnp = jnp.array(cs_full, dtype=jnp.float32)  # [Pixel^0.5]
 
-        from tqdm import tqdm
         with tqdm(total=N_spots, desc="Sparse Laue Integration", disable=not self.show_steps) as pbar:
             for i in range(0, N_spots, self.chunk_size):
                 chunk_f = jnp.array(frames[i:i+self.chunk_size])
