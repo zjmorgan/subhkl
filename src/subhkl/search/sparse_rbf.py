@@ -1494,7 +1494,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         
         pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
         k_f = pixel_xyz - s_lab
-        k_f_hat = k_f / np.linalg.norm(k_f)
+        distance = np.linalg.norm(k_f)
+        all_distances.append(distance)
+        k_f_hat = k_f / distances
         
         # Detector Normal & Orthogonal Projection
         n_det = np.cross(det.uhat, det.vhat)
@@ -1516,6 +1518,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         all_P_mats.append(P_final)
         
     all_P_mats = np.array(all_P_mats)
+    all_distances = np.array(all_distances)
 
     # 2. Identify the Top 500 strongest peaks (Proxy)
     P_proxy = 3
@@ -1542,109 +1545,20 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             opt_drs.append(r - (ri - opt_half))
             opt_dcs.append(c - (ci - opt_half))
             opt_Pmats.append(all_P_mats[idx])
-            opt_dists.append(all_dists[idx])
+            opt_dists.append(all_distances[idx])
 
-    # 4. Run the Global Optimizer (6 Parameters)
+    # Inside integrate_peaks_rbf_ssn (Phase 1.5) ...
+    # 4. Run the Global Optimizer
     res_x = optimize_global_crystal(
         jnp.array(opt_patches), jnp.array(opt_bgs), 
         jnp.array(opt_drs), jnp.array(opt_dcs), 
-        jnp.array(opt_Pmats), jnp.array(opt_dists),
-    )
-
-    # 5. Project the EXACT 2D footprints for ALL peaks
-    # We rebuild the optimal 3D tensor using the output of the optimizer
-    Sigma_shape_jnp = build_3d_cov(jnp.array(res_x))
-
-    @jit
-    def project_all_shapes(P_mats):
-        def project_one(P):
-            # P is already scaled by S_pix, so output is perfectly in Pixels^2
-            return P @ Sigma_shape_jnp @ P.T
-        return vmap(project_one)(P_mats)
-
-    all_Sigma_2D = project_all_shapes(jnp.array(all_P_mats))
-    all_var_u = np.array(all_Sigma_2D[:, 0, 0])
-    all_var_v = np.array(all_Sigma_2D[:, 1, 1])
-    all_cov_uv = np.array(all_Sigma_2D[:, 0, 1])
-
-    # --- PHASE 1.5: GLOBAL EFFECTIVE TENSOR OPTIMIZATION ---
-    B, H, W = images_batch.shape
-    bw = max(border_width, 5)
-
-    all_P_mats = []
-    
-    for idx, img_key in enumerate(meta_keys):
-        det = peaks_obj.get_detector(img_key)
-        run_id = frames[idx] 
-        
-        if all_R is not None and all_R.ndim == 3:
-            current_R = all_R[run_id] if run_id < len(all_R) else all_R[0]
-        else:
-            current_R = all_R
-        s_lab = current_R @ sample_offset if current_R is not None else sample_offset
-        
-        pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
-        k_f = pixel_xyz - s_lab
-        k_f_hat = k_f / np.linalg.norm(k_f)
-        
-        # Detector Normal & Orthogonal Projection
-        n_det = np.cross(det.uhat, det.vhat)
-        n_det_hat = n_det / np.linalg.norm(n_det)
-        P_ortho = np.vstack([det.uhat, det.vhat]) 
-        
-        # The Central Projection Skew Matrix
-        cos_alpha = np.dot(k_f_hat, n_det_hat)
-        cos_alpha = np.sign(cos_alpha) * max(abs(cos_alpha), 0.01) 
-        Skew = np.eye(3) - np.outer(k_f_hat, n_det_hat) / cos_alpha
-        
-        # Pixel Pitch Scaling Matrix
-        pixel_pitch_u = det.width / det.m
-        pixel_pitch_v = det.height / det.n
-        S_pix = np.diag([1.0 / pixel_pitch_u, 1.0 / pixel_pitch_v])
-        
-        # The Ultimate Projection Matrix 
-        P_final = S_pix @ P_ortho @ Skew
-        all_P_mats.append(P_final)
-        
-    all_P_mats = np.array(all_P_mats)
-
-    # 2. Identify the Top 500 strongest peaks (Proxy)
-    P_proxy = 3
-    pad_images = np.pad(images_batch, ((0,0), (P_proxy, P_proxy), (P_proxy, P_proxy)), mode='reflect')
-    proxy_intensities = []
-    for f, r, c in zip(frames, all_rs, all_cs):
-        ri, ci = int(round(r)) + P_proxy, int(round(c)) + P_proxy
-        proxy_intensities.append(np.sum(pad_images[f, ri-1:ri+2, ci-1:ci+2]))
-    
-    top_indices = np.argsort(proxy_intensities)[-500:]
-    
-    # 3. Extract exact patches
-    opt_P = 15
-    opt_half = opt_P // 2
-    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats, opt_dists = [], [], [], [], [], []
-    for idx in top_indices:
-        f, r, c = frames[idx], all_rs[idx], all_cs[idx]
-        ri, ci = int(round(r)), int(round(c))
-        
-        if bw < ri < H - bw and bw < ci < W - bw:
-            patch = images_batch[f, ri-opt_half:ri+opt_half+1, ci-opt_half:ci+opt_half+1]
-            opt_patches.append(patch)
-            opt_bgs.append(np.median(patch)) 
-            opt_drs.append(r - (ri - opt_half))
-            opt_dcs.append(c - (ci - opt_half))
-            opt_Pmats.append(all_P_mats[idx])
-
-    # 4. Run the Global Optimizer
-    res_x = optimize_global_crystal(
-        jnp.array(opt_patches), jnp.array(opt_bgs),
-        jnp.array(opt_drs), jnp.array(opt_dcs),
         jnp.array(opt_Pmats), jnp.array(opt_dists),
         fit_mosaicity=self.fit_mosaicity  # Passed from the class init
     )
 
     # 5. Project the EXACT 2D footprints for ALL peaks
     Sigma_shape_jnp = build_3d_cov(jnp.array(res_x[:6]))
-
+    
     if self.fit_mosaicity:
         Sigma_eta_jnp = jnp.eye(3) * (abs(res_x[6])**2 + 1e-12)
     else:
