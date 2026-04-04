@@ -1608,9 +1608,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # --- PHASE 4: PARALLEL VISUALIZATION ---
     if create_visualizations and plot_tasks:
         # Render the global diagnostic plot in the main thread
-        if len(diag_sigma) > 0:
-            _render_and_save_diagnostic(diag_2theta, diag_sigma)
-
         if max_workers is None:
             max_workers = os.cpu_count()
 
