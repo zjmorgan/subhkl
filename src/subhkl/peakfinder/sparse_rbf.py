@@ -920,6 +920,72 @@ class SparseRBFPeakFinder:
         
         return final_coords_output
 
+@jit
+def build_3d_cov(params):
+    # params: [L11, L21, L22, L31, L32, L33]
+    L = jnp.array([
+        [params[0],       0.0,       0.0],
+        [params[1], params[2],       0.0],
+        [params[3], params[4], params[5]]
+    ])
+    # Ensure strict positive-definiteness on the diagonal
+    L = L.at[0,0].set(jnp.abs(L[0,0]) + 0.1)
+    L = L.at[1,1].set(jnp.abs(L[1,1]) + 0.1)
+    L = L.at[2,2].set(jnp.abs(L[2,2]) + 0.1)
+    return L @ L.T
+
+@partial(jit, static_argnames=['patch_size'])
+def global_shape_objective(params, patches, bgs, drs, dcs, P_mats, patch_size):
+    Sigma_3D = build_3d_cov(params)
+    yy, xx = jnp.indices((patch_size, patch_size))
+
+    def fit_one_peak(patch, bg, dr, dc, P):
+        # 1. Exact 2D Projection
+        Sigma_2D = P @ Sigma_3D @ P.T
+        det_sigma = jnp.maximum(Sigma_2D[0,0] * Sigma_2D[1,1] - Sigma_2D[0,1]**2, 1e-6)
+
+        # 2. Analytic Precision Matrix
+        a = Sigma_2D[1,1] / det_sigma
+        b = -Sigma_2D[0,1] / det_sigma
+        c = Sigma_2D[0,0] / det_sigma
+
+        dr_grid = yy - dr
+        dc_grid = xx - dc
+
+        # 3. Evaluate Unnormalized Template
+        template = jnp.exp(-0.5 * (a * dc_grid**2 + 2.0 * b * dr_grid * dc_grid + c * dr_grid**2))
+
+        # 4. Fast OLS Amplitude Fit
+        y_sub = patch - bg
+        amp = jnp.sum(y_sub * template) / jnp.maximum(jnp.sum(template * template), 1e-6)
+        amp = jnp.maximum(amp, 0.0)
+
+        # 5. Return Mean Squared Error
+        residual = y_sub - amp * template
+        return jnp.sum(residual**2)
+
+    mses = vmap(fit_one_peak)(patches, bgs, drs, dcs, P_mats)
+    return jnp.mean(mses)
+
+# Generate the fast gradient function
+val_and_grad_fn = jit(jax.value_and_grad(global_shape_objective), static_argnames=['patch_size'])
+
+def optimize_global_crystal(patches, bgs, drs, dcs, P_mats):
+    """Finds the optimal 6 global parameters for the 3D crystal tensor."""
+    def scipy_objective(x_np):
+        val, grad = val_and_grad_fn(jnp.array(x_np), patches, bgs, drs, dcs, P_mats, patches.shape[-1])
+        return np.array(val, dtype=np.float64), np.array(grad, dtype=np.float64)
+
+    # Initial guess: Isotropic 1.0 pixel sphere
+    x0 = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+
+    print("\n  > Optimizing 3D Global Crystal Tensor...")
+    res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B')
+
+    Sigma_3D = build_3d_cov(jnp.array(res.x))
+    print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
+    return Sigma_3D
+
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
     Physics-Informed Sniper.
@@ -952,13 +1018,11 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
             loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
             show_steps=False
         )
-        
-        # 2. Define the Child's distinct Physics-Space parameters
-        self.candidate_sigmas = jnp.linspace(min_sigma, max_sigma, num_sigmas)
+
         self.nominal_sigma = nominal_sigma
         self.anisotropic = anisotropic
 
-    def integrate_reflections(self, images_batch, frames, rs, cs, thetas, phis, stretches):
+    def integrate_reflections(self, images_batch, frames, rs, cs, var_us, var_vs, cov_uvs):
         """
         Args:
             images_batch: [photons/Pixel]
@@ -973,7 +1037,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         P = self.refine_patch_size  # [Pixel^0.5]
         half_p = P // 2  # [Pixel^0.5]
         PAD = P  # [Pixel^0.5]
-        
+
         K_NEIGHBORS = min(4, N_spots) if N_spots > 0 else 1
 
         filter_size = max(15, int(self.max_sigma * 5))  # [Pixel^0.5]
@@ -1002,214 +1066,147 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         @jit
         def solve_patches(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts,
                           all_fs_jnp, all_rs_jnp, all_cs_jnp,
-                          thetas_jnp, phis_jnp, stretch_factors_jnp):
-            N_shapes = len(self.candidate_sigmas)
+                          var_us_jnp, var_vs_jnp, cov_uvs_jnp):
             alpha_z_score = self.alpha
-            
+
             def process_patch(patch, patch_bg, f_global, r_global, c_global, r_start, c_start):
-                theta_global = thetas_jnp[f_global]
-                phi_global = phis_jnp[f_global]
+                # 1. Fetch exact pre-computed global geometry
+                peak_var_u = var_us_jnp[f_global]
+                peak_var_v = var_vs_jnp[f_global]
+                peak_cov_uv = cov_uvs_jnp[f_global]
 
-                bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
-                noise_floor = jnp.sqrt(bg_med)  # [photons^0.5 / Pixel^0.5]
-                
-                dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2  # [Pixel]
-                frame_penalty = jnp.where(all_fs_jnp == f_global, 0.0, 1e9)  # [-]
+                bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)
+                noise_floor = jnp.sqrt(bg_med)
+
+                dists = (all_rs_jnp - r_global)**2 + (all_cs_jnp - c_global)**2
+                frame_penalty = jnp.where(all_fs_jnp == f_global, 0.0, 1e9)
                 _, nbr_idxs = jax.lax.top_k(-(dists + frame_penalty), K_NEIGHBORS)
-                
-                nbr_rs = all_rs_jnp[nbr_idxs]  # [Pixel^0.5]
-                nbr_cs = all_cs_jnp[nbr_idxs]  # [Pixel^0.5]
-                
-                local_rs = nbr_rs - r_start  # [Pixel^0.5]
-                local_cs = nbr_cs - c_start  # [Pixel^0.5]
-                
-                # =====================================================================
-                # SUBPIXEL RELAXATION (Log-Parabolic Target Snapping)
-                # =====================================================================
 
-                # 1. Quick smoothing to stabilize the log-parabola against Poisson noise
+                nbr_rs = all_rs_jnp[nbr_idxs]
+                nbr_cs = all_cs_jnp[nbr_idxs]
+                local_rs = nbr_rs - r_start
+                local_cs = nbr_cs - c_start
+
+                # SUBPIXEL RELAXATION (Log-Parabolic Target Snapping)
+                # We use a static 1.0px blur just to smooth the noise for the center-of-mass finding
                 y_sub_raw = patch - patch_bg
-                nominal_sig_sq2 = self.ref_sigma * jnp.sqrt(2.0) + 1e-6
+                nominal_sig_sq2 = 1.0 * jnp.sqrt(2.0) + 1e-6
                 k_grid = jnp.arange(-2, 3)
                 k_1d = jax.scipy.special.erf((k_grid + 0.5) / nominal_sig_sq2) - jax.scipy.special.erf((k_grid - 0.5) / nominal_sig_sq2)
-                
+
                 temp = jax.scipy.signal.correlate2d(y_sub_raw, k_1d[:, None], mode='same')
                 dual_var_smooth = jax.scipy.signal.correlate2d(temp, k_1d[None, :], mode='same')
-                
-                # 2. Get integer coordinates of the predicted target peak
+
                 r_int = jnp.clip(jnp.int32(jnp.round(local_rs[0])), 1, P - 2)
                 c_int = jnp.clip(jnp.int32(jnp.round(local_cs[0])), 1, P - 2)
-                
-                # 3. Log-parabolic fit
+
                 safe_dv = jnp.maximum(dual_var_smooth, 1e-6)
                 val    = jnp.log(safe_dv[r_int, c_int])
                 val_up = jnp.log(safe_dv[r_int - 1, c_int])
                 val_dn = jnp.log(safe_dv[r_int + 1, c_int])
                 val_lf = jnp.log(safe_dv[r_int, c_int - 1])
                 val_rt = jnp.log(safe_dv[r_int, c_int + 1])
-                
-                den_r = jnp.minimum(val_up - 2.0 * val + val_dn, -1e-6) 
+
+                den_r = jnp.minimum(val_up - 2.0 * val + val_dn, -1e-6)
                 dr = 0.5 * (val_up - val_dn) / den_r
-                
+
                 den_c = jnp.minimum(val_lf - 2.0 * val + val_rt, -1e-6)
                 dc = 0.5 * (val_lf - val_rt) / den_c
-                
-                # 4. Constrain the drift (e.g., max 1.5 pixels) to prevent wandering into neighbors
+
                 dr = jnp.clip(dr, -1.5, 1.5)
                 dc = jnp.clip(dc, -1.5, 1.5)
-                
-                # Safely update the continuous coordinate of the target peak (index 0)
+
                 local_rs = local_rs.at[0].add(dr)
                 local_cs = local_cs.at[0].add(dc)
 
-                stretch_global = stretch_factors_jnp[f_global]
-
-                # 1. The dictionary represents the base, un-stretched radius (minor axis)
-                dynamic_sigma_minor = self.candidate_sigmas
-
-                # 2. The major axis is geometrically stretched by the secant effect
-                dynamic_sigma_major = self.candidate_sigmas * stretch_global
-
+                # =====================================================================
+                # ANALYTIC GAUSSIAN EVALUATION (No Dictionary Search!)
+                # =====================================================================
                 def eval_neighbor(nr, nc):
-                    # We must iterate over BOTH arrays simultaneously
-                    def eval_shape(sig_maj, sig_min):
-                        return self._rbf_basis(
-                            x_grid, jnp.array([nr, nc]), 
-                            sigma_long=sig_maj,            # The stretched axis
-                            theta=0.0, 
-                            phi=phi_global,                # The oblique projection angle
-                            anisotropic=True, 
-                            sigma_short=sig_min            # The base minor axis
-                        ).flatten()
-                    
-                    return vmap(eval_shape)(dynamic_sigma_major, dynamic_sigma_minor).T
+                    det_sigma = jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)
 
-                A_all = vmap(eval_neighbor)(local_rs, local_cs) # (K_NEIGHBORS, P*P, N_shapes) [Pixel]
-                
-                # --- 1. Enforce 1-Shape-Per-Peak (Prevents composite halo traps) ---
-                y_sub = (patch - patch_bg).flatten()  # [photons/Pixel]
-                
-                pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2  # [Pixel]
+                    a = peak_var_v / det_sigma
+                    b = -peak_cov_uv / det_sigma
+                    c = peak_var_u / det_sigma
+
+                    dr_grid = x_grid[0] - nr # rows (V)
+                    dc_grid = x_grid[1] - nc # cols (U)
+
+                    gaussian = jnp.exp(-0.5 * (a * dc_grid**2 + 2.0 * b * dr_grid * dc_grid + c * dr_grid**2))
+                    area_scalar = 2.0 * jnp.pi * jnp.sqrt(det_sigma)
+
+                    # Flatten returns directly to (P*P) because N_shapes is gone!
+                    return (gaussian * area_scalar).flatten() 
+
+                A_all = vmap(eval_neighbor)(local_rs, local_cs) 
+                y_sub = (patch - patch_bg).flatten() 
+
+                pixel_dists_k = (yy.flatten()[:, None] - local_rs[None, :])**2 + (xx.flatten()[:, None] - local_cs[None, :])**2 
                 closest_k = jnp.argmin(pixel_dists_k, axis=1)
-                pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS)  # [-]
-                
-                A_k = A_all.transpose(1, 0, 2) # (P*P, K_NEIGHBORS, N_shapes) [Pixel]
-                A_k_masked = A_k * pixel_masks[:, :, None]  # [Pixel]
-                y_sub_k = y_sub[:, None] * pixel_masks  # [photons/Pixel]
-                
-                A_norms = jnp.sqrt(jnp.maximum(jnp.sum(A_k_masked**2, axis=0), 1e-6))  # [Pixel]
-                ncc_k = jnp.sum(A_k_masked * y_sub_k[:, :, None], axis=0) / A_norms  # [photons/Pixel]
-                best_idx_ncc = jnp.argmax(ncc_k, axis=1) 
-                
-                # =====================================================================
-                # STAGE 1: RECTANGULAR SSN (Volume-Penalized Support Discovery)
-                # =====================================================================
-                A_joint = jnp.transpose(A_all, (1, 0, 2)).reshape(P*P, K_NEIGHBORS * N_shapes)  # [Pixel]
-                
-                sigmas_joint = jnp.tile(self.candidate_sigmas, K_NEIGHBORS)  # [Pixel^0.5]
-                weights_joint = (sigmas_joint / self.ref_sigma) ** self.gamma  # [-]
-                
-                alpha_vec_joint = alpha_z_score * weights_joint  
-                
-                c_warm_joint = jnp.zeros(K_NEIGHBORS * N_shapes, dtype=jnp.float32)  # [photons/Pixel^2]
-                
+                pixel_masks = jax.nn.one_hot(closest_k, K_NEIGHBORS) 
+
+                A_k = A_all.T # (P*P, K_NEIGHBORS)
+                A_k_masked = A_k * pixel_masks 
+
+                # Calculate effective scalar size for the L1 threshold
+                effective_sigma = jnp.sqrt(jnp.sqrt(jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)))
+                weight = (effective_sigma / self.ref_sigma) ** self.gamma 
+                alpha_vec_joint = jnp.full(K_NEIGHBORS, alpha_z_score * weight) 
+
+                c_warm_joint = jnp.zeros(K_NEIGHBORS, dtype=jnp.float32) 
+
+                # The SSN Solver runs ONCE per neighbor set. Extremely fast.
                 c_ssn = self._solve_ssn_unified(
-                    A_joint, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm_joint, 20, force_target=False
-                )  # [photons/Pixel^2]
-                
-                c_ssn_k = c_ssn.reshape(K_NEIGHBORS, N_shapes)  # [photons/Pixel^2]
-                max_c_ssn = jnp.max(c_ssn_k, axis=1)  # [photons/Pixel^2]
-                best_idx_ssn = jnp.argmax(c_ssn_k, axis=1)
-
-                # For peaks that cannot be integrated, we must fallback on a
-                # "empty" result that is still informative for downstream processing
-                # i.e. a typical peak with ~zero intensity but typical shape and variance
-
-                # statistical shape fallback for crushed peak
-                surviving_mask_strict = max_c_ssn > 1e-9
-                num_survivors = jnp.sum(surviving_mask_strict)
-
-                # Fallback uses candidate_sigmas
-                nominal_idx = jnp.argmin(jnp.abs(self.candidate_sigmas - self.nominal_sigma))
-
-                # local consensus fallback (average shape of surviving neighbors)
-                sum_survivor_indices = jnp.sum(best_idx_ssn * surviving_mask_strict)
-                local_fallback_idx = jnp.where(
-                    num_survivors > 0,
-                    jnp.int32(jnp.round(sum_survivor_indices / jnp.maximum(num_survivors, 1))),
-                    nominal_idx
+                    A_k_masked, patch.flatten(), patch_bg.flatten(), alpha_vec_joint, loss_code, c_warm_joint, 20, force_target=False
                 )
 
-                # apply the fallback safely
-                best_idx_k = jnp.where(surviving_mask_strict, best_idx_ssn, local_fallback_idx)
-
+                surviving_mask_strict = c_ssn > 1e-9
                 is_target = jnp.arange(K_NEIGHBORS) == 0
                 surviving_mask = surviving_mask_strict | is_target
 
-                # A_k is safely formatted as (P*P, K_NEIGHBORS, N_shapes)
-                indices = jnp.arange(K_NEIGHBORS)
-
-                # Extract the best footprint for each neighbor safely along the last axis
-                A_best = A_k[:, indices, best_idx_k]  # Shape: (P*P, K_NEIGHBORS)
-
-                best_sigmas = self.candidate_sigmas[best_idx_k]
-                A_best_masked = A_best * surviving_mask[None, :]  # [Pixel]
+                A_best_masked = A_k * surviving_mask[None, :] 
 
                 # =====================================================================
-                # STAGE 2: UNCONSTRAINED OLS (Unbiased Measurement & Noise Preservation)
+                # STAGE 2: UNCONSTRAINED OLS 
                 # =====================================================================
-                A_tilde = jnp.hstack([A_best_masked, jnp.ones((P*P, 1))])  # [Pixel]
-                w = 1.0 / jnp.maximum(patch.flatten(), 1.0)  # [Pixel / photons]
-                
-                # I_mat = [Pixel] * [Pixel/photons] * [Pixel] = [Pixel^3 / photons]
+                A_tilde = jnp.hstack([A_best_masked, jnp.ones((P*P, 1))]) 
+                w = 1.0 / jnp.maximum(patch.flatten(), 1.0) 
+
                 I_mat = A_tilde.T @ (w[:, None] * A_tilde)  
-                
-                # C_mat is the inverse of I_mat
-                C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))  # [photons / Pixel^3]
-                
-                # rhs = [Pixel] * [Pixel/photons] * [photons/Pixel] = [Pixel]
+                C_mat = jnp.linalg.inv(I_mat + 1e-6 * jnp.eye(K_NEIGHBORS + 1))  
                 rhs = A_tilde.T @ (w * y_sub)  
-                
-                # c_ols = [photons / Pixel^3] * [Pixel] = [photons / Pixel^2]
                 c_ols = C_mat @ rhs 
 
-                c_final_target = c_ols[0]  # [photons/Pixel^2]
-                best_sig_target = best_sigmas[0]  # [Pixel^0.5]
-                
-                volumes = jnp.where(
-                    getattr(self, 'anisotropic', False),
-                    jnp.float32(2.0 * jnp.pi) * best_sig_target * getattr(self, 'sigma_short', 1.5),
-                    jnp.float32(2.0 * jnp.pi) * (best_sig_target**2)
-                )  # [Pixel]
+                c_final_target = c_ols[0] 
+                volumes = jnp.float32(2.0 * jnp.pi) * jnp.sqrt(jnp.maximum(peak_var_u * peak_var_v - peak_cov_uv**2, 1e-6)) 
 
-                intensity = c_final_target * volumes  # [photons/Pixel^2] * [Pixel] = [photons/Pixel]
-                
-                var_c0 = C_mat[0, 0]  # [photons / Pixel^3]
-                sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0))  # [Pixel] * sqrt([photons / Pixel^3]) = [photons^0.5 / Pixel^0.5]
-                
+                intensity = c_final_target * volumes 
+                var_c0 = C_mat[0, 0] 
+                sigI = volumes * jnp.sqrt(jnp.maximum(var_c0, 0.0)) 
+
                 return jnp.array([
                     intensity, 
                     local_rs[0], 
                     local_cs[0], 
-                    best_sig_target, 
+                    effective_sigma, 
                     sigI
                 ])
-                
+
             return vmap(process_patch)(patches, patches_bg, fs_chunk, rs_global_chunk, cs_global_chunk, r_starts, c_starts)
 
         refined_peaks = []
         rs_padded = np.array(rs) + PAD  # [Pixel^0.5]
         cs_padded = np.array(cs) + PAD  # [Pixel^0.5]
-        
+
         PAD_N = max(N_spots, 4)
         fs_full = np.pad(np.array(frames), (0, PAD_N - N_spots), constant_values=-1)
         rs_full = np.pad(rs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)  # [Pixel^0.5]
         cs_full = np.pad(cs_padded, (0, PAD_N - N_spots), constant_values=-10000.0)  # [Pixel^0.5]
-        
+
         all_fs_jnp = jnp.array(fs_full, dtype=jnp.int32)
         all_rs_jnp = jnp.array(rs_full, dtype=jnp.float32)  # [Pixel^0.5]
         all_cs_jnp = jnp.array(cs_full, dtype=jnp.float32)  # [Pixel^0.5]
-        
+
         from tqdm import tqdm
         with tqdm(total=N_spots, desc="Sparse Laue Integration", disable=not self.show_steps) as pbar:
             for i in range(0, N_spots, self.chunk_size):
@@ -1220,7 +1217,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                 patches, patches_bg, r_starts, c_starts = extract_patches(img_jax_padded, bg_jax_padded, chunk_f, chunk_r, chunk_c)
 
                 res = solve_patches(patches, patches_bg, chunk_f, chunk_r, chunk_c, r_starts, c_starts,
-                                    all_fs_jnp, all_rs_jnp, all_cs_jnp, thetas, phis, stretches)
+                                    all_fs_jnp, all_rs_jnp, all_cs_jnp, var_us, var_vs, cov_uvs)
                 res.block_until_ready()
 
                 res_cpu = np.array(res)
@@ -1246,75 +1243,14 @@ from tqdm import tqdm
 from collections import defaultdict
 import os
 
-def _render_and_save_diagnostic(twothetas, sigmas):
-    """Generates a binned scatter plot to verify geometric footprint baseline."""
-    import matplotlib.pyplot as plt
-    from scipy.stats import binned_statistic
-    import numpy as np
-
-    if plt.get_backend().lower() != "agg":
-        plt.switch_backend("Agg")
-        
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    tt_arr = np.array(twothetas)
-    sig_arr = np.array(sigmas)
-    
-    if len(tt_arr) == 0:
-        plt.close(fig)
-        return
-        
-    # --- TERMINAL SUMMARY (Compact 10-bin horizontal output) ---
-    c_bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 11) # 10 bins
-    c_medians, c_edges, _ = binned_statistic(tt_arr, sig_arr, statistic='median', bins=c_bins)
-    c_centers = 0.5 * (c_edges[1:] + c_edges[:-1])
-    c_valid = ~np.isnan(c_medians)
-    
-    print(f"\n[Optics Diagnostic] Median Base Radius (\u03c3_0) vs 2\u03b8:")
-    tt_str = "  2Theta: " + " | ".join([f"{x:4.1f}\u00b0" for x in c_centers[c_valid]])
-    sig_str = "  Sigma:  " + " | ".join([f"{x:5.2f}px" for x in c_medians[c_valid]])
-    print(tt_str)
-    print(sig_str + "\n")
-    
-    # --- PLOTTING (High-res 40-bin output) ---
-    # 1. Plot all individual peaks as semi-transparent dots
-    ax.scatter(tt_arr, sig_arr, alpha=0.25, s=15, color='dodgerblue', label='Strong Fitted Peaks (SNR > 3)')
-    
-    # 2. Calculate and plot the robust rolling median
-    bins = np.linspace(np.min(tt_arr), np.max(tt_arr), 40)
-    bin_medians, bin_edges, _ = binned_statistic(tt_arr, sig_arr, statistic='median', bins=bins)
-    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-    
-    # Filter out empty bins
-    valid_bins = ~np.isnan(bin_medians)
-    
-    ax.plot(bin_centers[valid_bins], bin_medians[valid_bins], 
-            color='red', lw=3, label='Rolling Median $\sigma_0$')
-    
-    # Formatting
-    ax.set_xlabel(r'Scattering Angle $2\theta$ (degrees)', fontsize=14)
-    ax.set_ylabel(r'Fitted Base Radius $\sigma_0$ (Pixels)', fontsize=14)
-    ax.set_title('Stationary Laue Geometric Footprint Diagnostic', fontsize=16)
-    
-    ax.grid(True, linestyle='--', alpha=0.6)
-    ax.legend(fontsize=12)
-    
-    # Set Y-axis to start at 0 so the scale is honest
-    ax.set_ylim(bottom=0)
-    
-    fig.tight_layout()
-    fig.savefig("sigma_calibration_diagnostic.png", dpi=200)
-    plt.close(fig)
-
 def _render_and_save_rbf_plot(args):
+    """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
-     ref_rs, ref_cs, img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-     phis, stretches, is_anisotropic) = args
+     ref_rs, ref_cs, img_intensities, img_var_us, img_var_vs, img_cov_uvs) = args
 
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle, Ellipse
+    from matplotlib.patches import Ellipse
     import matplotlib.lines as mlines
-    import matplotlib.cm as cm
     import numpy as np
 
     # Force non-interactive backend for thread safety
@@ -1333,48 +1269,48 @@ def _render_and_save_rbf_plot(args):
             transform=ax.transAxes, ha='left', va='top', fontsize=16,
             color='white', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
 
-    ax.scatter(img_cs, img_rs, marker='+', color='red', s=60, alpha=0.6, label="Predicted")
-    color_map = cm.rainbow(np.linspace(0, 1, max(2, N_shapes)))
+    # Plot initial predictions
+    ax.scatter(img_cs, img_rs, marker='+', color='cyan', s=60, alpha=0.5, label="Predicted Center")
 
-    for s_idx, (cx, cy, intensity, phi, stretch) in enumerate(zip(ref_cs, ref_rs, img_intensities, phis, stretches)):
-        is_active = intensity > 0
-        if is_active:
-            # 2. The solver returned the pure, un-stretched Base Radius (sigma_0)
-            active_base_sig = img_spatial_sigmas[s_idx]
+    # Plot the analytically projected ellipses for active peaks
+    for s_idx, (cx, cy, intensity) in enumerate(zip(ref_cs, ref_rs, img_intensities)):
+        if intensity > 0:
+            var_u = img_var_us[s_idx]
+            var_v = img_var_vs[s_idx]
+            cov_uv = img_cov_uvs[s_idx]
 
-            # Color map based directly on the base radius dictionary
-            best_c_idx = int(np.argmin(np.abs(np.array(sigmas) - active_base_sig)))
-            color = color_map[best_c_idx]
+            # 1. Eigenvalue decomposition for major/minor axes
+            diff = var_u - var_v
+            sum_uv = var_u + var_v
+            sq = np.sqrt(diff**2 + 4.0 * cov_uv**2)
 
-            if is_anisotropic:
-                # 3. Reconstruct the physical ellipse footprint
-                # Minor axis = Base isotropic footprint
-                # Major axis = Stretched by the secant effect of the panel tilt
-                w = 4.0 * (active_base_sig * stretch)  # Stretched direction
-                h = 4.0 * active_base_sig              # Un-stretched direction
-                
-                angle_deg = np.degrees(phi)
-                patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
-                                edgecolor=color, facecolor='none', lw=1.5)
-            else:
-                patch = Circle((cx, cy), 2.0 * active_base_sig,
-                               edgecolor=color, facecolor='none', lw=1.5)
+            lambda_1 = (sum_uv + sq) / 2.0  # Major axis variance
+            lambda_2 = (sum_uv - sq) / 2.0  # Minor axis variance
 
+            sigma_1 = np.sqrt(max(lambda_1, 1e-6))
+            sigma_2 = np.sqrt(max(lambda_2, 1e-6))
+
+            # 2. Eigenvector angle calculation
+            # arctan2(Y, X). X is along cols (u), Y is along rows (v)
+            phi = 0.5 * np.arctan2(2.0 * cov_uv, diff)
+            angle_deg = np.degrees(phi)
+
+            # Matplotlib Ellipse width/height are full diameters (4 * sigma)
+            w = 4.0 * sigma_1
+            h = 4.0 * sigma_2
+
+            patch = Ellipse((cx, cy), width=w, height=h, angle=angle_deg,
+                            edgecolor='red', facecolor='none', lw=1.5, alpha=0.8)
             ax.add_patch(patch)
 
-    handles, labels = ax.get_legend_handles_labels()
-    for s_idx in range(N_shapes):
-        color = color_map[s_idx]
-        active_kap = sigmas[s_idx]
-        key = mlines.Line2D([], [], color=color, marker='o', fillstyle='none', ls='', markersize=8)
-        handles.append(key)
-        labels.append(rf'$\sigma={active_kap:.2f}$')
-
-    ax.legend(
-        handles=handles, labels=labels, loc='lower center',
-        ncol=len(handles) // 2 + 1, frameon=True, fontsize=10,
-        facecolor='black', edgecolor='none', labelcolor='white'
-    )
+    # Clean legend
+    handles = [
+        mlines.Line2D([], [], color='cyan', marker='+', ls='', markersize=10, label='Prediction'),
+        mlines.Line2D([], [], color='red', marker='o', fillstyle='none', ls='', markersize=10, label='Projected 3D Tensor')
+    ]
+    ax.legend(handles=handles, loc='lower center', ncol=2, frameon=True, fontsize=12,
+              facecolor='black', edgecolor='none', labelcolor='white')
+    
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     out_name = f"rbf_viz_bank{physical_bank}_run{run_id}_img{img_key}.png"
@@ -1426,7 +1362,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     frame_counter = 0
     img_keys_ordered = sorted(peak_dict.keys())
-    all_thetas, all_phis, all_stretches = [], [], []
 
     for img_key in tqdm(img_keys_ordered, disable=not show_progress, desc="Batching Images"):
         p_data = peak_dict[img_key]
@@ -1471,36 +1406,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
 
-        # Store Bragg theta in RADIANS
-        all_thetas.extend(np.deg2rad(bank_tt) / 2.0)
-
-        # Oblique incidence geometry
-        k_f = xyz_lab - s_lab  # Vector from sample to pixel
-        k_f_norm = np.linalg.norm(k_f, axis=1, keepdims=True)
-        k_f_hat = k_f / k_f_norm
-
-        # 1. Detector normal (Cross product of pixel axes)
-        n_det = np.cross(det.uhat, det.vhat)
-        n_det_hat = n_det / np.linalg.norm(n_det)
-
-        # 2. Calculate Stretch Factor (1 / cos(alpha))
-        cos_alpha = np.abs(np.dot(k_f_hat, n_det_hat))  # Shape: (N,)
-        stretch_factor = 1.0 / np.clip(cos_alpha, 0.1, 1.0) # Protect against 90-deg edges
-
-        # 3. Calculate Orientation (Project scattered ray onto detector plane)
-        # d_stretch is the vector in the panel plane pointing in the direction of steepest tilt
-        dot_product_expanded = np.dot(k_f_hat, n_det_hat)[:, np.newaxis]
-        d_stretch = k_f_hat - (dot_product_expanded * n_det_hat)
-
-        # Project d_stretch onto the pixel axes (u, v) to get the 2D panel angle
-        du = np.sum(d_stretch * det.uhat, axis=1)
-        dv = np.sum(d_stretch * det.vhat, axis=1)
-        
-        phi_oblique = np.arctan2(dv, du)
-
-        all_phis.extend(phi_oblique)
-        all_stretches.extend(stretch_factor)
-
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
             comp_ratio = (1.0 - actual_peaks_count / initial_peaks_count) * 100
@@ -1529,11 +1434,65 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     images_batch = np.stack(images_list)
     frames = np.array(all_frames, dtype=int)
 
+    # --- PHASE 1.5: GLOBAL TENSOR OPTIMIZATION ---
+    # 1. Build P matrices for all peaks
+    # P maps [X, Y, Z]_lab to [Cols, Rows]_det
+    all_P_mats = []
+    for img_key, idx in zip(meta_keys, range(len(all_rs))):
+        det = peaks_obj.get_detector(img_key)
+        # uhat = cols (X), vhat = rows (Y)
+        all_P_mats.append(np.vstack([det.uhat, det.vhat])) 
+    all_P_mats = np.array(all_P_mats)
+
+    # 2. Identify the Top 500 strongest peaks using a rapid 3x3 pixel sum proxy
+    P_proxy = 3
+    pad_images = np.pad(images_batch, ((0,0), (P_proxy, P_proxy), (P_proxy, P_proxy)), mode='reflect')
+    proxy_intensities = []
+    for f, r, c in zip(frames, all_rs, all_cs):
+        ri, ci = int(round(r)) + P_proxy, int(round(c)) + P_proxy
+        proxy_intensities.append(np.sum(pad_images[f, ri-1:ri+2, ci-1:ci+2]))
+    
+    top_indices = np.argsort(proxy_intensities)[-500:]
+    
+    # 3. Extract exact patches for the optimizer
+    opt_P = 15
+    opt_half = opt_P // 2
+    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats = [], [], [], [], []
+    for idx in top_indices:
+        f, r, c = frames[idx], all_rs[idx], all_cs[idx]
+        ri, ci = int(round(r)), int(round(c))
+        if 10 < ri < H-10 and 10 < ci < W-10:
+            patch = images_batch[f, ri-opt_half:ri+opt_half+1, ci-opt_half:ci+opt_half+1]
+            opt_patches.append(patch)
+            opt_bgs.append(np.median(patch)) # Simple median bg for the optimizer
+            opt_drs.append(r - (ri - opt_half))
+            opt_dcs.append(c - (ci - opt_half))
+            opt_Pmats.append(all_P_mats[idx])
+
+    # 4. Run the Global Optimizer
+    Sigma_3D_jnp = optimize_global_crystal(
+        jnp.array(opt_patches), jnp.array(opt_bgs), 
+        jnp.array(opt_drs), jnp.array(opt_dcs), jnp.array(opt_Pmats)
+    )
+
+    # 5. Project the Optimized 3D Crystal to EXACT 2D footprints for ALL peaks
+    all_P_jnp = jnp.array(all_P_mats)
+    
+    @jit
+    def project_all_shapes(P_mats):
+        def project_one(P):
+            return P @ Sigma_3D_jnp @ P.T
+        return vmap(project_one)(P_mats)
+
+    all_Sigma_2D = project_all_shapes(all_P_jnp)
+    all_var_u = all_Sigma_2D[:, 0, 0]
+    all_var_v = all_Sigma_2D[:, 1, 1]
+    all_cov_uv = all_Sigma_2D[:, 0, 1]
+
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
         images_batch, frames, all_rs, all_cs,
-        thetas=np.array(all_thetas), phis=np.array(all_phis),
-        stretches=np.array(all_stretches)
+        var_us_jnp=all_var_u, var_vs_jnp=all_var_v, cov_uvs_jnp=all_cov_uv
     )
 
     # --- PHASE 3: GEOMETRY AND METADATA MAPPING ---
@@ -1542,10 +1501,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         results_by_img[meta_keys[i]].append(i)
 
     plot_tasks = []
-
-    # diagnostic data arrays
-    diag_2theta = []
-    diag_sigma = []
 
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -1598,37 +1553,22 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             res.run_id.append(run_id)
             res.bank.append(physical_bank)
 
-            # Only record sigma for peaks that successfully integrated (Intensity > 0)
-            intensity = float(integrated_results[global_idx, 0])
-            sigI = float(integrated_results[global_idx, 4])
-
-            # ONLY record sigma for strong peaks (e.g., SNR > 3.0) to ignore crushed noise
-            if intensity > 0:
-                # The solver now directly returns the Base Radius (sigma_0) from the dictionary
-                fitted_sigma = float(integrated_results[global_idx, 3])
-                diag_2theta.append(float(bank_tt[local_idx])) # 2Theta in degrees
-                diag_sigma.append(fitted_sigma)
-
         # Defer plotting by storing the necessary static data
         if create_visualizations:
-            N_shapes = len(integrator.candidate_sigmas)
             filt_img_rs = [img_rs[i] for i in valid_local_indices]
             filt_img_cs = [img_cs[i] for i in valid_local_indices]
             filt_ref_rs = [float(integrated_results[idx, 1]) for idx in valid_global_indices]
             filt_ref_cs = [float(integrated_results[idx, 2]) for idx in valid_global_indices]
 
-            filt_phis = [all_phis[idx] for idx in valid_global_indices]
-            
-            # Extract the stretches for the valid peaks
-            filt_stretches = [all_stretches[idx] for idx in valid_global_indices]
-
-            is_aniso = getattr(integrator, 'anisotropic', anisotropic)
+            # Extract the exact projected 2D covariance components for the valid peaks
+            filt_var_us = [float(all_var_u[idx]) for idx in valid_global_indices]
+            filt_var_vs = [float(all_var_v[idx]) for idx in valid_global_indices]
+            filt_cov_uvs = [float(all_cov_uv[idx]) for idx in valid_global_indices]
 
             plot_tasks.append((
                 image_raw, physical_bank, run_id, img_key,
                 filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs,
-                img_intensities, img_spatial_sigmas, sigmas, N_shapes,
-                filt_phis, filt_stretches, is_aniso
+                img_intensities, filt_var_us, filt_var_vs, filt_cov_uvs
             ))
 
     # --- PHASE 4: PARALLEL VISUALIZATION ---
