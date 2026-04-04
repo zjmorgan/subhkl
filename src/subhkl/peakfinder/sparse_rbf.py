@@ -1554,7 +1554,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         jnp.array(opt_patches), jnp.array(opt_bgs), 
         jnp.array(opt_drs), jnp.array(opt_dcs), 
         jnp.array(opt_Pmats), jnp.array(opt_dists),
-        fit_mosaicity=self.fit_mosaicity  # Passed from the class init
+        fit_mosaicity=fit_mosaicity  # Passed from the class init
     )
 
     # 5. Project the EXACT 2D footprints for ALL peaks
