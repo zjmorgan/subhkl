@@ -990,10 +990,30 @@ def optimize_global_crystal(patches, bgs, drs, dcs, P_mats, distances):
     print("\n  > Optimizing 3D Global Crystal Tensor...")
     res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
 
-    Sigma_3D = build_3d_cov(jnp.array(res.x))
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
-    print(f"  > Recovered Mosaicity (eta): {abs(res.x[6])*1000:.3f} mrad")
-    return Sigma_3D
+
+    # --- EXTRACT PHYSICAL DIMENSIONS ---
+    # 1. Build the optimal shape tensor (units: m^2)
+    Sigma_shape_opt = np.array(build_3d_cov(jnp.array(res.x[:6])))
+
+    # 2. Calculate eigenvalues (variances along principal axes in m^2)
+    # Using eigvalsh because covariance matrices are symmetric positive semi-definite
+    eigvals = np.linalg.eigvalsh(Sigma_shape_opt)
+
+    # 3. Square root to get 1-sigma radii in meters
+    principal_axes_m = np.sqrt(np.maximum(eigvals, 0.0))
+
+    # 4. Convert to millimeters
+    principal_axes_mm = principal_axes_m * 1000.0
+
+    print("  [Physical Sample Properties]")
+    print(f"  > Mosaicity (\u03b7): {abs(res.x[6])*1000:.3f} mrad")
+    print(f"  > Crystal Principal Axes (1\u03c3 radii):")
+    print(f"      Minor: {principal_axes_mm[0]:.4f} mm")
+    print(f"      Mid:   {principal_axes_mm[1]:.4f} mm")
+    print(f"      Major: {principal_axes_mm[2]:.4f} mm\n")
+
+    return res.x
 
 class SparseLaueIntegrator(SparseRBFPeakFinder):
     """
@@ -1447,45 +1467,47 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     B, H, W = images_batch.shape
     bw = max(border_width, 5)
 
-    # 1. Build the exact P_true matrices for all peaks
     all_P_mats = []
-    all_distances = []
+    all_distances = [] 
     
     for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector(img_key)
         run_id = frames[idx] 
         
-        # Get sample offset
         if all_R is not None and all_R.ndim == 3:
             current_R = all_R[run_id] if run_id < len(all_R) else all_R[0]
         else:
             current_R = all_R
         s_lab = current_R @ sample_offset if current_R is not None else sample_offset
         
-        # 1a. Ray vector (k_f)
         pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
         k_f = pixel_xyz - s_lab
+        
+        # 1a. Distance and Normalized Ray
         distance = np.linalg.norm(k_f)
         all_distances.append(distance)
         k_f_hat = k_f / distance
         
-        # 1b. Detector Normal (n)
+        # 1b. Detector Normal & Orthogonal Projection
         n_det = np.cross(det.uhat, det.vhat)
         n_det_hat = n_det / np.linalg.norm(n_det)
+        P_ortho = np.vstack([det.uhat, det.vhat]) # Maps 3D mm to 2D mm
         
-        # 1c. Orthogonal Projection
-        P_ortho = np.vstack([det.uhat, det.vhat]) # (2, 3)
-        
-        # 1d. The Central Projection Skew Matrix
+        # 1c. The Central Projection Skew Matrix
         cos_alpha = np.dot(k_f_hat, n_det_hat)
-        # Protect against rays parallel to the detector (edge cases)
         cos_alpha = np.sign(cos_alpha) * max(abs(cos_alpha), 0.01) 
-        
         Skew = np.eye(3) - np.outer(k_f_hat, n_det_hat) / cos_alpha
         
-        # 1e. The final P matrix for this specific peak
-        P_true = P_ortho @ Skew
-        all_P_mats.append(P_true)
+        # 1d. Pixel Pitch Scaling Matrix
+        # Allows for non-square pixels just in case!
+        pixel_pitch_u = det.width / det.m
+        pixel_pitch_v = det.height / det.n
+        S_pix = np.diag([1.0 / pixel_pitch_u, 1.0 / pixel_pitch_v])
+        
+        # 1e. The Ultimate Projection Matrix 
+        # Maps [X, Y, Z]_lab (m) -> [Col, Row]_det (Pixels)
+        P_final = S_pix @ P_ortho @ Skew
+        all_P_mats.append(P_final)
         
     all_P_mats = np.array(all_P_mats)
     all_distances = np.array(all_distances)
