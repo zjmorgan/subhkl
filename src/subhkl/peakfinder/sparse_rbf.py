@@ -1586,36 +1586,46 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             opt_Pmats.append(all_P_mats[idx])
             opt_dists.append(all_distances[idx])
 
-    # Inside integrate_peaks_rbf_ssn (Phase 1.5) ...
-    # 4. Run the Global Optimizer
-    res_x = optimize_global_crystal(
-        jnp.array(opt_patches), jnp.array(opt_bgs), 
-        jnp.array(opt_drs), jnp.array(opt_dcs), 
-        jnp.array(opt_Pmats), jnp.array(opt_dists),
-        fit_mosaicity=fit_mosaicity
-    )
-
-    # 5. Project the EXACT 2D footprints for ALL peaks
-    Sigma_shape_jnp = build_3d_cov(jnp.array(res_x[:6]))
+    # We require at least 15 valid peaks to mathematically constrain a 6-parameter 3D tensor
+    MIN_PEAKS_FOR_GLOBAL_FIT = 15
     
-    if fit_mosaicity:
-        Sigma_eta_jnp = jnp.eye(3) * (abs(res_x[6])**2 + 1e-12)
+    if len(opt_patches) < MIN_PEAKS_FOR_GLOBAL_FIT:
+        if show_progress:
+            tqdm.write(f"  > Too few valid peaks ({len(opt_patches)}) for 3D tensor fit. Falling back to nominal isotropic shapes.")
+        
+        all_var_u = np.full(len(all_rs), integrator.nominal_sigma**2, dtype=np.float32)
+        all_var_v = np.full(len(all_rs), integrator.nominal_sigma**2, dtype=np.float32)
+        all_cov_uv = np.zeros(len(all_rs), dtype=np.float32)
     else:
-        Sigma_eta_jnp = jnp.zeros((3, 3))
+        # 4. Run the Global Optimizer
+        res_x = optimize_global_crystal(
+            jnp.array(opt_patches), jnp.array(opt_bgs), 
+            jnp.array(opt_drs), jnp.array(opt_dcs), 
+            jnp.array(opt_Pmats), jnp.array(opt_dists),
+            fit_mosaicity=fit_mosaicity
+        )
 
-    @jit
-    def project_all_shapes(P_mats, dists):
-        def project_one(P, D_i):
-            Sigma_total = Sigma_shape_jnp + (D_i**2) * Sigma_eta_jnp
-            # P is already scaled by S_pix, so output is perfectly in Pixels^2
-            return P @ Sigma_total @ P.T
-        return vmap(project_one)(P_mats, dists)
+        # 5. Project the EXACT 2D footprints for ALL peaks
+        Sigma_shape_jnp = build_3d_cov(jnp.array(res_x[:6]))
+        
+        if fit_mosaicity:
+            Sigma_eta_jnp = jnp.eye(3) * (abs(res_x[6])**2 + 1e-12)
+        else:
+            Sigma_eta_jnp = jnp.zeros((3, 3))
 
-    all_Sigma_2D = project_all_shapes(jnp.array(all_P_mats), jnp.array(all_distances))
+        @jit
+        def project_all_shapes(P_mats, dists):
+            def project_one(P, D_i):
+                Sigma_total = Sigma_shape_jnp + (D_i**2) * Sigma_eta_jnp
+                # P is already scaled by S_pix, so output is perfectly in Pixels^2
+                return P @ Sigma_total @ P.T
+            return vmap(project_one)(P_mats, dists)
 
-    all_var_u = np.array(all_Sigma_2D[:, 0, 0])
-    all_var_v = np.array(all_Sigma_2D[:, 1, 1])
-    all_cov_uv = np.array(all_Sigma_2D[:, 0, 1])
+        all_Sigma_2D = project_all_shapes(jnp.array(all_P_mats), jnp.array(all_distances))
+
+        all_var_u = np.array(all_Sigma_2D[:, 0, 0])
+        all_var_v = np.array(all_Sigma_2D[:, 1, 1])
+        all_cov_uv = np.array(all_Sigma_2D[:, 0, 1])
 
     # --- PHASE 2: GPU INTEGRATION ---
     integrated_results = integrator.integrate_reflections(
