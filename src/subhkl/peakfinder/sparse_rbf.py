@@ -1497,7 +1497,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         k_f = pixel_xyz - s_lab
         distance = np.linalg.norm(k_f)
         all_distances.append(distance)
-        k_f_hat = k_f / distances
+        k_f_hat = k_f / distance
         
         # Detector Normal & Orthogonal Projection
         n_det = np.cross(det.uhat, det.vhat)
