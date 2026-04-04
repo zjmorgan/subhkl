@@ -1065,14 +1065,15 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  num_sigmas=32,
                  nominal_sigma=2.0,
                  anisotropic=False,
-                 chunk_size=1024):
+                 chunk_size=1024,
+                 show_steps=False):
 
         # 1. Initialize parent with safe dummy pixel values to keep it functional 
         # (in case you ever call super().find_peaks_batch)
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=0.5, max_sigma=5.0,
             loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
-            show_steps=False
+            show_steps=show_steps
         )
 
         self.nominal_sigma = nominal_sigma
@@ -1419,7 +1420,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
         loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
-        anisotropic=anisotropic, chunk_size=chunk_size,
+        anisotropic=anisotropic, chunk_size=chunk_size, show_steps=show_progress
     )
     # Ensure the solver dictionary perfectly matches the provided list
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)
