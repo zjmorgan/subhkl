@@ -980,7 +980,7 @@ def optimize_global_crystal(patches, bgs, drs, dcs, P_mats):
     x0 = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
 
     print("\n  > Optimizing 3D Global Crystal Tensor...")
-    res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B')
+    res = scipy.optimize.minimize(scipy_objective, x0, method='L-BFGS-B', jac=True)
 
     Sigma_3D = build_3d_cov(jnp.array(res.x))
     print(f"  > Global Optimization Complete. (Final MSE: {res.fun:.2f})")
