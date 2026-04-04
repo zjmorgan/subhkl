@@ -106,7 +106,7 @@ def process_single_image(
 
     if erosion:
         radius = max(1, int(min(mask.shape) * erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
+        kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
         mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
                 borderValue=0).astype(bool)
 
@@ -432,7 +432,7 @@ def integrate_single_bank(
 
     if mask_erosion:
         radius = max(1, int(min(mask.shape) * mask_erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
+        kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
         mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
             borderValue=0).astype(bool)
 
