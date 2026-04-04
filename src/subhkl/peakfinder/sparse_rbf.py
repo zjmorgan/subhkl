@@ -1491,7 +1491,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         # 1b. Detector Normal & Orthogonal Projection
         n_det = np.cross(det.uhat, det.vhat)
         n_det_hat = n_det / np.linalg.norm(n_det)
-        P_ortho = np.vstack([det.uhat, det.vhat]) # Maps 3D mm to 2D mm
+        P_ortho = np.vstack([det.uhat, det.vhat]) # Maps 3D m to 2D m
         
         # 1c. The Central Projection Skew Matrix
         cos_alpha = np.dot(k_f_hat, n_det_hat)
@@ -1500,8 +1500,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         
         # 1d. Pixel Pitch Scaling Matrix
         # Allows for non-square pixels just in case!
-        pixel_pitch_u = det.width / det.m
-        pixel_pitch_v = det.height / det.n
+        pixel_pitch_u = det.width / (det.m - 1)
+        pixel_pitch_v = det.height / (det.n - 1)
         S_pix = np.diag([1.0 / pixel_pitch_u, 1.0 / pixel_pitch_v])
         
         # 1e. The Ultimate Projection Matrix 
