@@ -1441,6 +1441,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     all_rs, all_cs = [], []
     meta_h, meta_k, meta_l, meta_wl = [], [], [], []
     meta_keys = []
+    meta_harmonics = []
 
     frame_counter = 0
     img_keys_ordered = sorted(peak_dict.keys())
@@ -1456,33 +1457,28 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         hkl_sq = h_arr**2 + k_arr**2 + l_arr**2
         unique_peaks = {}
 
-        # Exact crystallographic harmonic deduplication for TOF Unmixing
+        # Exact crystallographic harmonic deduplication for Quasi-Laue
         for idx in range(initial_peaks_count):
             h, k, l = int(h_arr[idx]), int(k_arr[idx]), int(l_arr[idx])
 
             if h == 0 and k == 0 and l == 0:
                 continue
 
-            # 1. Identify the fundamental ray
             g = np.gcd.reduce([abs(h), abs(k), abs(l)])
             fund_hkl = (h//g, k//g, l//g)
 
-            # 2. Store the EXACT observed harmonic and its wavelength
-            # We group them by their spatial/TOF coordinate so we don't double-count 
-            # if the indexer reported multiple harmonics for a single merged blob.
-            if fund_hkl not in unique_peaks or hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
+            if fund_hkl not in unique_peaks:
                 unique_peaks[fund_hkl] = {
-                    'idx': idx, 
+                    'rep_idx': idx,          # Representative spatial coordinate
                     'hkl_sq': hkl_sq[idx],
-                    'fund_h': h // g,      # H_0
-                    'fund_k': k // g,      # K_0
-                    'fund_l': l // g,      # L_0
-                    'obs_h': h,            # Hobs
-                    'obs_k': k,            # Kobs
-                    'obs_l': l,            # Lobs
-                    'harmonic_id': g,      # The harmonic order
-                    'obs_wl': wl_arr[idx]  # The EXACT observed wavelength of this harmonic
+                    'harmonic_indices': [idx] # Track ALL overlapping harmonics
                 }
+            else:
+                unique_peaks[fund_hkl]['harmonic_indices'].append(idx)
+                # Keep the lowest harmonic as the spatial representative
+                if hkl_sq[idx] < unique_peaks[fund_hkl]['hkl_sq']:
+                    unique_peaks[fund_hkl]['rep_idx'] = idx
+                    unique_peaks[fund_hkl]['hkl_sq'] = hkl_sq[idx]
 
         # Extract the processed data, sorted by original index to maintain determinism
         keep_data = sorted(unique_peaks.values(), key=lambda x: x['idx'])
@@ -1519,12 +1515,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             all_frames.append(frame_counter)
             all_rs.append(i_arr[idx])
             all_cs.append(j_arr[idx])
-            
-            # Append the absolute fundamentals for downstream unmixing
-            meta_h.append(data['fund_h'])
-            meta_k.append(data['fund_k'])
-            meta_l.append(data['fund_l'])
-            meta_wl.append(data['obs_wl'])
+
+            meta_harmonics.append(data['harmonic_indices']) # Save the multiplet list!
             meta_keys.append(img_key)
 
         frame_counter += 1
@@ -1699,18 +1691,29 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in valid_global_indices]
         img_sigI = [float(integrated_results[idx, 4]) for idx in valid_global_indices]
 
-        res.intensity += img_intensities
-        res.sigma += img_sigI
-
         for local_idx, global_idx in zip(valid_local_indices, valid_global_indices):
-            res.h.append(meta_h[global_idx])
-            res.k.append(meta_k[global_idx])
-            res.l.append(meta_l[global_idx])
-            res.wavelength.append(meta_wl[global_idx])
-            res.tt.append(float(bank_tt[local_idx]))
-            res.az.append(float(bank_az[local_idx]))
-            res.run_id.append(run_id)
-            res.bank.append(physical_bank)
+            # The total integrated intensity of the blob
+            intensity = float(integrated_results[global_idx, 0])
+            sigI = float(integrated_results[global_idx, 4])
+
+            # Fetch the list of all harmonics that hit this exact spot
+            harmonic_indices = meta_harmonics[global_idx]
+            p_data = peak_dict[img_key]
+
+            # Unpack! Careless gets a row for every harmonic, sharing the same Intensity.
+            for h_idx in harmonic_indices:
+                res.h.append(p_data[2][h_idx])
+                res.k.append(p_data[3][h_idx])
+                res.l.append(p_data[4][h_idx])
+                res.wavelength.append(p_data[5][h_idx])
+
+                res.tt.append(float(bank_tt[local_idx]))
+                res.az.append(float(bank_az[local_idx]))
+                res.run_id.append(run_id)
+                res.bank.append(physical_bank)
+
+                res.intensity.append(intensity)
+                res.sigma.append(sigI)
 
         # Defer plotting by storing the necessary static data
         if create_visualizations:
