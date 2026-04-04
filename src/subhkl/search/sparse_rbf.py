@@ -1542,12 +1542,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             opt_drs.append(r - (ri - opt_half))
             opt_dcs.append(c - (ci - opt_half))
             opt_Pmats.append(all_P_mats[idx])
+            opt_dists.append(all_dists[idx])
 
     # 4. Run the Global Optimizer (6 Parameters)
     res_x = optimize_global_crystal(
         jnp.array(opt_patches), jnp.array(opt_bgs), 
         jnp.array(opt_drs), jnp.array(opt_dcs), 
-        jnp.array(opt_Pmats)
+        jnp.array(opt_Pmats), jnp.array(opt_dists),
     )
 
     # 5. Project the EXACT 2D footprints for ALL peaks
@@ -1620,7 +1621,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # 3. Extract exact patches
     opt_P = 15
     opt_half = opt_P // 2
-    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats = [], [], [], [], []
+    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats, opt_dists = [], [], [], [], [], []
     for idx in top_indices:
         f, r, c = frames[idx], all_rs[idx], all_cs[idx]
         ri, ci = int(round(r)), int(round(c))
