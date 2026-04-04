@@ -1503,7 +1503,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # 3. Extract exact patches for the optimizer
     opt_P = 15
     opt_half = opt_P // 2
-    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats = [], [], [], [], []
+    opt_patches, opt_bgs, opt_drs, opt_dcs, opt_Pmats, opt_dists = [], [], [], [], [], []
     for idx in top_indices:
         f, r, c = frames[idx], all_rs[idx], all_cs[idx]
         ri, ci = int(round(r)), int(round(c))
