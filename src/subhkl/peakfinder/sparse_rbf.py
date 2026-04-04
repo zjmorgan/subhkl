@@ -928,10 +928,11 @@ def build_3d_cov(params):
         [params[1], params[2],       0.0],
         [params[3], params[4], params[5]]
     ])
-    # Ensure strict positive-definiteness on the diagonal
-    L = L.at[0,0].set(jnp.abs(L[0,0]) + 0.1)
-    L = L.at[1,1].set(jnp.abs(L[1,1]) + 0.1)
-    L = L.at[2,2].set(jnp.abs(L[2,2]) + 0.1)
+    # The safety floor is now 1 micrometer (1e-6 meters)
+    # instead of 100 millimeters!
+    L = L.at[0,0].set(jnp.abs(L[0,0]) + 1e-6)
+    L = L.at[1,1].set(jnp.abs(L[1,1]) + 1e-6)
+    L = L.at[2,2].set(jnp.abs(L[2,2]) + 1e-6)
     return L @ L.T
 
 @partial(jit, static_argnames=['patch_size'])
