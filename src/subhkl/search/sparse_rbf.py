@@ -1494,8 +1494,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
-        batch_rs = np.array([i_arr[d['idx']] for d in keep_data])
-        batch_cs = np.array([j_arr[d['idx']] for d in keep_data])
+        batch_rs = np.array([i_arr[d['rep_idx']] for d in keep_data])
+        batch_cs = np.array([j_arr[d['rep_idx']] for d in keep_data])
 
         xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
