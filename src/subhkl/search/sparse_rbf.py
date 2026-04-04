@@ -703,7 +703,22 @@ class SparseRBFPeakFinder:
         if filter_size % 2 == 0:
             filter_size += 1
 
-        bg_map = np.array(compute_bg_batch(jnp.array(images_batch, dtype=jnp.float32), filter_size))  # [photons/Pixel]
+        # --- CHUNKED BACKGROUND EVALUATION ---
+        bg_map_list = []
+        # Use a reasonable chunk size for the GPU (e.g., 64 or 128 frames at a time)
+        bg_chunk_size = min(self.chunk_size, max(1, B // 4)) 
+        
+        bg_pbar = tqdm(range(0, B, bg_chunk_size), 
+                       desc="Morphological Bg", 
+                       disable=not self.show_steps)
+                       
+        for i in bg_pbar:
+            chunk = jnp.array(images_batch[i:i+bg_chunk_size], dtype=jnp.float32)
+            bg_chunk = compute_bg_batch(chunk, filter_size)
+            bg_chunk.block_until_ready() # Ensure async execution finishes
+            bg_map_list.append(np.array(bg_chunk))
+            
+        bg_map = np.concatenate(bg_map_list, axis=0)  # [photons/Pixel]
         self._last_bg_map = bg_map
 
         valid_bg = bg_map[bg_map > 1e-2]
@@ -1050,14 +1065,15 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
                  num_sigmas=32,
                  nominal_sigma=2.0,
                  anisotropic=False,
-                 chunk_size=1024):
+                 chunk_size=1024,
+                 show_steps=False):
 
         # 1. Initialize parent with safe dummy pixel values to keep it functional 
         # (in case you ever call super().find_peaks_batch)
         super().__init__(
             alpha=alpha, gamma=gamma, min_sigma=0.5, max_sigma=5.0,
             loss=loss, border_width=border_width, num_sigmas=num_sigmas, chunk_size=chunk_size,
-            show_steps=False
+            show_steps=show_steps
         )
 
         self.nominal_sigma = nominal_sigma
@@ -1085,8 +1101,23 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         if filter_size % 2 == 0: 
             filter_size += 1
 
+        # --- CHUNKED BACKGROUND EVALUATION ---
+        bg_map_list = []
+        bg_chunk_size = min(self.chunk_size, max(1, B // 4))
+        
+        # In integrate_reflections, we use self.show_steps to match the parent
+        bg_pbar = tqdm(range(0, B, bg_chunk_size), 
+                       desc="Integration Bg", 
+                       disable=not self.show_steps)
+                       
+        for i in bg_pbar:
+            chunk = jnp.array(images_batch[i:i+bg_chunk_size], dtype=jnp.float32)
+            bg_chunk = compute_bg_batch(chunk, filter_size)
+            bg_chunk.block_until_ready()
+            bg_map_list.append(bg_chunk) # Keep as JAX array to avoid host transfer if possible
+
+        bg_maps_jax = jnp.concatenate(bg_map_list, axis=0)  # [photons/Pixel]
         images_jax = jnp.array(images_batch, dtype=jnp.float32)  # [photons/Pixel]
-        bg_maps_jax = compute_bg_batch(images_jax, filter_size)  # [photons/Pixel]
 
         img_jax_padded = jnp.pad(images_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')  # [photons/Pixel]
         bg_jax_padded = jnp.pad(bg_maps_jax, ((0,0), (PAD, PAD), (PAD, PAD)), mode='reflect')  # [photons/Pixel]
@@ -1389,7 +1420,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
         loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
-        anisotropic=anisotropic, chunk_size=chunk_size,
+        anisotropic=anisotropic, chunk_size=chunk_size, show_steps=show_progress
     )
     # Ensure the solver dictionary perfectly matches the provided list
     integrator.candidate_sigmas = jnp.array(sigmas, dtype=jnp.float32)
