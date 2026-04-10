@@ -428,7 +428,7 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(bank_data_list):
+def plot_unrolled_detector(bank_data_list, images):
     """
     Plots an unrolled cylindrical detector from a list of panel data.
 
@@ -441,7 +441,7 @@ def plot_unrolled_detector(bank_data_list):
     fig, ax = plt.subplots(figsize=(16, 6))
 
     for bank in bank_data_list:
-        img = bank['image']
+        img = images[bank['image_index'][0]]
         det = Detector(bank['det_config'])
 
         # 1. Create a grid of pixel coordinates for the panel
