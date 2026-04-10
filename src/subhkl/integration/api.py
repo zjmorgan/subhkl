@@ -398,10 +398,9 @@ class Peaks:
             peak_cols,
         )
 
-        img_key_to_bank = {key: bank for key, bank in zip(peaks.image_index, peaks.bank)}
-        unique_banks = set(img_key_to_bank.values())
+        unique_banks = set(peaks.bank)
         detectors = {bank_id: self.get_detector(bank_id) for bank_id in unique_banks}
-        plot_unrolled_detector(peaks, self.image.ims, detectors, img_key_to_bank)
+        plot_unrolled_detector(peaks, self.image.ims, detectors)
 
         return peaks
 
