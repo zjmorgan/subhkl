@@ -20,7 +20,12 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         if det is None:
             continue
 
-        cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
+        # Generate cell *edges* (N+1, M+1) instead of centers (N, M).
+        # We shift by -0.5 to get the physical boundary of the pixels.
+        cols, rows = np.meshgrid(
+            np.arange(det.m + 1) - 0.5, 
+            np.arange(det.n + 1) - 0.5
+        )
 
         lab_xyz = det.pixel_to_lab(rows, cols)
         X = lab_xyz[..., 0]
@@ -30,11 +35,18 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         # Unroll cylinder: angle in XZ plane
         roty = np.rad2deg(np.arctan2(X, Z))
 
+        # Handle the cylindrical seam: If a panel wraps around the -Z axis 
+        # (jumping from 179 to -179), shift the negative values to make it continuous.
+        if np.ptp(roty) > 180:
+            roty = np.where(roty < 0, roty + 360, roty)
+
         ax.pcolormesh(
             roty,
             Y,
             img,
-            shading='auto',
+            # 'auto' falls back to 'flat' when edges are provided, 
+            # which is what we want for an (N+1, M+1) coordinate grid.
+            shading='auto', 
             cmap='binary',
             norm=colors.LogNorm(vmin=1, vmax=np.max(img) + 1)
         )
