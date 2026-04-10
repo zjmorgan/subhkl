@@ -416,7 +416,7 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(peaks, images, detectors)
+def plot_unrolled_detector(peaks, images, detectors):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
