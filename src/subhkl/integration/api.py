@@ -186,7 +186,8 @@ class Peaks:
             results_by_key,
             precomputed_peaks,
             visualize=visualize, 
-            max_workers=max_workers
+            max_workers=max_workers,
+            instrument_label=self.instrument
         )
 
     def predict_peaks(
@@ -345,7 +346,8 @@ class Peaks:
             instrument_wavelength,
         )
 
-    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False, max_workers=None):
+    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False,
+                                 max_workers=None, instrument_label=None):
         if precomputed_peaks is None:
             precomputed_peaks = {}
 
@@ -435,7 +437,7 @@ class Peaks:
                     peak_cols=[peaks.peak_cols[i] for i in mask] if peaks.peak_cols else [],
                 )
 
-                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks'], peaks.instrument))
+                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks'], instrument_label))
 
             if max_workers is None:
                 max_workers = os.cpu_count()
