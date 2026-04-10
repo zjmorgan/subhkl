@@ -398,7 +398,7 @@ class Peaks:
             peak_cols,
         )
 
-        plot_unrolled_detector(peaks)
+        plot_unrolled_detector(peaks, self.image.ims)
 
         return peaks
 
