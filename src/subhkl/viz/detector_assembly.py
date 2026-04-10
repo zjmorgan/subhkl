@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
-def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png'):
+def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
@@ -123,7 +123,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
             # Plot the closed loop. The projected shape will naturally warp
             # if the unrolling introduces significant non-linearity over the span of the peak.
-            ax.plot(e_roty, e_Y, color='red', lw=1.5, alpha=0.8, label=label)
+            ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
@@ -141,7 +141,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # 4. Formatting
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
-    ax.set_title('IMAGINE-X Cylindrical Detector (Unrolled)')
+    if instrument is not None:
+        ax.set_title(f'{instrument} cylindrical projection')
 
     # Add a legend if we have peaks
     handles, labels = ax.get_legend_handles_labels()
@@ -149,5 +150,5 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         ax.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.savefig(out_name, dpi=300)
+    plt.savefig(out_name, dpi=600)
     plt.close(fig)
