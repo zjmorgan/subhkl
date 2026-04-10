@@ -139,7 +139,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
-    if peaks is not None and peaks.xyz is not None and len(peaks.xyz) > 0:
+    if peaks is not None and hasattr(peaks, 'xyz') and peaks.xyz is not None and len(peaks.xyz) > 0:
         p_xyz = np.array(peaks.xyz)
 
         if p_xyz.ndim == 1 and len(p_xyz) == 3:
