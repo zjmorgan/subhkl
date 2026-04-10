@@ -117,11 +117,7 @@ class Peaks:
         )
         self.image = _init_ims(filename, ext, instrument, is_merged)
 
-    def get_detector(self, bank: int) -> Detector:
-        if bank in self.image.bank_mapping:
-            physical_bank = self.image.bank_mapping[bank]
-        else:
-            physical_bank = bank
+    def get_detector(self, physical_bank: int) -> Detector:
         bank_id = str(physical_bank)
         det_config = beamlines[self.instrument][bank_id]
         return Detector(det_config)
