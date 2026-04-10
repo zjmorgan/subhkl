@@ -38,6 +38,8 @@ class DetectorPeaks:
     gonio_axes: Optional[List[List[float]]]
     gonio_angles: List[List[float]]
     gonio_names: Optional[List[str]]
+    peak_rows: Optional[List[int]]
+    peak_cols: Optional[List[int]]
 
     def __iter__(self):
         """Allows tuple unpacking"""
