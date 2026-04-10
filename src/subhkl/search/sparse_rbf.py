@@ -1421,7 +1421,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             self.intensity, self.sigma = [], []
             self.tt, self.az, self.wavelength = [], [], []
             self.run_id, self.bank, self.xyz = [], [], []
-            self.var_u, self.var_v, cov_uv = [], [], []
+            self.var_u, self.var_v, self.cov_uv = [], [], []
             self.peak_rows, self.peak_cols = [], []
 
     res = RBFResult()
