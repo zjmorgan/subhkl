@@ -5,16 +5,17 @@ import matplotlib.colors as colors
 def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict,
-    handling the 180-degree wrapping seam, dynamically cutting out large x-axis gaps
-    with subtle diagonal broken-axis markers, and strictly removing all margins.
+    handling the 180-degree wrapping seam, dynamically cutting out large x-axis gaps,
+    strictly removing all margins, and preserving the physical 1:1 aspect ratio.
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
     # ==========================================
-    # PRE-PASS: Find Wrap Bounds & Empty Gaps
+    # PRE-PASS: Find Wrap Bounds, Gaps & Radius
     # ==========================================
     wrapped_panels = set()
     panel_bounds = []
+    radii = []
 
     for img_key, img in images.items():
         det = detectors.get(img_key)
@@ -22,13 +23,21 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         
         c, r = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
         xyz = det.pixel_to_lab(r, c)
-        roty = np.rad2deg(np.arctan2(xyz[..., 0], xyz[..., 2]))
+        
+        X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
+        roty = np.rad2deg(np.arctan2(X, Z))
         
         if np.ptp(roty) > 180:
             roty = np.where(roty < 0, roty + 360, roty)
             wrapped_panels.add(img_key)
             
         panel_bounds.append([np.min(roty), np.max(roty)])
+        
+        # Calculate the physical radius to this panel to fix the aspect ratio later
+        radii.append(np.mean(np.sqrt(X**2 + Z**2)))
+
+    # Calculate average radius of the instrument cylinder (in meters)
+    mean_radius = np.mean(radii) if radii else 1.0
 
     # Merge intervals (with 5-degree tolerance)
     if panel_bounds:
@@ -215,10 +224,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         
         valid_ticks = []
         for t in original_ticks:
-            # ONLY allow ticks that fit STRICTLY inside the detector array bounds
             if t < global_min or t > global_max:
                 continue
-            # Skip ticks that fall inside a cut-out gap
             if not any(g_start + 1 < t < g_end - 1 for g_start, g_end in gaps):
                 valid_ticks.append(t)
                 
@@ -233,11 +240,9 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         ax.spines['bottom'].set_visible(False)
         ax.spines['top'].set_visible(False)
 
-        # We manually redraw the valid segments of the spine using the exact axis limits
         valid_start = c_min
         trans = ax.get_xaxis_transform()
         
-        # Subtler geometry for the diagonal slashes
         d_y = 0.015  # Height of the slash
         d_x = 0.8    # Width of the slash
         m_lw = 0.8   # Thinner line weight for the marker
@@ -246,27 +251,31 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             t_start = compress_roty(np.array([g_start]))[0]
             t_end = compress_roty(np.array([g_end]))[0]
             
-            # Solid spine segment up to the gap
             ax.plot([valid_start, t_start], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
             ax.plot([valid_start, t_start], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
             
-            # Slashes at the start of the gap
             ax.plot([t_start - d_x, t_start + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             ax.plot([t_start - d_x, t_start + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             
-            # Slashes at the end of the gap
             ax.plot([t_end - d_x, t_end + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             ax.plot([t_end - d_x, t_end + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             
             valid_start = t_end
             
-        # Final solid spine segment after the last gap
         ax.plot([valid_start, c_max], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
         ax.plot([valid_start, c_max], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
 
     # Force Matplotlib to respect our boundaries absolutely
     ax.margins(x=0, y=0)
     ax.set_xlim(c_min, c_max)
+
+    # -------------------------------------------------------------
+    # FORCE PHYSICAL ASPECT RATIO 
+    # 1 meter in Y translates to exactly 1 physical meter of arc length in X
+    # 1 degree of arc length = R * (pi / 180) meters
+    # -------------------------------------------------------------
+    aspect_ratio = 180.0 / (np.pi * mean_radius)
+    ax.set_aspect(aspect_ratio, adjustable='box')
 
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
