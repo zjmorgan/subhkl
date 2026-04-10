@@ -10,7 +10,7 @@ from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
-from subhkl.instrument.detector import Detector
+from subhk.integration.api import get_detector
 
 @dataclass(frozen=True)
 class Wavelength:
@@ -417,14 +417,12 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(peaks, images, detector_configs):
+def plot_unrolled_detector(peaks, images):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
     peaks: DetectorPeaks dataclass instance.
     images: Dict of 2D numpy arrays, indexed by img_key (image_index).
-    detector_configs: Dict of detector config dictionaries, indexed by physical bank_id.
-                      Needed to project the image pixels into lab space.
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
@@ -441,10 +439,7 @@ def plot_unrolled_detector(peaks, images, detector_configs):
             continue  # Skip if we don't know which bank this image belongs to
 
         bank_id = img_key_to_bank[img_key]
-        if bank_id not in detector_configs:
-            continue
-
-        det = Detector(detector_configs[bank_id])
+        det = get_detector(bank_id)
 
         # Create a grid of pixel coordinates for this panel
         cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
