@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
-def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None):
+def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png'):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
@@ -149,5 +149,5 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None):
         ax.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.savefig('unrolled_detector_peaks.png', dpi=300)
+    plt.savefig(out_name, dpi=300)
     plt.close(fig)

@@ -1324,6 +1324,34 @@ from tqdm import tqdm
 from collections import defaultdict
 import os
 
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class RunPeaks:
+    """Lightweight dataclass to mock DetectorPeaks for the unrolled plotter."""
+    xyz: list
+    image_index: list
+    intensity: list
+    peak_rows: list
+    peak_cols: list
+    var_u: list
+    var_v: list
+    cov_uv: list
+
+def _render_run_unrolled_plot(args):
+    """Standalone plotting function for generating unrolled plots per run."""
+    run_id, peaks, images, detectors = args
+
+    import matplotlib.pyplot as plt
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    out_name = f"{run_id}_int.png"
+    plot_unrolled_detector(peaks, images, detectors, out_name=out_name)
+
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
     (image_raw, physical_bank, run_id, img_key, img_rs, img_cs,
@@ -1731,38 +1759,38 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
                 res.image_index.append(img_key)
 
-        # Defer plotting by storing the necessary static data
-        if create_visualizations:
-            filt_img_rs = [img_rs[i] for i in valid_local_indices]
-            filt_img_cs = [img_cs[i] for i in valid_local_indices]
-            filt_ref_rs = [float(integrated_results[idx, 1]) for idx in valid_global_indices]
-            filt_ref_cs = [float(integrated_results[idx, 2]) for idx in valid_global_indices]
+    # --- PHASE 4: PARALLEL VISUALIZATION (PER RUN) ---
+    if create_visualizations and runs_plot_data:
+        run_tasks = []
 
-            # Extract the exact projected 2D covariance components for the valid peaks
-            filt_var_us = [float(all_var_u[idx]) for idx in valid_global_indices]
-            filt_var_vs = [float(all_var_v[idx]) for idx in valid_global_indices]
-            filt_cov_uvs = [float(all_cov_uv[idx]) for idx in valid_global_indices]
+        for r_id, data in runs_plot_data.items():
+            # Extract only the peaks belonging to this run_id
+            mask = [i for i, run in enumerate(res.run_id) if run == r_id]
 
-            plot_tasks.append((
-                image_raw, physical_bank, run_id, img_key,
-                filt_img_rs, filt_img_cs, filt_ref_rs, filt_ref_cs,
-                img_intensities, filt_var_us, filt_var_vs, filt_cov_uvs
-            ))
+            run_peaks = RunPeaks(
+                xyz=[res.xyz[i] for i in mask],
+                image_index=[res.image_index[i] for i in mask],
+                intensity=[res.intensity[i] for i in mask],
+                peak_rows=[res.peak_rows[i] for i in mask],
+                peak_cols=[res.peak_cols[i] for i in mask],
+                var_u=[res.var_u[i] for i in mask],
+                var_v=[res.var_v[i] for i in mask],
+                cov_uv=[res.cov_uv[i] for i in mask]
+            )
 
-    # --- PHASE 4: PARALLEL VISUALIZATION ---
-    if create_visualizations and plot_tasks:
-        # Render the global diagnostic plot in the main thread
+            run_tasks.append((r_id, run_peaks, data['images'], data['detectors']))
+
         if max_workers is None:
             max_workers = os.cpu_count()
 
-        max_workers = min(max_workers, len(plot_tasks))
+        max_workers = min(max_workers, len(run_tasks))
 
         ctx = multiprocessing.get_context("spawn")
         with concurrent.futures.ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             list(tqdm(
-                executor.map(_render_and_save_rbf_plot, plot_tasks),
-                total=len(plot_tasks),
-                desc="Rendering Plots",
+                executor.map(_render_run_unrolled_plot, run_tasks),
+                total=len(run_tasks),
+                desc="Rendering Unrolled Plots",
                 disable=not show_progress
             ))
 
