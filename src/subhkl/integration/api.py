@@ -372,7 +372,6 @@ class Peaks:
                 banks.extend(res["banks"])
                 peak_rows.extend(res["i"])
                 peak_cols.extend(res["j"])
-                actual_img_key = res["image_indices"][0]
                 image_indices.extend(res["image_indices"])
                 run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
                 if res["gonio_angles"]:
