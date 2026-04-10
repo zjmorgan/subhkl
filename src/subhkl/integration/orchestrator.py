@@ -10,7 +10,6 @@ from subhkl.search.sparse_rbf import SparseRBFPeakFinder
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
-from subhkl.integration.api import get_detector
 
 @dataclass(frozen=True)
 class Wavelength:
