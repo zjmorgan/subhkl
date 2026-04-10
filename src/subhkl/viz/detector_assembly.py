@@ -17,6 +17,14 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # Keep track of which panels crossed the seam and were unwrapped
     wrapped_panels = set()
 
+    # Determine global max for consistent color scaling across all panels
+    global_vmax = 1
+    if images:
+        global_vmax = max(np.max(img) for img in images.values())
+
+    global_norm = colors.LogNorm(vmin=1, vmax=global_vmax + 1)
+    mesh_handle = None
+
     # 1. Plot the Images
     for img_key, img in images.items():
         det = detectors.get(img_key)
@@ -26,7 +34,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         # Generate cell *edges* (N+1, M+1) instead of centers (N, M).
         # We shift by -0.5 to get the physical boundary of the pixels.
         cols, rows = np.meshgrid(
-            np.arange(det.m + 1) - 0.5, 
+            np.arange(det.m + 1) - 0.5,
             np.arange(det.n + 1) - 0.5
         )
 
@@ -43,20 +51,21 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             roty = np.where(roty < 0, roty + 360, roty)
             wrapped_panels.add(img_key)
 
-        ax.pcolormesh(
+        mesh = ax.pcolormesh(
             roty,
             Y,
             img,
-            # 'auto' falls back to 'flat' when edges are provided, 
-            # which is what we want for an (N+1, M+1) coordinate grid.
-            shading='auto', 
+            shading='auto',
             cmap='binary',
-            norm=colors.LogNorm(vmin=1, vmax=np.max(img) + 1)
+            norm=global_norm
         )
+
+        # Save the first mesh so we can attach a colorbar to it
+        if mesh_handle is None:
+            mesh_handle = mesh
 
     # 2. Plot Finder Peaks (if provided)
     if finder_peaks is not None:
-        # Keep track of whether we've added the label for the legend
         added_finder_label = False
 
         for img_key, coords in finder_peaks.items():
@@ -67,9 +76,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             if det is None:
                 continue
 
-            # Ensure coords is an array of shape (N, 2) representing [row, col]
             coords = np.atleast_2d(coords)
-            # coords shape is [intensity, r, c, sigma]
             f_rows, f_cols = coords[:, 1], coords[:, 2]
 
             f_xyz = det.pixel_to_lab(f_rows, f_cols)
@@ -94,7 +101,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         added_ellipse_label = False
         theta = np.linspace(0, 2 * np.pi, 50)
         cos_t, sin_t = np.cos(theta), np.sin(theta)
-        
+
         for i in range(len(peaks.intensity)):
             img_key = peaks.image_index[i]
             det = detectors.get(img_key)
@@ -121,13 +128,11 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             e_X, e_Y, e_Z = ell_xyz[..., 0], ell_xyz[..., 1], ell_xyz[..., 2]
             e_roty = np.rad2deg(np.arctan2(e_X, e_Z))
 
-            # Unwrap if the ellipse crosses the seam itself OR if its parent panel wrapped
             if img_key in wrapped_panels or np.ptp(e_roty) > 180:
                 e_roty = np.where(e_roty < 0, e_roty + 360, e_roty)
 
             label = 'Projected 3D Tensor' if not added_ellipse_label else ""
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
-
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
@@ -138,22 +143,24 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         p_X, p_Y, p_Z = p_xyz[:, 0], p_xyz[:, 1], p_xyz[:, 2]
         p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
 
-        # Shift integrated peaks if their underlying panel was unwrapped
         if getattr(peaks, 'image_index', None) is not None:
             for i, img_key in enumerate(peaks.image_index):
                 if img_key in wrapped_panels and p_roty[i] < 0:
                     p_roty[i] += 360
 
         ax.scatter(p_roty, p_Y, marker='o', facecolors='none', edgecolors='red',
-                       s=40, linewidths=0.25, label=label)
+                       s=40, linewidths=0.25, label='Integrated Peaks')
 
-    # 4. Formatting
+    # 5. Formatting & Colorbar
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
     if instrument is not None:
         ax.set_title(f'{instrument} cylindrical projection')
 
-    # Add a legend if we have peaks
+    if mesh_handle is not None:
+        cbar = fig.colorbar(mesh_handle, ax=ax, fraction=0.046, pad=0.02)
+        cbar.set_label('Intensity (counts)')
+
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         ax.legend(loc='upper right')
