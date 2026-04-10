@@ -4,6 +4,8 @@ import PIL.Image
 import scipy
 import skimage.feature
 
+from dataclasses import dataclass
+
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.instrument.detector import Detector
 from subhkl.search.threshold import ThresholdingPeakFinder
@@ -13,6 +15,32 @@ from subhkl.instrument.physics import (
 )
 from subhkl.core.crystallography import generate_reflections
 
+
+@dataclass
+class _RunPeaksFinder:
+    """Lightweight mock of DetectorPeaks for the unrolled plotter."""
+    xyz: list
+    image_index: list
+    peak_rows: list
+    peak_cols: list
+    intensity: list = None
+    var_u: list = None
+    var_v: list = None
+    cov_uv: list = None
+
+def _render_finder_unrolled_plot(args):
+    """Standalone plotting function for generating unrolled plots per run."""
+    run_id, peaks, images, detectors, finder_peaks = args
+
+    import matplotlib.pyplot as plt
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    out_name = f"{run_id}_finder.png"
+    plot_unrolled_detector(peaks, images, detectors, finder_peaks=finder_peaks, out_name=out_name)
 
 def _run_harvest_local_max(
     im,
