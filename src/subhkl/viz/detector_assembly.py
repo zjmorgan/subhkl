@@ -266,7 +266,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         ax.plot([valid_start, c_max], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
 
     # Force Matplotlib to respect our boundaries absolutely
-    ax.margins(x=0, y=0)
+    ax.margins(0, 0)
     ax.set_xlim(c_min, c_max)
 
     # -------------------------------------------------------------
@@ -291,6 +291,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         by_label = dict(zip(labels, handles))
         ax.legend(by_label.values(), by_label.keys(), loc='upper right')
 
-    plt.tight_layout()
-    plt.savefig(out_name, dpi=600)
+    # bbox_inches='tight' crops the saved figure exactly to the drawn artists,
+    # eliminating any white padding left behind by the physical aspect ratio box scaling.
+    plt.savefig(out_name, dpi=600, bbox_inches='tight', pad_inches=0.05)
     plt.close(fig)
