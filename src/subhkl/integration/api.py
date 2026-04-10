@@ -14,7 +14,7 @@ from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
-from suhbkl.integration.worker import _render_finder_unrolled_plot, _RunPeaksFinder
+from subhkl.integration.worker import _render_finder_unrolled_plot, _RunPeaksFinder
 from subhkl.viz.detector_assembly import plot_unrolled_detector
 
 
