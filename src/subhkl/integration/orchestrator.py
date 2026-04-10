@@ -428,43 +428,51 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(peaks, images):
+def plot_unrolled_detector(peaks, images, detectors, img_key_to_bank=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
     peaks: DetectorPeaks dataclass instance.
     images: Dict of 2D numpy arrays, indexed by img_key (image_index).
+    detectors: Dict mapping physical bank_id to instantiated Detector objects.
+    img_key_to_bank: Optional dict mapping img_key -> bank_id. If None, it will
+                     be inferred from the peaks object (empty panels will be skipped).
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
-    # 1. Map img_key to bank_id so we know which geometry to apply to each image.
-    # We can infer this mapping from the peaks object.
-    img_key_to_bank = {}
-    if peaks.image_index is not None and peaks.bank is not None:
-        for img_idx, bank_id in zip(peaks.image_index, peaks.bank):
-            img_key_to_bank[img_idx] = bank_id
+    # 1. Infer img_key -> bank_id mapping if not explicitly provided
+    if img_key_to_bank is None:
+        img_key_to_bank = {}
+        if peaks.image_index is not None and peaks.bank is not None:
+            for img_idx, bank_id in zip(peaks.image_index, peaks.bank):
+                img_key_to_bank[img_idx] = bank_id
 
-    # 2. Plot the Images (unrolled onto the cylinder)
+    # 2. Plot the Images
     for img_key, img in images.items():
-        if img_key not in img_key_to_bank:
-            continue  # Skip if we don't know which bank this image belongs to
+        bank_id = img_key_to_bank.get(img_key)
 
-        bank_id = img_key_to_bank[img_key]
-        det = get_detector(bank_id)
+        # Skip if we don't have a mapping or a detector for this image
+        if bank_id is None or bank_id not in detectors:
+            continue
 
-        # Create a grid of pixel coordinates for this panel
+        det = detectors[bank_id]
+
+        # Handle if the dictionary contains configs instead of instantiated objects
+        # (Just in case get_detector returns the config dict instead of the class)
+        if isinstance(det, dict):
+            from subhkl.instrument.detector import Detector
+            det = Detector(det)
+
         cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
 
-        # Convert the pixel grid to Lab Coordinates
         lab_xyz = det.pixel_to_lab(rows, cols)
         X = lab_xyz[..., 0]
         Y = lab_xyz[..., 1]
         Z = lab_xyz[..., 2]
 
-        # Calculate unrolled cylindrical angle (roty) in the XZ plane
+        # Unroll cylinder: angle in XZ plane
         roty = np.rad2deg(np.arctan2(X, Z))
 
-        # Plot the image panel in physical space
         ax.pcolormesh(
             roty,
             Y,
@@ -475,11 +483,9 @@ def plot_unrolled_detector(peaks, images):
         )
 
     # 3. Plot the Peaks
-    # Since peaks.xyz already contains the lab coordinates, we bypass pixel conversion
     if peaks.xyz is not None and len(peaks.xyz) > 0:
         p_xyz = np.array(peaks.xyz)
 
-        # Handle shape depending on if xyz is a list of lists (N, 3)
         if p_xyz.ndim == 1 and len(p_xyz) == 3:
             p_xyz = p_xyz[np.newaxis, :]
 
