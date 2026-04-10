@@ -144,7 +144,7 @@ class Peaks:
         if not self.image.ims:
             raise Exception("ERROR: Must have images for Peaks first...")
 
-        tasks = orchestrator.prepare_harvest_tasks(
+        tasks, precomputed_peaks = orchestrator.prepare_harvest_tasks(
             self.image,
             self.instrument,
             self.goniometer,
@@ -181,7 +181,7 @@ class Peaks:
                 except Exception as e:
                     print(f"Worker failed for image {img_key}: {e}")
 
-        return self._assemble_detector_peaks(results_by_key)
+        return self._assemble_detector_peaks(results_by_key, precomputed_peaks)
 
     def predict_peaks(
         self,
@@ -339,7 +339,7 @@ class Peaks:
             instrument_wavelength,
         )
 
-    def _assemble_detector_peaks(self, results_by_key):
+    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks={}):
         R: list[float] = []
         two_theta: list[float] = []
         az_phi: list[float] = []
@@ -400,7 +400,7 @@ class Peaks:
 
         unique_banks = set(peaks.bank)
         detectors = {img_key: self.get_detector_by_img(img_key) for img_key in self.image.ims}
-        plot_unrolled_detector(peaks, self.image.ims, detectors)
+        plot_unrolled_detector(peaks, self.image.ims, detectors, finder_peaks=precomputed_peaks)
 
         return peaks
 
