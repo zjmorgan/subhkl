@@ -86,7 +86,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
             label = 'Finder Candidates' if not added_finder_label else ""
             ax.scatter(f_roty, f_Y, marker='o', facecolors='none', edgecolors='blue',
-                       s=40, linewidths=1.2, label=label)
+                       s=40, linewidths=0.25, label=label)
             added_finder_label = True
 
     # 3. Plot the Projected 3D Ellipsoids
@@ -126,7 +126,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
                 e_roty = np.where(e_roty < 0, e_roty + 360, e_roty)
 
             label = 'Projected 3D Tensor' if not added_ellipse_label else ""
-            ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
+            ax.scatter(e_roty, e_Y, marker='o', facecolors='none', edgecolors='red',
+                       s=40, linewidths=0.25, label=label)
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
