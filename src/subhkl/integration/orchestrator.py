@@ -480,7 +480,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None):
 
             # Ensure coords is an array of shape (N, 2) representing [row, col]
             coords = np.atleast_2d(coords)
-            f_rows, f_cols = coords[:, 0], coords[:, 1]
+            # coords shape is [intensity, r, c, sigma]
+            f_rows, f_cols = coords[:, 1], coords[:, 2]
 
             f_xyz = det.pixel_to_lab(f_rows, f_cols)
 
