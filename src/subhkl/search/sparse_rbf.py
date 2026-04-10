@@ -1762,7 +1762,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         for r_id, data in runs_plot_data.items():
             # Extract only the peaks belonging to this run_id
             mask = [i for i, run in enumerate(res.run_id) if run == r_id]
-            image_label = peaks_obj.image.get_image_label(res.image_index[mask[0]])
+            image_label = peaks_obj.get_image_label(res.image_index[mask[0]])
 
             run_peaks = RunPeaks(
                 image_index=[res.image_index[i] for i in mask],
