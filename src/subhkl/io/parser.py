@@ -1568,7 +1568,7 @@ def rbf_integrator(
     if create_visualizations:
         from subhkl.viz.detector_assembly import plot_unrolled_detector
         detectors = {img_key: peaks.get_detector_by_img(img_key) for img_key in peaks.image.ims}
-        plot_unrolled_detector(result, peaks.image.ims, detectors, finder_peaks=None):
+        plot_unrolled_detector(result, peaks.image.ims, detectors, finder_peaks=None)
 
     print(f"Saving RBF integrated peaks to {output_filename}")
     with h5py.File(output_filename, "w") as f:
