@@ -1682,12 +1682,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     for i in range(len(meta_keys)):
         results_by_img[meta_keys[i]].append(i)
 
-    plot_tasks = []
+    # Replaces the old plot_tasks list
+    runs_plot_data = defaultdict(lambda: {'images': {}, 'detectors': {}})
 
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector_by_img(img_key)
-        run_id = peaks_obj.image.get_run_id(img_key)
+        run_id = peaks_obj.get_run_id(img_key)
 
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
         H, W = image_raw.shape
@@ -1704,7 +1705,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_cs = [all_cs[idx] for idx in indices]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
 
-        # --- EDGE MASKING FIX ---
+        # Defer plotting by storing the necessary static data per Run
+        if create_visualizations:
+            runs_plot_data[run_id]['images'][img_key] = image_raw
+            runs_plot_data[run_id]['detectors'][img_key] = det
+
         valid_global_indices = []
         valid_local_indices = []
 
@@ -1718,25 +1723,24 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         if not valid_global_indices:
             continue
 
-        img_intensities = [float(integrated_results[idx, 0]) for idx in valid_global_indices]
-        img_spatial_sigmas = [float(integrated_results[idx, 3]) for idx in valid_global_indices]
-        img_sigI = [float(integrated_results[idx, 4]) for idx in valid_global_indices]
-
         for local_idx, global_idx in zip(valid_local_indices, valid_global_indices):
-            # The total integrated intensity of the blob
             intensity = float(integrated_results[global_idx, 0])
             sigI = float(integrated_results[global_idx, 4])
-            r = float(all_rs[global_idx])
-            c = float(all_cs[global_idx])
+            
+            r_center = float(integrated_results[global_idx, 1])
+            c_center = float(integrated_results[global_idx, 2])
             var_u = float(all_var_u[global_idx])
             var_v = float(all_var_v[global_idx])
             cov_uv = float(all_cov_uv[global_idx])
 
-            # Fetch the list of all harmonics that hit this exact spot
+            # Convert precise refined centers to 3D Lab coordinates
+            xyz_lab = det.pixel_to_lab(r_center, c_center)
+            if xyz_lab.ndim == 1:
+                xyz_lab = xyz_lab[np.newaxis, :]
+
             harmonic_indices = meta_harmonics[global_idx]
             p_data = peak_dict[img_key]
 
-            # Unpack! Careless gets a row for every harmonic, sharing the same Intensity.
             for h_idx in harmonic_indices:
                 res.h.append(p_data[2][h_idx])
                 res.k.append(p_data[3][h_idx])
@@ -1747,17 +1751,17 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 res.az.append(float(bank_az[local_idx]))
                 res.run_id.append(run_id)
                 res.bank.append(physical_bank)
-
                 res.intensity.append(intensity)
                 res.sigma.append(sigI)
 
-                res.peak_rows.append(r)
-                res.peak_cols.append(c)
+                # Store extended unrolled metadata
+                res.xyz.append(xyz_lab[0].tolist())
+                res.image_index.append(img_key)
+                res.peak_rows.append(r_center)
+                res.peak_cols.append(c_center)
                 res.var_u.append(var_u)
                 res.var_v.append(var_v)
                 res.cov_uv.append(cov_uv)
-
-                res.image_index.append(img_key)
 
     # --- PHASE 4: PARALLEL VISUALIZATION (PER RUN) ---
     if create_visualizations and runs_plot_data:
