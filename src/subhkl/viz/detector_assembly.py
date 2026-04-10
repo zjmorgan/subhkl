@@ -126,8 +126,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
                 e_roty = np.where(e_roty < 0, e_roty + 360, e_roty)
 
             label = 'Projected 3D Tensor' if not added_ellipse_label else ""
-            ax.scatter(e_roty, e_Y, marker='o', facecolors='none', edgecolors='red',
-                       s=40, linewidths=0.25, label=label)
+            ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
+
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
@@ -144,7 +144,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
                 if img_key in wrapped_panels and p_roty[i] < 0:
                     p_roty[i] += 360
 
-        ax.scatter(p_roty, p_Y, marker='x', color='red', s=15, linewidths=1, label='Integrated Peaks')
+        ax.scatter(p_roty, p_Y, marker='o', facecolors='none', edgecolors='red',
+                       s=40, linewidths=0.25, label=label)
 
     # 4. Formatting
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
