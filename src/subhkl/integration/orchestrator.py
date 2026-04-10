@@ -97,13 +97,20 @@ def prepare_harvest_tasks(
         images_list = [ims[k] for k in img_keys]
         img_stack = np.stack(images_list)
 
+        border_width = harvest_peaks_kwargs.get("mask_rel_erosion_radius", 0)
+        if border_width is None:
+            border_width = 0.0
+        border_width *= min(img_stack.shape[1], img_stack.shape[2])
+
         alg = SparseRBFPeakFinder(
             alpha=harvest_peaks_kwargs.get("alpha", 0.1),
             gamma=harvest_peaks_kwargs.get("gamma", 2.0),
+            loss=harvest_peaks_kwargs.get("loss", "gaussian"),
             min_sigma=harvest_peaks_kwargs.get("min_sigma", 1.0),
             max_sigma=harvest_peaks_kwargs.get("max_sigma", 10.0),
             max_peaks=harvest_peaks_kwargs.get("max_peaks", 500),
-            chunk_size=harvest_peaks_kwargs.get("chunk_size", 1024),
+            border_width=int(border_width),
+            chunk_size=harvest_peaks_kwargs.get("chunk_size", 128),
             show_steps=harvest_peaks_kwargs.get("show_steps", False),
         )
         batch_coords = alg.find_peaks_batch(img_stack)
@@ -147,7 +154,11 @@ def prepare_harvest_tasks(
         pre_coords = None
         if finder_algorithm == "sparse_rbf":
             coords = precomputed_peaks[img_key]
-            pre_coords = (coords[:, 0], coords[:, 1])
+            # coords shape is [intensity, r, c, sigma]
+            if len(coords) > 0:
+                pre_coords = (coords[:, 1], coords[:, 2])
+            else:
+                pre_coords = (np.array([]), np.array([]))
 
         finder_info = (finder_algorithm, harvest_peaks_kwargs, pre_coords)
         mask_info = (
