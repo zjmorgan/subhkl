@@ -1329,7 +1329,6 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RunPeaks:
     """Lightweight dataclass to mock DetectorPeaks for the unrolled plotter."""
-    xyz: list
     image_index: list
     intensity: list
     peak_rows: list
@@ -1340,7 +1339,7 @@ class RunPeaks:
 
 def _render_run_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
-    run_id, peaks, images, detectors = args
+    run_id, peaks, images, detectors, instrument = args
 
     import matplotlib.pyplot as plt
     from subhkl.viz.detector_assembly import plot_unrolled_detector
@@ -1350,7 +1349,7 @@ def _render_run_unrolled_plot(args):
         plt.switch_backend("Agg")
 
     out_name = f"{run_id}_int.png"
-    plot_unrolled_detector(peaks, images, detectors, out_name=out_name)
+    plot_unrolled_detector(peaks, images, detectors, out_name=out_name, instrument=instrument)
 
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
@@ -1528,7 +1527,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         batch_rs = np.array([i_arr[d['rep_idx']] for d in keep_data])
         batch_cs = np.array([j_arr[d['rep_idx']] for d in keep_data])
 
-        xyz_lab = det.pixel_to_lab(batch_rs, batch_cs)
         bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
@@ -1733,11 +1731,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             var_v = float(all_var_v[global_idx])
             cov_uv = float(all_cov_uv[global_idx])
 
-            # Convert precise refined centers to 3D Lab coordinates
-            xyz_lab = det.pixel_to_lab(r_center, c_center)
-            if xyz_lab.ndim == 1:
-                xyz_lab = xyz_lab[np.newaxis, :]
-
             harmonic_indices = meta_harmonics[global_idx]
             p_data = peak_dict[img_key]
 
@@ -1755,7 +1748,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 res.sigma.append(sigI)
 
                 # Store extended unrolled metadata
-                res.xyz.append(xyz_lab[0].tolist())
                 res.image_index.append(img_key)
                 res.peak_rows.append(r_center)
                 res.peak_cols.append(c_center)
@@ -1770,9 +1762,9 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         for r_id, data in runs_plot_data.items():
             # Extract only the peaks belonging to this run_id
             mask = [i for i, run in enumerate(res.run_id) if run == r_id]
+            image_label = peaks_obs.image.get_image_label(res.image_index[mask[0]])
 
             run_peaks = RunPeaks(
-                xyz=[res.xyz[i] for i in mask],
                 image_index=[res.image_index[i] for i in mask],
                 intensity=[res.intensity[i] for i in mask],
                 peak_rows=[res.peak_rows[i] for i in mask],
@@ -1782,7 +1774,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 cov_uv=[res.cov_uv[i] for i in mask]
             )
 
-            run_tasks.append((r_id, run_peaks, data['images'], data['detectors']))
+            run_tasks.append((image_label, run_peaks, data['images'], data['detectors'], peaks_obj.instrument))
 
         if max_workers is None:
             max_workers = os.cpu_count()
