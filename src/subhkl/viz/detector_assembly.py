@@ -5,8 +5,8 @@ import matplotlib.colors as colors
 def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict,
-    handling the 180-degree wrapping seam, dynamically cutting out large x-axis gaps,
-    and removing x-axis margins so the plot tightly bounds the detector array.
+    handling the 180-degree wrapping seam, dynamically cutting out large x-axis gaps
+    with subtle diagonal broken-axis markers, and strictly removing all margins.
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
@@ -197,15 +197,38 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # FORMATTING & GAPS VISUALIZATION
     # ==========================================
     
-    # Explicitly calculate and set the tight limits to remove margins
+    # Pre-calculate true limits based exclusively on the image boundaries
     if merged:
-        c_min = compress_roty(np.array([merged[0][0]]))[0]
-        c_max = compress_roty(np.array([merged[-1][1]]))[0]
-        ax.set_xlim(c_min, c_max)
+        global_min = merged[0][0]
+        global_max = merged[-1][1]
+        c_min = compress_roty(np.array([global_min]))[0]
+        c_max = compress_roty(np.array([global_max]))[0]
     else:
         c_min, c_max = ax.get_xlim()
-    
-    # Hide the spines in between the breaks so it actually looks "broken"
+        global_min, global_max = c_min, c_max
+
+    # Format the X-Axis Ticks dynamically
+    if merged:
+        start_tick = np.floor(global_min / 45.0) * 45
+        end_tick = np.ceil(global_max / 45.0) * 45
+        original_ticks = np.arange(start_tick, end_tick + 1, 45)
+        
+        valid_ticks = []
+        for t in original_ticks:
+            # ONLY allow ticks that fit STRICTLY inside the detector array bounds
+            if t < global_min or t > global_max:
+                continue
+            # Skip ticks that fall inside a cut-out gap
+            if not any(g_start + 1 < t < g_end - 1 for g_start, g_end in gaps):
+                valid_ticks.append(t)
+                
+        if valid_ticks:
+            valid_ticks = np.array(valid_ticks)
+            tick_pos = compress_roty(valid_ticks)
+            ax.set_xticks(tick_pos)
+            ax.set_xticklabels([f"{int(t) % 360}$^\circ$" for t in valid_ticks])
+
+    # Draw the custom broken spines if gaps exist
     if gaps:
         ax.spines['bottom'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -215,52 +238,35 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         trans = ax.get_xaxis_transform()
         
         # Subtler geometry for the diagonal slashes
-        d_y = 0.015  # Height of the slash (fraction of axis height)
-        d_x = 0.8    # Width of the slash (in degrees)
+        d_y = 0.015  # Height of the slash
+        d_x = 0.8    # Width of the slash
         m_lw = 0.8   # Thinner line weight for the marker
         
         for g_start, g_end in gaps:
             t_start = compress_roty(np.array([g_start]))[0]
             t_end = compress_roty(np.array([g_end]))[0]
             
-            # Redraw the solid spine segment up to the gap
+            # Solid spine segment up to the gap
             ax.plot([valid_start, t_start], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
             ax.plot([valid_start, t_start], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
             
-            # Draw the slashes at the start of the gap
+            # Slashes at the start of the gap
             ax.plot([t_start - d_x, t_start + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             ax.plot([t_start - d_x, t_start + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             
-            # Draw the slashes at the end of the gap
+            # Slashes at the end of the gap
             ax.plot([t_end - d_x, t_end + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             ax.plot([t_end - d_x, t_end + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=m_lw)
             
             valid_start = t_end
             
-        # Draw the final solid spine segment after the last gap
+        # Final solid spine segment after the last gap
         ax.plot([valid_start, c_max], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
         ax.plot([valid_start, c_max], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
 
-    # Format the X-Axis Ticks dynamically to reflect physical angles
-    if merged:
-        global_min = merged[0][0]
-        global_max = merged[-1][1]
-        
-        start_tick = np.floor(global_min / 45.0) * 45
-        end_tick = np.ceil(global_max / 45.0) * 45
-        original_ticks = np.arange(start_tick, end_tick + 1, 45)
-        
-        valid_ticks = []
-        for t in original_ticks:
-            # Skip ticks that fall squarely inside a cut-out gap
-            if not any(g_start + 1 < t < g_end - 1 for g_start, g_end in gaps):
-                valid_ticks.append(t)
-                
-        if valid_ticks:
-            valid_ticks = np.array(valid_ticks)
-            tick_pos = compress_roty(valid_ticks)
-            ax.set_xticks(tick_pos)
-            ax.set_xticklabels([f"{int(t) % 360}$^\circ$" for t in valid_ticks])
+    # Force Matplotlib to respect our boundaries absolutely
+    ax.margins(x=0, y=0)
+    ax.set_xlim(c_min, c_max)
 
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
