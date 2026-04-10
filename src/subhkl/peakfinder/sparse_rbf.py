@@ -1421,6 +1421,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             self.intensity, self.sigma = [], []
             self.tt, self.az, self.wavelength = [], [], []
             self.run_id, self.bank, self.xyz = [], [], []
+            self.var_u, self.var_v, cov_uv = [], [], []
+            self.peak_rows, self.peak_cols = [], []
 
     res = RBFResult()
     if sample_offset is None:
@@ -1695,6 +1697,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             # The total integrated intensity of the blob
             intensity = float(integrated_results[global_idx, 0])
             sigI = float(integrated_results[global_idx, 4])
+            r = float(all_rs[global_idx])
+            c = float(all_cs[global_idx])
+            var_u = float(all_var_u[global_idx])
+            var_v = float(all_var_v[global_idx])
+            cov_uv = float(all_cov_uv[global_idx])
 
             # Fetch the list of all harmonics that hit this exact spot
             harmonic_indices = meta_harmonics[global_idx]
@@ -1714,6 +1721,12 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
                 res.intensity.append(intensity)
                 res.sigma.append(sigI)
+
+                res.peak_rows.append(r)
+                res.peak_cols.append(c)
+                res.var_u.append(var_u)
+                res.var_v.append(var_v)
+                res.cov_uv.append(cov_uv)
 
         # Defer plotting by storing the necessary static data
         if create_visualizations:

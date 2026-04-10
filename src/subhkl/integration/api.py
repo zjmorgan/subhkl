@@ -14,7 +14,7 @@ from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
-from subhkl.integration.orchestrator import plot_unrolled_detector
+from subhkl.viz.detector_assembly import plot_unrolled_detector
 
 
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
