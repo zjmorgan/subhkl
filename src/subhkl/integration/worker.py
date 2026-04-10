@@ -30,7 +30,7 @@ class _RunPeaksFinder:
 
 def _render_finder_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
-    run_id, peaks, images, detectors, finder_peaks = args
+    run_id, peaks, images, detectors, finder_peaks, instrument = args
 
     import matplotlib.pyplot as plt
     from subhkl.viz.detector_assembly import plot_unrolled_detector
@@ -40,7 +40,7 @@ def _render_finder_unrolled_plot(args):
         plt.switch_backend("Agg")
 
     out_name = f"{run_id}_finder.png"
-    plot_unrolled_detector(peaks, images, detectors, finder_peaks=finder_peaks, out_name=out_name)
+    plot_unrolled_detector(peaks, images, detectors, finder_peaks=finder_peaks, out_name=out_name, instrument=instrument)
 
 def _run_harvest_local_max(
     im,

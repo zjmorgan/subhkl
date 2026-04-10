@@ -435,7 +435,7 @@ class Peaks:
                     peak_cols=[peaks.peak_cols[i] for i in mask] if peaks.peak_cols else [],
                 )
 
-                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks']))
+                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks'], peaks.instrument))
 
             if max_workers is None:
                 max_workers = os.cpu_count()
