@@ -1484,7 +1484,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         keep_data = sorted(unique_peaks.values(), key=lambda x: x['rep_idx'])
         actual_peaks_count = len(keep_data)
 
-        det = peaks_obj.get_detector(img_key)
+        det = peaks_obj.get_detector_by_img(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
         if all_R is not None and all_R.ndim == 3:
@@ -1535,7 +1535,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     all_distances = []
     
     for idx, img_key in enumerate(meta_keys):
-        det = peaks_obj.get_detector(img_key)
+        det = peaks_obj.get_detector_by_img(img_key)
         run_id = frames[idx] 
         
         if all_R is not None and all_R.ndim == 3:
@@ -1655,7 +1655,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
-        det = peaks_obj.get_detector(img_key)
+        det = peaks_obj.get_detector_by_img(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
         image_raw = np.nan_to_num(peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0)
