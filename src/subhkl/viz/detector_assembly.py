@@ -121,6 +121,11 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None):
             
             label = 'Projected 3D Tensor' if not added_ellipse_label else ""
 
+            # Plot the closed loop. The projected shape will naturally warp
+            # if the unrolling introduces significant non-linearity over the span of the peak.
+            ax.plot(e_roty, e_Y, color='red', lw=1.5, alpha=0.8, label=label)
+            added_ellipse_label = True
+
     # 4. Plot the Integrated Peaks
     if peaks is not None and peaks.xyz is not None and len(peaks.xyz) > 0:
         p_xyz = np.array(peaks.xyz)
