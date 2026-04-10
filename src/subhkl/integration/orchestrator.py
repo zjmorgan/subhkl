@@ -428,21 +428,9 @@ def plot_unrolled_detector(peaks, images, detectors):
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
-    # 1. Infer img_key -> bank_id mapping if not explicitly provided
-    img_key_to_bank = {}
-    if peaks.image_index is not None and peaks.bank is not None:
-        for img_idx, bank_id in zip(peaks.image_index, peaks.bank):
-            img_key_to_bank[img_idx] = bank_id
-
     # 2. Plot the Images
     for img_key, img in images.items():
-        bank_id = img_key_to_bank.get(img_key)
-
-        # Skip if we don't have a mapping or a detector for this image
-        if bank_id is None or bank_id not in detectors:
-            continue
-
-        det = detectors[bank_id]
+        det = detectors[img_key]
 
         cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
 
