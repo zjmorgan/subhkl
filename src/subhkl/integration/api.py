@@ -122,6 +122,10 @@ class Peaks:
         det_config = beamlines[self.instrument][bank_id]
         return Detector(det_config)
 
+    def get_detector_by_img(self, img_key: int) -> Detector:
+        physical_bank = self.image.bank_mapping[img_key]
+        return self.get_detector(physical_bank)
+
     def get_run_id(self, img_key: int) -> int:
         return self.image.get_run_id(img_key)
 
