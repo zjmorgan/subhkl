@@ -427,7 +427,7 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(peaks, images, detectors, img_key_to_bank=None):
+def plot_unrolled_detector(peaks, images, detectors)
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
@@ -455,12 +455,6 @@ def plot_unrolled_detector(peaks, images, detectors, img_key_to_bank=None):
             continue
 
         det = detectors[bank_id]
-
-        # Handle if the dictionary contains configs instead of instantiated objects
-        # (Just in case get_detector returns the config dict instead of the class)
-        if isinstance(det, dict):
-            from subhkl.instrument.detector import Detector
-            det = Detector(det)
 
         cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
 
