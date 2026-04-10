@@ -8,6 +8,7 @@ from subhkl.config import beamlines
 from subhkl.instrument.goniometer import Goniometer
 from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
 
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
@@ -177,7 +178,7 @@ def prepare_harvest_tasks(
                 viz_info,
             )
         )
-    return tasks
+    return tasks, precomputed_peaks
 
 
 def prepare_predict_tasks(
@@ -416,21 +417,23 @@ def prepare_integrate_tasks(
         )
     return tasks
 
-def plot_unrolled_detector(peaks, images, detectors):
+def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict.
 
     peaks: DetectorPeaks dataclass instance.
     images: Dict of 2D numpy arrays, indexed by img_key (image_index).
-    detectors: Dict mapping physical bank_id to instantiated Detector objects.
-    img_key_to_bank: Optional dict mapping img_key -> bank_id. If None, it will
-                     be inferred from the peaks object (empty panels will be skipped).
+    detectors: Dict mapping img_key to instantiated Detector objects.
+    finder_peaks: Optional dict mapping img_key to numpy arrays of shape (N, 2)
+                  containing [row, col] pixel coordinates from the peak finder.
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
-    # 2. Plot the Images
+    # 1. Plot the Images
     for img_key, img in images.items():
-        det = detectors[img_key]
+        det = detectors.get(img_key)
+        if det is None:
+            continue
 
         cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
 
@@ -451,8 +454,38 @@ def plot_unrolled_detector(peaks, images, detectors):
             norm=colors.LogNorm(vmin=1, vmax=np.max(img) + 1)
         )
 
-    # 3. Plot the Peaks
-    if peaks.xyz is not None and len(peaks.xyz) > 0:
+    # 2. Plot Finder Peaks (if provided)
+    if finder_peaks is not None:
+        # Keep track of whether we've added the label for the legend
+        added_finder_label = False
+
+        for img_key, coords in finder_peaks.items():
+            if coords is None or len(coords) == 0:
+                continue
+
+            det = detectors.get(img_key)
+            if det is None:
+                continue
+
+            # Ensure coords is an array of shape (N, 2) representing [row, col]
+            coords = np.atleast_2d(coords)
+            f_rows, f_cols = coords[:, 0], coords[:, 1]
+
+            f_xyz = det.pixel_to_lab(f_rows, f_cols)
+
+            if f_xyz.ndim == 1:
+                f_xyz = f_xyz[np.newaxis, :]
+
+            f_X, f_Y, f_Z = f_xyz[:, 0], f_xyz[:, 1], f_xyz[:, 2]
+            f_roty = np.rad2deg(np.arctan2(f_X, f_Z))
+
+            label = 'Finder Candidates' if not added_finder_label else ""
+            ax.scatter(f_roty, f_Y, marker='o', facecolors='none', edgecolors='blue',
+                       s=40, linewidths=1.2, label=label)
+            added_finder_label = True
+
+    # 3. Plot the Integrated Peaks
+    if peaks is not None and peaks.xyz is not None and len(peaks.xyz) > 0:
         p_xyz = np.array(peaks.xyz)
 
         if p_xyz.ndim == 1 and len(p_xyz) == 3:
@@ -461,12 +494,17 @@ def plot_unrolled_detector(peaks, images, detectors):
         p_X, p_Y, p_Z = p_xyz[:, 0], p_xyz[:, 1], p_xyz[:, 2]
         p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
 
-        ax.scatter(p_roty, p_Y, marker='x', color='red', s=15, linewidths=1)
+        ax.scatter(p_roty, p_Y, marker='x', color='red', s=15, linewidths=1, label='Integrated Peaks')
 
     # 4. Formatting
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
-    ax.set_ylabel('Lab Vertical (Y)')
+    ax.set_ylabel('Lab Vertical (Y) [m]')
     ax.set_title('IMAGINE-X Cylindrical Detector (Unrolled)')
+
+    # Add a legend if we have peaks
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(loc='upper right')
 
     plt.tight_layout()
     plt.savefig('unrolled_detector_peaks.png', dpi=300)
