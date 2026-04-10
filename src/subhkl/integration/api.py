@@ -345,7 +345,7 @@ class Peaks:
             instrument_wavelength,
         )
 
-    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None):
+    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False, max_workers=None):
         if precomputed_peaks is None:
             precomputed_peaks = {}
 
