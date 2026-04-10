@@ -126,7 +126,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
                 e_roty = np.where(e_roty < 0, e_roty + 360, e_roty)
 
             label = 'Projected 3D Tensor' if not added_ellipse_label else ""
-            ax.plot(e_roty, e_Y, color='red', lw=1.5, alpha=0.8, label=label)
+            ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
