@@ -1423,6 +1423,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
             self.run_id, self.bank, self.xyz = [], [], []
             self.var_u, self.var_v, self.cov_uv = [], [], []
             self.peak_rows, self.peak_cols = [], []
+            self.image_index = []
 
     res = RBFResult()
     if sample_offset is None:
@@ -1727,6 +1728,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 res.var_u.append(var_u)
                 res.var_v.append(var_v)
                 res.cov_uv.append(cov_uv)
+
+                res.image_index.append(img_key)
 
         # Defer plotting by storing the necessary static data
         if create_visualizations:
