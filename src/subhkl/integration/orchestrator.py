@@ -8,6 +8,9 @@ from subhkl.config import beamlines
 from subhkl.instrument.goniometer import Goniometer
 from subhkl.search.sparse_rbf import SparseRBFPeakFinder
 
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+from subhkl.instrument.detector import Detector
 
 @dataclass(frozen=True)
 class Wavelength:
@@ -423,5 +426,72 @@ def prepare_integrate_tasks(
         )
     return tasks
 
+def plot_unrolled_detector(bank_data_list):
+    """
+    Plots an unrolled cylindrical detector from a list of panel data.
+
+    bank_data_list: A list of dictionaries, where each dict contains:
+        - 'image': The 2D numpy array of the image (from the TIFF/HDF5)
+        - 'det_config': The configuration dictionary for that specific bank
+        - 'peak_rows': (Optional) 1D array of integrated peak row centers
+        - 'peak_cols': (Optional) 1D array of integrated peak column centers
+    """
+    fig, ax = plt.subplots(figsize=(16, 6))
+
+    for bank in bank_data_list:
+        img = bank['image']
+        det = Detector(bank['det_config'])
+
+        # 1. Create a grid of pixel coordinates for the panel
+        # m = cols (width), n = rows (height)
+        cols, rows = np.meshgrid(np.arange(det.m), np.arange(det.n))
+
+        # 2. Convert all pixels to Lab Coordinates (X, Y, Z)
+        lab_xyz = det.pixel_to_lab(rows, cols)
+        X = lab_xyz[..., 0]
+        Y = lab_xyz[..., 1]
+        Z = lab_xyz[..., 2]
+
+        # 3. Calculate the unrolled cylindrical angle (roty)
+        # Z is the beam, so roty is the angle in the XZ plane
+        roty = np.rad2deg(np.arctan2(X, Z))
+
+        # 4. Plot the image data mapped to (roty, Y)
+        # We use pcolormesh because the panels are flat and projecting 
+        # them onto a cylinder causes slight non-linear coordinate spacing.
+        ax.pcolormesh(
+            roty, 
+            Y, 
+            img, 
+            shading='auto', 
+            cmap='binary', 
+            norm=colors.LogNorm(vmin=1, vmax=np.max(img) + 1)
+        )
+
+        # 5. Overlay the peaks if they exist
+        if 'peak_rows' in bank and 'peak_cols' in bank:
+            peak_lab = det.pixel_to_lab(bank['peak_rows'], bank['peak_cols'])
+            
+            # pixel_to_lab returns shape (N, 3) or (3,)
+            if peak_lab.ndim == 1:
+                peak_lab = peak_lab[np.newaxis, :]
+                
+            p_X, p_Y, p_Z = peak_lab[:, 0], peak_lab[:, 1], peak_lab[:, 2]
+            p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
+            
+            # Plot peaks. Change p_Y to p_X if you strictly want the lab X axis vertically.
+            ax.scatter(p_roty, p_Y, marker='x', color='red', s=15, linewidths=1)
+
+    # 6. Format the unified plot
+    ax.set_xlabel('Rotation Angle (roty) [degrees]')
+    ax.set_ylabel('Lab Vertical (Y)')
+    ax.set_title('IMAGINE-X Cylindrical Detector (Unrolled)')
+    
+    # Optional: Invert the x-axis if looking from the sample outward
+    # ax.invert_xaxis()
+    
+    plt.tight_layout()
+    plt.savefig('unrolled_detector_peaks.png', dpi=300)
+    plt.close(fig)
 
 # NOTE(vivek): handle multiprocessing orchestration

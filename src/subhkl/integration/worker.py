@@ -252,6 +252,8 @@ def process_single_image(
             "image_indices": [img_key] * num,
             "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
             "count": num,
+            "i": i,
+            "j": j,
         }
         log_msg = (
             f"Integrated {len(i)}/{len(centers)} peaks for {img_label} "

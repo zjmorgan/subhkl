@@ -14,6 +14,7 @@ from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
+from subhkl.integration.orchestrator import plot_unrolled_detector
 
 
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
@@ -352,6 +353,8 @@ class Peaks:
         image_indices: list[int] = []
         run_ids: list[int] = []
         gonio_angles_out: list[list[float]] = []
+        peak_rows: list[int] = []
+        peak_cols: list[int] = []
 
         # Assemble results in DETERMINISTIC (sorted) order
         for img_key in sorted(self.image.ims.keys()):
@@ -367,13 +370,15 @@ class Peaks:
                 radii.extend(res["radii"])
                 xyz_out.extend(res["xyz"])
                 banks.extend(res["banks"])
+                peak_rows.extend(res["i"])
+                peak_cols.extend(res["j"])
                 actual_img_key = res["image_indices"][0]
                 image_indices.extend(res["image_indices"])
                 run_ids.extend([self.get_run_id(actual_img_key)] * res["count"])
                 if res["gonio_angles"]:
                     gonio_angles_out.extend(res["gonio_angles"])
 
-        return DetectorPeaks(
+        peaks = DetectorPeaks(
             R,
             two_theta,
             az_phi,
@@ -389,7 +394,13 @@ class Peaks:
             self.goniometer.axes_raw,
             gonio_angles_out,
             self.goniometer.names_raw,
+            peak_rows,
+            peak_cols,
         )
+
+        plot_unrolled_detector(peaks)
+
+        return peaks
 
     def _assemble_integration_result(self, peak_dict, results_by_bank):
         h, k, l = [], [], []  # noqa: E741
