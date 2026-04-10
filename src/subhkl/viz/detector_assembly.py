@@ -5,7 +5,8 @@ import matplotlib.colors as colors
 def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
     """
     Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict,
-    handling the 180-degree wrapping seam and dynamically cutting out large x-axis gaps.
+    handling the 180-degree wrapping seam and dynamically cutting out large x-axis gaps
+    with diagonal broken-axis markers.
     """
     fig, ax = plt.subplots(figsize=(16, 6))
 
@@ -30,21 +31,26 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         panel_bounds.append([np.min(roty), np.max(roty)])
 
     # Merge intervals (with 5-degree tolerance)
-    panel_bounds.sort(key=lambda x: x[0])
-    merged = []
-    for b in panel_bounds:
-        if not merged:
-            merged.append([b[0], b[1]])
-        else:
-            prev = merged[-1]
-            if b[0] <= prev[1] + 5.0:
-                prev[1] = max(prev[1], b[1])
-            else:
+    if panel_bounds:
+        panel_bounds.sort(key=lambda x: x[0])
+        merged = []
+        for b in panel_bounds:
+            if not merged:
                 merged.append([b[0], b[1]])
+            else:
+                prev = merged[-1]
+                if b[0] <= prev[1] + 5.0:
+                    prev[1] = max(prev[1], b[1])
+                else:
+                    merged.append([b[0], b[1]])
+    else:
+        merged = []
 
     # Find significant gaps (> 72 degrees, which is 20% of 360)
     gaps = []
-    visual_gap_size = 15.0 # The visual width (in degrees) to draw the break indicator
+    # Set the visual gap size to a small sliver just wide enough for the broken axis marks
+    visual_gap_size = 5.0 
+    
     for i in range(len(merged) - 1):
         g_start = merged[i][1]
         g_end = merged[i+1][0]
@@ -191,16 +197,42 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # ==========================================
     # FORMATTING & GAPS VISUALIZATION
     # ==========================================
-    # Draw the Break Indicators (--//--)
-    for g_start, g_end in gaps:
-        t_start = compress_roty(np.array([g_start]))[0]
-        t_end = compress_roty(np.array([g_end]))[0]
+    
+    # Hide the spines in between the breaks so it actually looks "broken"
+    if gaps:
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
+        # We manually redraw the valid segments of the spine
+        valid_start = ax.get_xlim()[0]
+        trans = ax.get_xaxis_transform()
         
-        # Shade the gap to clearly indicate the break
-        ax.axvspan(t_start, t_end, color='whitesmoke', zorder=0)
-        ax.axvspan(t_start, t_end, color='none', hatch='//', edgecolor='lightgray', zorder=1)
-        ax.axvline(t_start, color='black', linestyle='--', lw=1.5, zorder=2)
-        ax.axvline(t_end, color='black', linestyle='--', lw=1.5, zorder=2)
+        # Geometry for the diagonal slashes
+        d_y = 0.02  # height of the slash (fraction of axis height)
+        d_x = 1.5   # width of the slash (in degrees)
+        
+        for g_start, g_end in gaps:
+            t_start = compress_roty(np.array([g_start]))[0]
+            t_end = compress_roty(np.array([g_end]))[0]
+            
+            # Redraw the solid spine segment up to the gap
+            ax.plot([valid_start, t_start], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
+            ax.plot([valid_start, t_start], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
+            
+            # Draw the slashes at the start of the gap
+            ax.plot([t_start - d_x, t_start + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=1.5)
+            ax.plot([t_start - d_x, t_start + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=1.5)
+            
+            # Draw the slashes at the end of the gap
+            ax.plot([t_end - d_x, t_end + d_x], [-d_y, d_y], color='black', transform=trans, clip_on=False, lw=1.5)
+            ax.plot([t_end - d_x, t_end + d_x], [1 - d_y, 1 + d_y], color='black', transform=trans, clip_on=False, lw=1.5)
+            
+            valid_start = t_end
+            
+        # Draw the final solid spine segment after the last gap
+        valid_end = ax.get_xlim()[1]
+        ax.plot([valid_start, valid_end], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
+        ax.plot([valid_start, valid_end], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
 
     # Format the X-Axis Ticks dynamically to reflect physical angles
     if merged:
@@ -234,7 +266,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        # Prevent duplicate legend entries if multiple components added the label
         by_label = dict(zip(labels, handles))
         ax.legend(by_label.values(), by_label.keys(), loc='upper right')
 
