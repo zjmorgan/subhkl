@@ -285,6 +285,7 @@ def finder(
     sparse_rbf_tile_rows: int = 2,  # NEW: Number of row divisions for tiling
     sparse_rbf_tile_cols: int = 2,  # NEW: Number of col divisions for tiling
     sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
+    sparse_rbf_auto_tune_alpha: bool = typer.Option(False, help="Auto-tune SNR threshold."),
     max_workers: int = 16,
 ):
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -328,6 +329,7 @@ def finder(
                 "show_scale": "linear",
                 "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
                 "loss": sparse_rbf_loss,
+                "auto_tune_alpha": spares_rbf_auto_tune_alpha,
             }
         )
     else:
