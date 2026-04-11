@@ -98,16 +98,18 @@ class SparseRBFPeakFinder:
     """
     def __init__(
         self,
-        alpha: float = 0.05,            
-        gamma: float = 2.0,             
-        min_sigma: float = 0.5,         
+        alpha: float = 15.0,
+        gamma: float = 2.0,
+        min_sigma: float = 0.5,
         max_sigma: float = 8.0,
-        max_peaks: int = 500,           
+        max_peaks: int = 500,
         chunk_size: int = 128,
         loss: str = 'gaussian',
         border_width: int = 0,
         num_sigmas: int = 32,
-        show_steps: bool = True
+        show_steps: bool = True,
+        auto_tune_alpha: bool = False,
+        candidate_alphas: list = None
     ):
         self.alpha = alpha  # [-]
         self.gamma = gamma  # [-]
@@ -126,6 +128,10 @@ class SparseRBFPeakFinder:
         self.max_local_peaks = 5  # [-]
        
         self.candidate_sigmas = jnp.linspace(min_sigma, max_sigma, num_sigmas)  # [Pixel^0.5]
+
+        self.auto_tune_alpha = auto_tune_alpha
+        # Reasonable defaults covering low-SNR to high-SNR regimes
+        self.candidate_alphas = jnp.array(candidate_alphas or [10.0, 15.0, 20.0, 25.0, 30.0], dtype=jnp.float32)
 
     @staticmethod
     def _rbf_basis(x_grid, y, sigma_long, theta=0.0, phi=0.0, anisotropic=False, sigma_short=1.5):
@@ -684,15 +690,59 @@ class SparseRBFPeakFinder:
 
         return {"nll": nll_total, "bic": bic_total, "deviance_nu": dev_per_dof}
 
+    @partial(jit, static_argnames=['self', 'H', 'W', 'max_peaks_local', 'loss_code'])
+    def _solve_and_tune_patch(self, patch_stat, patch_bg, candidate_alphas, H, W, max_peaks_local, loss_code):
+        """
+        Sweeps through candidate alphas for a given patch, solves the SSN,
+        calculates the local BIC, and returns the parameters from the best alpha.
+        """
+        # 1. Define a function to evaluate a single alpha
+        def evaluate_alpha(alpha_val):
+            # Run the existing dense solver for this specific alpha
+            params_out = self._solve_dense(
+                patch_stat, patch_bg, alpha_val, H, W, max_peaks_local, loss_code, do_merge=True
+            )
+
+            # Extract active parameters
+            c_out = params_out[:, 0]
+            active_mask = c_out > 1e-9
+            k_active = jnp.sum(active_mask)
+
+            # Predict the reconstruction
+            yy, xx = jnp.indices((H, W))
+            x_grid = jnp.array([yy, xx])
+            recon = self._predict_batch_physical(params_out, x_grid, active_mask)
+            recon_total = jnp.maximum(recon + patch_bg, 1e-9)
+
+            # Calculate Local NLL and BIC
+            if loss_code == 1: # Poisson
+                nll = jnp.sum(recon_total - jax.scipy.special.xlogy(patch_stat, recon_total))
+            else:              # Gaussian
+                nll = 0.5 * jnp.sum((recon_total - patch_stat)**2)
+
+            n_pix = H * W
+            n_params = k_active * 4
+            # If no peaks are found, penalize heavily so we prefer alphas that find real signals
+            bic = jnp.where(k_active == 0, 1e9, n_params * jnp.log(n_pix) + 2 * nll)
+
+            return bic, params_out
+
+        # 2. Vectorize the evaluation over all candidate alphas
+        bics, all_params = vmap(evaluate_alpha)(candidate_alphas)
+
+        # 3. Find the index of the lowest BIC
+        best_idx = jnp.argmin(bics)
+
+        # 4. Return the parameters associated with the lowest BIC
+        return all_params[best_idx]
+
+
     def find_peaks_batch(self, images_batch):
         """
         Args:
             images_batch: [photons/Pixel]
         """
         B, H, W = images_batch.shape
-        
-        # alpha is strictly interpreted as the Z-score (SNR) threshold
-        alpha_z_score = self.alpha  # [-]
 
         filter_size = max(15, int(self.max_sigma * 5))  # [Pixel^0.5]
         if filter_size % 2 == 0:
@@ -745,7 +795,12 @@ class SparseRBFPeakFinder:
         loss_code_sniper = 1 if self.loss == 'poisson' else 0
 
         max_k_rad = int(3.0 * self.max_sigma)  # [Pixel^0.5]
-        
+
+        # Decide which alpha to use for the SCOUT phase
+        # If tuning, use the absolute minimum candidate to cast the widest possible net
+        # alpha is strictly interpreted as the Z-score (SNR) threshold
+        scout_alpha = jnp.min(self.candidate_alphas) if self.auto_tune_alpha else self.alpha
+
         w_scout_core = self.base_window_size  # [Pixel^0.5]
         w_ext = w_scout_core + 2 * max_k_rad  # [Pixel^0.5]
         stride = w_scout_core // 2  # [Pixel^0.5]
@@ -782,8 +837,9 @@ class SparseRBFPeakFinder:
                 return lax.dynamic_slice(img[bi], (ri, ci), (w_ext, w_ext))  # [photons/Pixel]
             return vmap(slice_one)(b_idx, r_start, c_start)
 
-        scout_solver = jit(vmap(lambda ws, wb: self._solve_dense(ws, wb, alpha_z_score, w_ext, w_ext, 5, loss_code_sniper, False)))
-        
+
+        scout_solver = jit(vmap(lambda ws, wb: self._solve_dense(ws, wb, scout_alpha, w_ext, w_ext, 5, loss_code_sniper, False)))
+
         scout_results = []
         scout_pbar = tqdm(range(0, total_scout_wins, self.chunk_size), desc="Scout Phase", disable=not self.show_steps)
         
@@ -855,7 +911,19 @@ class SparseRBFPeakFinder:
                 return lax.dynamic_slice(img[bi], (ri, ci), (P_EXT, P_EXT))
             return vmap(slice_one)(b_idx, r_start, c_start)
 
-        sniper_solver = jit(vmap(lambda ws, wb: self._solve_dense(ws, wb, alpha_z_score, P_EXT, P_EXT, self.max_local_peaks, loss_code_sniper, True)))
+        if self.auto_tune_alpha:
+            if self.show_steps:
+                print(f"  > Auto-Tuning Alpha across {self.candidate_alphas.tolist()}")
+            # Use the tuning solver
+            sniper_solver = jit(vmap(lambda ws, wb: self._solve_and_tune_patch(
+                ws, wb, self.candidate_alphas, P_EXT, P_EXT, self.max_local_peaks, loss_code_sniper
+            )))
+        else:
+            # Use standard solver with fixed alpha
+            sniper_solver = jit(vmap(lambda ws, wb: self._solve_dense(
+                ws, wb, self.alpha, P_EXT, P_EXT, self.max_local_peaks, loss_code_sniper, True
+            ))) 
+
         refined_peaks_by_bank = [[] for _ in range(B)]
         
         sniper_pbar = tqdm(range(0, total_seeds, self.chunk_size), desc="Sniper V-Cycle", disable=not self.show_steps)
