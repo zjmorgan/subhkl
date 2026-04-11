@@ -286,6 +286,7 @@ def finder(
     sparse_rbf_tile_cols: int = 2,  # NEW: Number of col divisions for tiling
     sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
     sparse_rbf_auto_tune_alpha: bool = typer.Option(False, help="Auto-tune SNR threshold."),
+    sparse_rbf_candidate_alphas: str = typer.Option("3.0,5.0,10.0,15.0,20.0,25.0,30", help="Candidate SNR thresholds alpha for auto-tuning"),
     max_workers: int = 16,
 ):
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -317,6 +318,8 @@ def finder(
             }
         )
     elif finder_algorithm == "sparse_rbf":
+        alpha_list = [float(k.strip()) for k in sparse_rbf_candidate_alphas.split(",")]
+
         peak_kwargs.update(
             {
                 "alpha": sparse_rbf_alpha,
@@ -330,6 +333,7 @@ def finder(
                 "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
                 "loss": sparse_rbf_loss,
                 "auto_tune_alpha": sparse_rbf_auto_tune_alpha,
+                "candidate_alphas": alpha_list,
             }
         )
     else:
