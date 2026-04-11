@@ -200,23 +200,56 @@ class HoughPrior:
         plt.savefig(filename, dpi=150, bbox_inches='tight')
         plt.close()
 
-    def generate_theoretical_zones(self, grid_range=5, top_k=600):
-        """Generates the fundamental Zone Axes directly from Cartesian lattice translations."""
+    def generate_theoretical_zones(self, L_max=None, top_k=600, max_uvw=25):
+        """
+        Generates the fundamental Zone Axes directly from Cartesian lattice translations
+        using an isotropic, dynamically scaled spherical bounding box in real space.
+        """
+        # A_mat columns are the real-space basis vectors a, b, c
         A_mat = np.linalg.inv(self.B_mat).T
-        grid = np.arange(-grid_range, grid_range + 1)
-        u_idx, v_idx, w_idx = np.meshgrid(grid, grid, grid, indexing='ij')
-        uvw = np.vstack([u_idx.flatten(), v_idx.flatten(), w_idx.flatten()])
-        uvw = uvw[:, np.any(uvw != 0, axis=0)]
+        A_norms = np.linalg.norm(A_mat, axis=0) # Lengths of a, b, c in Angstroms
         
+        # Dynamic default: 1.5x the longest unit cell axis to ensure diagonals are captured
+        if L_max is None:
+            L_max = 1.5 * np.max(A_norms)
+            
+        # Calculate exact integer steps needed to reach the spherical boundary L_max
+        u_max, v_max, w_max = np.ceil(L_max / A_norms).astype(int)
+
+        # Hard cap to prevent memory explosion on pathological cells
+        u_max, v_max, w_max = min(u_max, max_uvw), min(v_max, max_uvw), min(w_max, max_uvw)
+        
+        print(f"  -> Dynamic Real-Space Grid (L_max={L_max}Å): u(±{u_max}), v(±{v_max}), w(±{w_max})")
+        
+        u_idx, v_idx, w_idx = np.meshgrid(
+            np.arange(-u_max, u_max + 1),
+            np.arange(-v_max, v_max + 1),
+            np.arange(-w_max, w_max + 1),
+            indexing='ij'
+        )
+        uvw = np.vstack([u_idx.flatten(), v_idx.flatten(), w_idx.flatten()])
+        uvw = uvw[:, np.any(uvw != 0, axis=0)] # Remove origin (0,0,0)
+        
+        # Map integer indices to Cartesian real-space coordinates
         r_cart = np.dot(A_mat, uvw)
         norms = np.linalg.norm(r_cart, axis=0)
         
+        # Rigorously crop off the "corners" of the bounding box to make it a perfect sphere
+        valid_sphere = norms <= L_max
+        r_cart = r_cart[:, valid_sphere]
+        norms = norms[valid_sphere]
+        
+        # The shortest physical translation vectors define the highest-density, most visible Zone Axes
         sort_idx = np.argsort(norms)
         limit = min(top_k, len(norms))
+        
         n_calc_raw = r_cart[:, sort_idx[:limit]] / norms[sort_idx[:limit]]
         
+        # Map to upper hemisphere and round to handle numeric floating-point fuzz
         n_calc_raw[:, n_calc_raw[2] < 0] *= -1
         n_calc_raw = np.round(n_calc_raw, 5)
+        
+        # Deduplicate parallel vectors
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
     def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
