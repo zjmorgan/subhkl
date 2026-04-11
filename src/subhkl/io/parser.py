@@ -1329,7 +1329,7 @@ def zone_axis_search(
     n_hough: int = typer.Option(15, help="Maximum number of empirical zone axes."),
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
     top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
-    max_uvw: int = typer.Option(8, help="Maximum uvw index for zone axis search"),
+    max_uvw: int = typer.Option(25, help="Maximum uvw index for zone axis search"),
     top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
     num_runs: int = typer.Option(0, help="Number of goniometer runs to use. Set to 0 to use all."),
     output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
