@@ -252,8 +252,7 @@ class HoughPrior:
         # Deduplicate parallel vectors
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, centering='P',
-                           angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, space_group="P 1", angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
         """
         Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
         then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
@@ -261,7 +260,6 @@ class HoughPrior:
         n_obs_np = np.array(n_obs)
         n_calc_np = np.array(n_calc)
         
-        # 1. Compute the exact angle matrices
         S_obs = np.abs(np.dot(n_obs_np, n_obs_np.T))
         S_calc = np.abs(np.dot(n_calc_np, n_calc_np.T))
         
@@ -269,8 +267,6 @@ class HoughPrior:
         ang_calc = np.degrees(np.arccos(np.clip(S_calc, -1.0, 1.0)))
         
         valid_permutations = []
-        
-        # 2. Only build triplets out of the top 15 absolute strongest empirical zone axes.
         num_obs = min(len(n_obs_np), 15)
         strict_tol = angle_tol_deg 
         
@@ -279,15 +275,12 @@ class HoughPrior:
         for i in range(num_obs):
             for j in range(i + 1, num_obs):
                 for k in range(j + 1, num_obs):
-                    
                     a_ij, a_ik, a_jk = ang_obs[i, j], ang_obs[i, k], ang_obs[j, k]
-                    
                     M_AB = np.abs(ang_calc - a_ij) <= strict_tol
                     M_AC = np.abs(ang_calc - a_ik) <= strict_tol
                     M_BC = np.abs(ang_calc - a_jk) <= strict_tol
                     
                     A_idx, B_idx = np.where(M_AB)
-                    
                     for A, B in zip(A_idx, B_idx):
                         if A == B: continue
                         valid_C = np.where(M_AC[A, :] & M_BC[B, :])[0]
@@ -296,38 +289,27 @@ class HoughPrior:
                             valid_permutations.append(([i, j, k], [A, B, C]))
                             
         print(f"  -> Triplet Graph Search yielded exactly {len(valid_permutations)} physical matches.")
-        
         if len(valid_permutations) == 0:
             return None, None
             
-        # 3. Formulate RANSAC Hypotheses (Fully Vectorized GPU Expansion)
         print(f"  -> Vectorizing {len(valid_permutations)} physical matches onto GPU...")
         
         obs_indices = np.array([p[0] for p in valid_permutations], dtype=np.int32)
         calc_indices = np.array([p[1] for p in valid_permutations], dtype=np.int32)
-        
-        v_base = jnp.array(n_obs_np)[obs_indices]      # Shape: (M, 3, 3)
-        u_base = jnp.array(n_calc_np)[calc_indices]    # Shape: (M, 3, 3)
+        v_base = jnp.array(n_obs_np)[obs_indices]      
+        u_base = jnp.array(n_calc_np)[calc_indices]    
         
         import itertools
-        
-        # 8-way Sign Expansion via JAX Broadcasting
-        signs = jnp.array(list(itertools.product([1, -1], repeat=3)), dtype=v_base.dtype) # (8, 3)
+        signs = jnp.array(list(itertools.product([1, -1], repeat=3)), dtype=v_base.dtype)
         v_expanded = v_base[:, None, :, :] * signs[None, :, :, None]
         
-        v_hyp_all = v_expanded.reshape(-1, 3, 3)  # Flattens to (M*8, 3, 3)
-        u_hyp_all = jnp.repeat(u_base, 8, axis=0) # Expands to (M*8, 3, 3)
+        v_hyp_all = v_expanded.reshape(-1, 3, 3)  
+        u_hyp_all = jnp.repeat(u_base, 8, axis=0) 
         
         print(f"  -> Polishing {len(v_hyp_all)} geometric hypotheses using Angular Laue Indexing...")
         
-        # --- DYNAMIC ANISOTROPIC HKL GENERATION ---
-        # Target a physical resolution limit for the angular indexer
-        B_norms = np.linalg.norm(self.B_mat, axis=0) # Lengths of a*, b*, c*
-        
-        # Calculate exactly how many indices are needed on each axis to reach d_min
+        B_norms = np.linalg.norm(self.B_mat, axis=0)
         h_max, k_max, l_max = np.ceil(1.0 / (d_min * B_norms)).astype(int)
-        
-        # Hard cap to prevent VRAM explosion on highly pathological cells
         h_max, k_max, l_max = min(h_max, max_hkl), min(k_max, max_hkl), min(l_max, max_hkl)
         
         print(f"  -> Dynamic Reciprocal Grid Limits (d_min={d_min}Å): h(±{h_max}), k(±{k_max}), l(±{l_max})")
@@ -339,29 +321,20 @@ class HoughPrior:
             indexing='ij'
         )
         hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
-        hkls = hkls[:, np.any(hkls != 0, axis=0)] # Remove (0,0,0)
-       
-        # --- DYNAMIC CENTERING MASK ---
-        h, k, l = hkls[0], hkls[1], hkls[2]
-        if centering == 'F':
-            # F-centered: All even or all odd
-            h_even, k_even, l_even = (h % 2 == 0), (k % 2 == 0), (l % 2 == 0)
-            mask = (h_even == k_even) & (k_even == l_even)
-        elif centering == 'I':
-            mask = (h + k + l) % 2 == 0
-        elif centering == 'A':
-            mask = (k + l) % 2 == 0
-        elif centering == 'B':
-            mask = (h + l) % 2 == 0
-        elif centering == 'C':
-            mask = (h + k) % 2 == 0
-        elif centering == 'R':
-            mask = (-h + k + l) % 3 == 0
-        else:
-            mask = np.ones(len(h), dtype=bool)
+        hkls = hkls[:, np.any(hkls != 0, axis=0)] 
 
-        hkls = hkls[:, mask]
-        print(f"  -> Applied '{centering}' centering mask: {np.sum(mask)}/{len(mask)} reflections retained.")
+        # --- EXACT SYMMETRY MASK ---
+        from subhkl.core.spacegroup import generate_hkl_mask
+        print(f"  -> Applying exact systematic absences for Space Group: {space_group}")
+        mask_3d = generate_hkl_mask(h_max, k_max, l_max, space_group)
+        
+        idx_h = (hkls[0] + h_max).astype(int)
+        idx_k = (hkls[1] + k_max).astype(int)
+        idx_l = (hkls[2] + l_max).astype(int)
+        
+        valid_mask = mask_3d[idx_h, idx_k, idx_l]
+        hkls = hkls[:, valid_mask]
+        print(f"  -> Retained {np.sum(valid_mask)}/{len(valid_mask)} mathematically allowed reflections.")
         
         q_theor = np.dot(self.B_mat, hkls).T
         q_theor_norms = np.linalg.norm(q_theor, axis=1, keepdims=True)
@@ -378,28 +351,17 @@ class HoughPrior:
         
         @jax.jit
         def evaluate_chunk(v_hyp, u_hyp):
-            # Pass the first two vectors of the triplet directly to the Busing-Levy constructor
             U_hyp = batch_busing_levy(v_hyp[:, :2, :], u_hyp[:, :2, :])
-            
-            # Rotate all empirical unit rays into the proposed crystal frame
             q_cryst_hat = jnp.einsum('bij,nj->bni', U_hyp, q_sample_jax)
-            
-            # Compute angular alignment against all theoretical reflections
             dots = jnp.einsum('bni,mi->bnm', q_cryst_hat, q_theor_jax)
             max_dots = jnp.max(jnp.abs(dots), axis=2)
-            
-            # HARD VOTING
             scores = jnp.sum(max_dots >= cos_tol, axis=1)
-            
             return U_hyp, scores
 
         all_U_final, all_s_final = [], []
-
         bytes_per_hyp = len(q_hat_sample) * len(q_theor_unique) * 4
         target_vram_bytes = 10 * 1024**3
         chunk_size = max(1, int(target_vram_bytes / bytes_per_hyp))
-
-        print(f"  -> Dynamic VRAM Safety: Batching {chunk_size} hypotheses per GPU pass...")
         
         for start in range(0, len(v_hyp_all), chunk_size):
             end = start + chunk_size
@@ -407,43 +369,28 @@ class HoughPrior:
             all_U_final.append(U_f)
             all_s_final.append(s_f)
             
-        print("  -> Execution queued. Waiting for GPU to drain pipeline...")
-        
         U_gpu = jnp.concatenate(all_U_final)
         scores_gpu = jnp.concatenate(all_s_final)
         
-        # --- DYNAMIC STATISTICAL FILTERING ---
         num_rays = len(q_hat_sample)
         num_lines = len(q_theor_unique)
-        
         fraction_of_sphere_per_line = 1.0 - float(cos_tol)
         random_hit_prob = num_lines * fraction_of_sphere_per_line
         expected_random_hits = num_rays * random_hit_prob
         
         min_inliers = max(5, int(expected_random_hits + 5 * np.sqrt(expected_random_hits)))
         
-        print(f"  -> Statistical Noise Floor: ~{expected_random_hits:.1f} accidental hits per matrix.")
-        print(f"  -> Pruning hypotheses with fewer than {min_inliers} indexed rays...")
-        
         valid_mask = scores_gpu >= min_inliers
-        
         U_valid = np.array(U_gpu[valid_mask])
         scores_valid = np.array(scores_gpu[valid_mask])
 
         if len(U_valid) == 0:
-            print("  -> No hypotheses survived the statistical filter.")
             return None, None
 
-        # --- Convert back to Quaternions via SciPy to maintain interface downstream ---
-        rots = Rotation.from_matrix(U_valid).as_quat() # SciPy returns [x, y, z, w]
-        quats = np.column_stack([rots[:, 3], rots[:, 0], rots[:, 1], rots[:, 2]]) # Map to [w, x, y, z]
-
-        # INVERT THE QUATERNIONS: Map from Sample->Crystal to Crystal->Sample
+        rots = Rotation.from_matrix(U_valid).as_quat() 
+        quats = np.column_stack([rots[:, 3], rots[:, 0], rots[:, 1], rots[:, 2]]) 
         quats_inv = quats * np.array([1.0, -1.0, -1.0, -1.0])
 
-        print(f"  -> Angular Laue Indexing returned {len(quats)} valid seeds. Deduplicating...")
-
-        # --- FAST HASH-BASED DEDUPLICATION ---
         sort_idx = np.argsort(scores_valid)[::-1]
         quats_sorted = quats_inv[sort_idx]
         scores_sorted = scores_valid[sort_idx]
@@ -456,11 +403,7 @@ class HoughPrior:
         s_unique = scores_sorted[unique_indices]
         
         final_sort = np.argsort(s_unique)[::-1]
-        q_final = q_unique[final_sort]
-        s_final = s_unique[final_sort]
-        
-        print(f"  -> Fast-Hash Deduplication preserved {len(q_final)} unique orientations out of {len(quats_inv)} total permutations.")
-        return jnp.array(q_final), jnp.array(s_final) 
+        return jnp.array(q_unique[final_sort]), jnp.array(s_unique[final_sort])
 
     def physics_filter(self, prior_quats, objective_function, batch_size=4096, z_score_threshold=4.0):
         """Evaluates all macroscopic seeds against the strict physical forward-model to gather statistics."""
