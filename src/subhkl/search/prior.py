@@ -252,7 +252,8 @@ class HoughPrior:
         # Deduplicate parallel vectors
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, centering='P',
+                           angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
         """
         Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
         then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
@@ -339,6 +340,28 @@ class HoughPrior:
         )
         hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
         hkls = hkls[:, np.any(hkls != 0, axis=0)] # Remove (0,0,0)
+       
+        # --- DYNAMIC CENTERING MASK ---
+        h, k, l = hkls[0], hkls[1], hkls[2]
+        if centering == 'F':
+            # F-centered: All even or all odd
+            h_even, k_even, l_even = (h % 2 == 0), (k % 2 == 0), (l % 2 == 0)
+            mask = (h_even == k_even) & (k_even == l_even)
+        elif centering == 'I':
+            mask = (h + k + l) % 2 == 0
+        elif centering == 'A':
+            mask = (k + l) % 2 == 0
+        elif centering == 'B':
+            mask = (h + l) % 2 == 0
+        elif centering == 'C':
+            mask = (h + k) % 2 == 0
+        elif centering == 'R':
+            mask = (-h + k + l) % 3 == 0
+        else:
+            mask = np.ones(len(h), dtype=bool)
+
+        hkls = hkls[:, mask]
+        print(f"  -> Applied '{centering}' centering mask: {np.sum(mask)}/{len(mask)} reflections retained.")
         
         q_theor = np.dot(self.B_mat, hkls).T
         q_theor_norms = np.linalg.norm(q_theor, axis=1, keepdims=True)
