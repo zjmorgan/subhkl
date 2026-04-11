@@ -329,7 +329,7 @@ def finder(
                 "show_scale": "linear",
                 "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
                 "loss": sparse_rbf_loss,
-                "auto_tune_alpha": spares_rbf_auto_tune_alpha,
+                "auto_tune_alpha": sparse_rbf_auto_tune_alpha,
             }
         )
     else:
