@@ -256,6 +256,7 @@ def finder(
     show_progress: bool = True,
     create_visualizations: bool = False,
     show_steps: bool = False,
+    show_candidates: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
@@ -343,6 +344,7 @@ def finder(
         {
             "mask_file": mask_file,
             "mask_rel_erosion_radius": mask_rel_erosion_radius,
+            "show_candidates": show_candidates
         }
     )
 

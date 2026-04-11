@@ -182,9 +182,10 @@ class Peaks:
                 except Exception as e:
                     print(f"Worker failed for image {img_key}: {e}")
 
+        show_candidates = harvest_peaks_kwargs.get('show_candidates', False)
         return self._assemble_detector_peaks(
             results_by_key,
-            precomputed_peaks,
+            precomputed_peaks=precomputed_peaks if show_candidates else None,
             visualize=visualize, 
             max_workers=max_workers,
             instrument_label=self.instrument
