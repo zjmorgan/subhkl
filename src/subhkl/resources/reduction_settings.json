@@ -33,7 +33,7 @@
         "Name": "IMAGINE-X",
         "InstrumentName": "IMAGINE-X",
         "FancyName": "IMAGINE-X",
-        "Wavelength": [2.8, 10],
+        "Wavelength": [2, 10],
         "Goniometer": {
             "CG4D:Mot:DGONRa": [0, 1, 0, 1]
         },
