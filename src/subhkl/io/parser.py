@@ -1409,9 +1409,8 @@ def zone_axis_search(
     widths, heights, ms, ns = [], [], [], []
 
     for i, phys_bank in enumerate(file_bank_ids):
-        from subhkl.instrument.detector import Detector
-        det_config = beamlines[instrument][str(phys_bank)]
-        det = Detector(det_config)
+        from subhkl.integration.api import get_detector
+        de = get_detector(phys_bank)
 
         det_centers.append(det.center)
         uhats.append(det.uhat)
@@ -1924,7 +1923,6 @@ def index_images(
             f["peaks/pixel_c"] = final_cols
 
     print("Done.")
-
 
 if __name__ == "__main__":
     app()
