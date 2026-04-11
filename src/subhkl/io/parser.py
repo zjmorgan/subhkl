@@ -1513,9 +1513,12 @@ def zone_axis_search(
     n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
+    from subhkl.core.spacegroup import get_centering
     quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc,
-        q_hat, angle_tol_deg=davenport_angle_tol
+        q_hat,
+        centering=get_centering(space_group),
+        angle_tol_deg=davenport_angle_tol
     )
 
     if quats is None or len(quats) == 0:
