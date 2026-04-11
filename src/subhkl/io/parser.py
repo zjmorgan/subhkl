@@ -1313,13 +1313,16 @@ def merge_images(
 @app.command()
 def zone_axis_search(
     merged_h5_filename: str,
-    peaks_h5_filename: str, 
+    peaks_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
     a: float, b: float, c: float,
     alpha: float, beta: float, gamma: float,
     space_group: str,
     d_min: float = 1.0,
+    sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
+    vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
+    loss_method: str = typer.Option("cosine", help="Loss method for the objective function (cosine, soft, forward, sinkhorn)."),
     border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
@@ -1438,9 +1441,9 @@ def zone_axis_search(
 
         # Filter by minimum intensity first to reject noise before Top-K selection
         intensity_mask = grp_intensity >= min_intensity
-        if not np.any(intensity_mask): 
+        if not np.any(intensity_mask):
             continue
-            
+
         grp_xyz = grp_xyz[intensity_mask]
         grp_intensity = grp_intensity[intensity_mask]
 
@@ -1457,9 +1460,9 @@ def zone_axis_search(
         # Normalized zone-axis generator
         q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
         q_hat_grp = q_sample / q_norms
-        
+
         q_hat_list.append(q_hat_grp)
-        
+
         # Store raw lab vectors and metadata for the VectorizedObjective downstream
         q_lab_list.append(q_lab)
         peaks_xyz_list.append(grp_xyz_top)
@@ -1471,13 +1474,14 @@ def zone_axis_search(
         return
 
     q_hat = np.vstack(q_hat_list)
-    
+
     # Transpose arrays to (3, N) layout expected by the VectorizedObjective
-    q_lab_all = np.vstack(q_lab_list).T  
-    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
+    q_lab_all = np.vstack(q_lab_list).T
+    peaks_xyz_all = np.vstack(peaks_xyz_list).T
     intensities_all = np.concatenate(intensities_list)
     run_indices_all = np.concatenate(mapped_run_indices)
 
+    # --- Robust Intensity Normalization ---
     # Normalize by the median to handle massive outliers, then clip to a max weight of 10.0.
     # This prevents a single nuclear-bright spot from dominating the entire objective function.
     median_intensity = np.median(intensities_all)
@@ -1503,9 +1507,9 @@ def zone_axis_search(
     centering = get_centering(space_group)
     quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc,
-        q_hat, 
-        centering=centering, # <-- Critically apply the centering mask here
-        angle_tol_deg=davenport_angle_tol, 
+        q_hat,
+        centering=centering,
+        angle_tol_deg=davenport_angle_tol,
         d_min=d_min
     )
 
@@ -1513,7 +1517,7 @@ def zone_axis_search(
         print("Hough solver failed to find any valid permutations.")
         return
 
-    print("Filtering Prior through Exact Physics Forward-Model (Vectorized)...")
+    print(f"Filtering Prior through Exact Physics Forward-Model (Method: {loss_method})...")
 
     # Generate CDF for Gaussian scoring mapping
     t = np.linspace(0, np.pi, 1024)
@@ -1527,10 +1531,10 @@ def zone_axis_search(
         angle_cdf=cdf,
         angle_t=t,
         weights=weights_all,
-        tolerance_deg=0.5, # Generous static capture radius for RANSAC seeds
+        tolerance_deg=vector_tolerance,  # <-- Wired to CLI option
         space_group=space_group,
         centering=centering,
-        loss_method="soft",
+        loss_method=loss_method,         # <-- Wired to CLI option
         cell_params=[a, b, c, alpha, beta, gamma],
         d_min=d_min,
         static_R=R_stack,
