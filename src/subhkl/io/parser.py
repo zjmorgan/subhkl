@@ -1331,7 +1331,7 @@ def zone_axis_search(
     top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
     grid_range: int = typer.Option(8, help="Maximum hkl index for zone axis search"),
     top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
-    num_runs: int = typer.Option(1, help="Number of goniometer runs to use. Set to 0 to use all."),
+    num_runs: int = typer.Option(0, help="Number of goniometer runs to use. Set to 0 to use all."),
     output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
     batch_size: int = typer.Option(1024, help="Batch size for validation loop"),
 ):
