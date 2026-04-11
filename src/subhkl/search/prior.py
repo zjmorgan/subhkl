@@ -219,7 +219,7 @@ class HoughPrior:
         n_calc_raw = np.round(n_calc_raw, 5)
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
         """
         Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
         then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
@@ -286,8 +286,24 @@ class HoughPrior:
         
         print(f"  -> Polishing {len(v_hyp_all)} geometric hypotheses using Angular Laue Indexing...")
         
-        grid = np.arange(-10, 11)
-        u, v, w = np.meshgrid(grid, grid, grid, indexing='ij')
+        # --- DYNAMIC ANISOTROPIC HKL GENERATION ---
+        # Target a physical resolution limit for the angular indexer
+        B_norms = np.linalg.norm(self.B_mat, axis=0) # Lengths of a*, b*, c*
+        
+        # Calculate exactly how many indices are needed on each axis to reach d_min
+        h_max, k_max, l_max = np.ceil(1.0 / (d_min * B_norms)).astype(int)
+        
+        # Hard cap to prevent VRAM explosion on highly pathological cells
+        h_max, k_max, l_max = min(h_max, max_hkl), min(k_max, max_hkl), min(l_max, max_hkl)
+        
+        print(f"  -> Dynamic Reciprocal Grid Limits (d_min={d_min}Å): h(±{h_max}), k(±{k_max}), l(±{l_max})")
+
+        u, v, w = np.meshgrid(
+            np.arange(-h_max, h_max + 1), 
+            np.arange(-k_max, k_max + 1), 
+            np.arange(-l_max, l_max + 1), 
+            indexing='ij'
+        )
         hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
         hkls = hkls[:, np.any(hkls != 0, axis=0)] # Remove (0,0,0)
         
@@ -389,82 +405,6 @@ class HoughPrior:
         
         print(f"  -> Fast-Hash Deduplication preserved {len(q_final)} unique orientations out of {len(quats_inv)} total permutations.")
         return jnp.array(q_final), jnp.array(s_final)
-
-    def physics_filter(self, prior_quats, objective_function, batch_size=4096, z_score_threshold=4.0):
-        """Evaluates all macroscopic seeds against the strict physical forward-model to gather statistics."""
-        if prior_quats is None or len(prior_quats) == 0:
-            return None
-
-        print("\n[Prior Validation] Computing Random Orientation Baseline...")
-        rng = jax.random.PRNGKey(42)
-        rand_q = jax.random.normal(rng, (4096, 4))
-        rand_q = rand_q / jnp.linalg.norm(rand_q, axis=1, keepdims=True)
-        rand_rots = jax.vmap(quaternion_to_rodrigues)(rand_q)
-
-        import tqdm
-        rand_scores = []
-        for i in tqdm.tqdm(range(0, len(rand_rots), batch_size), desc="Forward Model Filter (random)"):
-            batch = rand_rots[i:i+batch_size]
-            scores = np.array(-objective_function(batch))
-            rand_scores.append(scores)
-        rand_scores = np.concatenate(rand_scores)
-
-        r_mean = np.mean(rand_scores)
-        r_std = np.std(rand_scores)
-        r_max = np.max(rand_scores)
-
-        print(f"  -> Random Background (N=4096) | Mean: {r_mean:.2f} | Max: {r_max:.2f} | Std: {r_std:.2f}")
-
-        print(f"  -> Forward-Modeling all {len(prior_quats)} Prior seeds for statistical observation...")
-        prior_rots = jax.vmap(quaternion_to_rodrigues)(prior_quats)
-
-        physics_scores = []
-        for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter (prior)"):
-            batch = prior_rots[i:i+batch_size]
-            scores = np.array(-objective_function(batch))
-            physics_scores.append(scores)
-
-        physics_scores_np = np.concatenate(physics_scores)
-
-        ranks = np.arange(len(physics_scores_np))
-
-        physics_sort_idx = np.argsort(physics_scores_np)[::-1]
-        physics_ranks = np.empty_like(physics_sort_idx)
-        physics_ranks[physics_sort_idx] = np.arange(len(physics_scores_np))
-
-        import scipy.stats
-        rho, p_val = scipy.stats.spearmanr(ranks, physics_ranks)
-
-        print("\n[Observation Stats] RANSAC vs. Physical Ranking:")
-        print(f"  -> Global Spearman Rho: {rho:.4f} (p={p_val:.2e})")
-
-        top_1_dav_rank = physics_sort_idx[0]
-        top_10_dav_ranks = physics_sort_idx[:10]
-        top_100_dav_ranks = physics_sort_idx[:100]
-
-        print(f"  -> Top 1 Physical Seed was RANSAC Rank: #{top_1_dav_rank}")
-        print(f"  -> Top 10 Physical Seeds max RANSAC Rank: #{np.max(top_10_dav_ranks)}")
-        print(f"  -> Top 100 Physical Seeds max RANSAC Rank: #{np.max(top_100_dav_ranks)}")
-
-        for N in [1000, 10000, 50000]:
-            if len(physics_scores_np) >= N:
-                dav_top_n = set(ranks[:N])
-                phys_top_n = set(physics_sort_idx[:N])
-                overlap = len(dav_top_n.intersection(phys_top_n))
-                print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
-
-        best_score = physics_scores_np[physics_sort_idx[0]]
-        z_score = (best_score - r_mean) / (r_std + 1e-9)
-
-        print(f"\n  -> RANSAC Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
-        print(f"  -> Top 5 Prior Scores: {physics_scores_np[physics_sort_idx[:5]]}")
-
-        if z_score >= z_score_threshold:
-            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
-            return prior_rots[physics_sort_idx]
-        else:
-            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.1f} < {z_score_threshold}). Falling back to Uniform GA...")
-            return None
 
 @jax.jit
 def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, vhat, width, height, m, n, wl_min, wl_max,

@@ -1514,7 +1514,8 @@ def zone_axis_search(
 
     quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc,
-        q_hat, angle_tol_deg=davenport_angle_tol
+        q_hat, angle_tol_deg=davenport_angle_tol,
+        d_min=d_min
     )
 
     if quats is None or len(quats) == 0:
