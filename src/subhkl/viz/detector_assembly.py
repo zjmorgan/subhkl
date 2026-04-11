@@ -243,9 +243,10 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         valid_start = c_min
         trans = ax.get_xaxis_transform()
         
-        d_y = 0.015  # Height of the slash
-        d_x = 0.8    # Width of the slash
-        m_lw = 0.8   # Thinner line weight for the marker
+        # Reduced marker sizes
+        d_y = 0.0075  # 50% height of the slash
+        d_x = 0.8     # Width of the slash
+        m_lw = 0.8    # Thinner line weight for the marker
         
         for g_start, g_end in gaps:
             t_start = compress_roty(np.array([g_start]))[0]
@@ -271,8 +272,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
     # -------------------------------------------------------------
     # FORCE PHYSICAL ASPECT RATIO 
-    # 1 meter in Y translates to exactly 1 physical meter of arc length in X
-    # 1 degree of arc length = R * (pi / 180) meters
     # -------------------------------------------------------------
     aspect_ratio = 180.0 / (np.pi * mean_radius)
     ax.set_aspect(aspect_ratio, adjustable='box')
@@ -289,9 +288,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         by_label = dict(zip(labels, handles))
-        ax.legend(by_label.values(), by_label.keys(), loc='upper right')
+        ax.legend(by_label.values(), by_label.keys(), loc='upper right', fontsize=6, markerscale=0.5)
 
-    # bbox_inches='tight' crops the saved figure exactly to the drawn artists,
-    # eliminating any white padding left behind by the physical aspect ratio box scaling.
     plt.savefig(out_name, dpi=600, bbox_inches='tight', pad_inches=0.05)
     plt.close(fig)
