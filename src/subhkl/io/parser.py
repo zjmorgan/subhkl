@@ -1411,7 +1411,7 @@ def zone_axis_search(
     # --- REFACTORED: Load empirical rays directly from finder HDF5 ---
     print(f"Loading empirical rays from {peaks_h5_filename}...")
     from subhkl.integration.api import Peaks
-    peaks = Peaks(peaks_h5_filename, instrument)
+    peaks = Peaks(merged_h5_filename, instrument)
 
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
