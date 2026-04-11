@@ -1403,26 +1403,14 @@ def zone_axis_search(
     ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
     B_mat = ub_helper.reciprocal_lattice_B()
 
-    det_centers, uhats, vhats = [], [], []
-    widths, heights, ms, ns = [], [], [], []
-
-    for i, phys_bank in enumerate(file_bank_ids):
-        from subhkl.integration.api import get_detector
-        de = get_detector(phys_bank)
-
-        det_centers.append(det.center)
-        uhats.append(det.uhat)
-        vhats.append(det.vhat)
-        widths.append(det.width)
-        heights.append(det.height)
-        ms.append(det.m)
-        ns.append(det.n)
-
     print("\n--- HOUGH-DAVENPORT PRIOR GENERATION ---")
     prior_engine = HoughDavenportPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
     # --- REFACTORED: Load empirical rays directly from finder HDF5 ---
     print(f"Loading empirical rays from {peaks_h5_filename}...")
+    from subhkl.integration.api import Peaks
+    peaks = Pekas(peaks_h5_filename, instrument)
+
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
@@ -1447,6 +1435,21 @@ def zone_axis_search(
             run_indices = run_indices[()]
         else:
             run_indices = group_indices
+
+    det_centers, uhats, vhats = [], [], []
+    widths, heights, ms, ns = [], [], [], []
+
+    for i, phys_bank in enumerate(file_bank_ids):
+        de = peaks.get_detector(phys_bank)
+
+        det_centers.append(det.center)
+        uhats.append(det.uhat)
+        vhats.append(det.vhat)
+        widths.append(det.width)
+        heights.append(det.height)
+        ms.append(det.m)
+        ns.append(det.n)
+
 
     q_hat_list = []
     unique_groups = np.unique(group_indices)
