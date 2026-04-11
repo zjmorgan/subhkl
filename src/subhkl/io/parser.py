@@ -1428,8 +1428,6 @@ def zone_axis_search(
         grp_xyz = peaks_xyz[mask]
         grp_intensity = peaks_intensity[mask]
 
-        first_run_idx = run_indices[mask][0]
-
         # Robustly assign the rotation matrix for this group
         if R_peaks is not None:
             if R_peaks.ndim == 3 and R_peaks.shape[0] == len(peaks_xyz):
@@ -1469,7 +1467,7 @@ def zone_axis_search(
         q_lab_list.append(q_lab)
         peaks_xyz_list.append(grp_xyz_top)
         intensities_list.append(grp_intensity_top)
-        mapped_run_indices.append(np.full(len(grp_xyz_top), first_run_idx))
+        mapped_run_indices.append(np.full(len(grp_xyz_top), g_idx))
 
     if not q_hat_list:
         print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
