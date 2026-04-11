@@ -347,8 +347,8 @@ class HoughPrior:
         q_theor_jax = jnp.array(q_theor_unique)
         q_sample_jax = jnp.array(q_hat_sample)
         
-        cos_tol = jnp.cos(jnp.radians(0.5))
-        
+        cos_tol = jnp.cos(jnp.radians(scoring_tol_deg))
+
         @jax.jit
         def evaluate_chunk(v_hyp, u_hyp):
             U_hyp = batch_busing_levy(v_hyp[:, :2, :], u_hyp[:, :2, :])
