@@ -1330,6 +1330,7 @@ def zone_axis_search(
     davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
     top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
     max_uvw: int = typer.Option(25, help="Maximum uvw index for zone axis search"),
+    L_max: float = typer.Option(250.0, help="Maximum real-space vector length for theoretical zone axes (Angstroms).")
     top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
     num_runs: int = typer.Option(0, help="Number of goniometer runs to use. Set to 0 to use all."),
     output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
@@ -1511,7 +1512,7 @@ def zone_axis_search(
         print("Failed to find any zone axes.")
         return
 
-    n_calc = prior_engine.generate_theoretical_zones(top_k=top_k, max_uvw=max_uvw)
+    n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
     quats, _ = prior_engine.solve_permutations(
