@@ -113,6 +113,7 @@ def prepare_harvest_tasks(
             chunk_size=harvest_peaks_kwargs.get("chunk_size", 128),
             show_steps=harvest_peaks_kwargs.get("show_steps", False),
             auto_tune_alpha=harvest_peaks_kwargs.get("auto_tune_alpha", False),
+            candidate_alphas=harvest_peaks_kwargs.get("candidate_alphas", None)
         )
         batch_coords = alg.find_peaks_batch(img_stack)
         precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords, strict=False)}
