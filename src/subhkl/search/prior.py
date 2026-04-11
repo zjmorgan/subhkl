@@ -173,9 +173,19 @@ class HoughPrior:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
-        
+
         plt.figure(figsize=(10, 10))
-        plt.hist2d(x_proj, y_proj, bins=bins, range=[[-1.414, 1.414], [-1.414, 1.414]], cmap='viridis')
+
+        # Set bins, range, and get counts (H)
+        h, xedges, yedges = np.histogram2d(x_proj, y_proj, bins=bins)
+
+        # This ensures no zeros, making log normalization valid
+        h_regularized = h + 1
+
+        # 4. Plot using pcolormesh for custom normalization
+        plt.pcolormesh(xedges, yedges, h_regularized.T, norm=matplotlib.colors.LogNorm(), cmap='viridis')
+        plt.xlim(-1.414, 1.414)
+        plt.ylim(-1.414, 1.414)
         plt.colorbar(label='Cross Product Intersections')
 
         if len(n_obs) > 0:
