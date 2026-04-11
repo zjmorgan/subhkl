@@ -1480,6 +1480,12 @@ def zone_axis_search(
     intensities_all = np.concatenate(intensities_list)
     run_indices_all = np.concatenate(mapped_run_indices)
 
+    # Normalize by the median to handle massive outliers, then clip to a max weight of 10.0.
+    # This prevents a single nuclear-bright spot from dominating the entire objective function.
+    median_intensity = np.median(intensities_all)
+    weights_all = intensities_all / (median_intensity + 1e-6)
+    weights_all = np.clip(weights_all, 0.0, 10.0)
+
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(
         q_hat,
@@ -1522,7 +1528,7 @@ def zone_axis_search(
         wavelength=[wavelength_min, wavelength_max],
         angle_cdf=cdf,
         angle_t=t,
-        weights=intensities_all,
+        weights=weights_all,
         tolerance_deg=0.5, # Generous static capture radius for RANSAC seeds
         space_group=space_group,
         centering=centering,
