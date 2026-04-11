@@ -1420,13 +1420,15 @@ def zone_axis_search(
 
     unique_groups = np.unique(group_indices)
     for g_idx in unique_groups:
-        # Stop collecting rays if the image index exceeds the sliced num_runs limits
         if g_idx >= end_idx:
             continue
 
         mask = group_indices == g_idx
         grp_xyz = peaks_xyz[mask]
         grp_intensity = peaks_intensity[mask]
+
+        # THE CRUCIAL LINK: What physical run does this ToF slice belong to?
+        first_run_idx = run_indices[mask][0] 
 
         # Robustly assign the rotation matrix for this group
         if R_peaks is not None:
@@ -1437,37 +1439,38 @@ def zone_axis_search(
             else:
                 R_gonio = R_peaks
         else:
-            R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
+            # FIX 1: Use first_run_idx, NOT g_idx!
+            # All 52 ToF slices in Run 0 must share R_stack[0].
+            R_gonio = R_stack[first_run_idx] if first_run_idx < len(R_stack) else np.eye(3)
 
         # Filter by minimum intensity first to reject noise before Top-K selection
         intensity_mask = grp_intensity >= min_intensity
-        if not np.any(intensity_mask):
+        if not np.any(intensity_mask): 
             continue
-
+            
         grp_xyz = grp_xyz[intensity_mask]
         grp_intensity = grp_intensity[intensity_mask]
 
-        # Force take the top K rays to guarantee dense intersections
         top_k_idx = np.argsort(grp_intensity)[::-1][:min(top_k_rays, len(grp_intensity))]
         grp_xyz_top = grp_xyz[top_k_idx]
         grp_intensity_top = grp_intensity[top_k_idx]
 
-        # Derive unnormalized scattering vector and convert to sample frame
         kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
         q_lab = kf - ki_vec[None, :]
         q_sample = np.dot(q_lab, R_gonio)
 
-        # Normalized zone-axis generator
         q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
         q_hat_grp = q_sample / q_norms
-
+        
         q_hat_list.append(q_hat_grp)
-
-        # Store raw lab vectors and metadata for the VectorizedObjective downstream
+        
         q_lab_list.append(q_lab)
         peaks_xyz_list.append(grp_xyz_top)
         intensities_list.append(grp_intensity_top)
-        mapped_run_indices.append(np.full(len(grp_xyz_top), g_idx))
+        
+        # FIX 2: Revert VectorizedObjective mapping back to first_run_idx 
+        # so the physics model aligns perfectly with RANSAC
+        mapped_run_indices.append(np.full(len(grp_xyz_top), first_run_idx))
 
     if not q_hat_list:
         print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
