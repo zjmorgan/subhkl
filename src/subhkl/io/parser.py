@@ -1315,14 +1315,13 @@ def merge_images(
 @app.command()
 def zone_axis_search(
     merged_h5_filename: str,
-    peaks_h5_filename: str,  # <-- Added parameter
+    peaks_h5_filename: str, 
     instrument: str,
     output_h5_filename: str,
     a: float, b: float, c: float,
     alpha: float, beta: float, gamma: float,
     space_group: str,
     d_min: float = 1.0,
-    sigma: float = 2.0,
     border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
@@ -1342,13 +1341,12 @@ def zone_axis_search(
     """
     import h5py
     import numpy as np
-    import scipy.ndimage
-    import jax
     import jax.numpy as jnp
     from subhkl.config import beamlines, reduction_settings
-    from subhkl.optimization import FindUB
-    from subhkl.search.prior import HoughPrior, ImageBasedObjective
+    from subhkl.optimization import FindUB, VectorizedObjective
+    from subhkl.search.prior import HoughPrior
     from subhkl.core.crystallography import generate_reflections
+    from subhkl.core.spacegroup import get_centering
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
@@ -1358,9 +1356,7 @@ def zone_axis_search(
 
         from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
         R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
-
         file_offsets = f_in["file_offsets"][()]
-        images_raw = np.stack(f_in["images"][()])
 
     # Dynamically slice the arrays based on the requested number of runs
     if num_runs > 0:
@@ -1373,33 +1369,12 @@ def zone_axis_search(
         print(f"Limiting search to the first {num_runs} run(s) (Images 0 to {end_idx-1})...")
         file_bank_ids = file_bank_ids[:end_idx]
         R_stack = R_stack[:end_idx]
-        images_raw = images_raw[:end_idx]
     else:
+        end_idx = len(file_bank_ids)
         print(f"Using all {len(file_offsets)} available runs for the search...")
 
     settings = reduction_settings[instrument]
     wavelength_min, wavelength_max = settings.get("Wavelength")
-
-    # Spatial median filter to remove flat background
-    medians = np.median(images_raw, axis=(1, 2), keepdims=True)
-    images_bg = np.maximum(images_raw - medians, 0)
-
-    images_landscape = np.zeros_like(images_bg, dtype=np.float32)
-    print("Generating continuous image landscapes...")
-    for i in range(len(images_bg)):
-        smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
-
-        # Only allow true peaks (local maxima) to form catchment basins
-        local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
-        mask = local_max & (smoothed > (min_intensity * 0.5))
-
-        if not np.any(mask): continue
-        dist = scipy.ndimage.distance_transform_edt(~mask)
-        images_landscape[i] = np.exp(-dist / sigma)
-
-    print("Generating theoretical HKL pool...")
-    h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
-    hkl_pool = np.vstack([h, k_idx, l])
 
     ub_helper = FindUB()
     ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
@@ -1409,16 +1384,11 @@ def zone_axis_search(
     print("\n--- HOUGH PRIOR GENERATION ---")
     prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
-    # --- REFACTORED: Load empirical rays directly from finder HDF5 ---
     print(f"Loading empirical rays from {peaks_h5_filename}...")
-    from subhkl.integration.api import Peaks
-    peaks = Peaks(merged_h5_filename, instrument)
-
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
 
-        # Determine logical grouping (fallback to run_index if image_index is missing)
         if "peaks/image_index" in f_peaks:
             group_indices = f_peaks["peaks/image_index"][()]
         else:
@@ -1439,26 +1409,16 @@ def zone_axis_search(
         else:
             run_indices = group_indices
 
-    det_centers, uhats, vhats = [], [], []
-    widths, heights, ms, ns = [], [], [], []
-
-    for i, phys_bank in enumerate(file_bank_ids):
-        det = peaks.get_detector(phys_bank)
-
-        det_centers.append(det.center)
-        uhats.append(det.uhat)
-        vhats.append(det.vhat)
-        widths.append(det.width)
-        heights.append(det.height)
-        ms.append(det.m)
-        ns.append(det.n)
-
-
     q_hat_list = []
+    q_lab_list = []
+    peaks_xyz_list = []
+    intensities_list = []
+    mapped_run_indices = []
+
     unique_groups = np.unique(group_indices)
     for g_idx in unique_groups:
         # Stop collecting rays if the image index exceeds the sliced num_runs limits
-        if g_idx >= len(images_raw):
+        if g_idx >= end_idx:
             continue
 
         mask = group_indices == g_idx
@@ -1478,9 +1438,18 @@ def zone_axis_search(
         else:
             R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
 
+        # Filter by minimum intensity first to reject noise before Top-K selection
+        intensity_mask = grp_intensity >= min_intensity
+        if not np.any(intensity_mask): 
+            continue
+            
+        grp_xyz = grp_xyz[intensity_mask]
+        grp_intensity = grp_intensity[intensity_mask]
+
         # Force take the top K rays to guarantee dense intersections
-        top_k_idx = np.argsort(grp_intensity)[::-1][:top_k_rays]
+        top_k_idx = np.argsort(grp_intensity)[::-1][:min(top_k_rays, len(grp_intensity))]
         grp_xyz_top = grp_xyz[top_k_idx]
+        grp_intensity_top = grp_intensity[top_k_idx]
 
         # Derive unnormalized scattering vector and convert to sample frame
         kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
@@ -1490,14 +1459,26 @@ def zone_axis_search(
         # Normalized zone-axis generator
         q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
         q_hat_grp = q_sample / q_norms
+        
         q_hat_list.append(q_hat_grp)
+        
+        # Store raw lab vectors and metadata for the VectorizedObjective downstream
+        q_lab_list.append(q_lab)
+        peaks_xyz_list.append(grp_xyz_top)
+        intensities_list.append(grp_intensity_top)
+        mapped_run_indices.append(np.full(len(grp_xyz_top), first_run_idx))
 
     if not q_hat_list:
-        print("Failed to extract any rays from the peaks file.")
+        print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
         return
 
     q_hat = np.vstack(q_hat_list)
-    # -----------------------------------------------------------------
+    
+    # Transpose arrays to (3, N) layout expected by the VectorizedObjective
+    q_lab_all = np.vstack(q_lab_list).T  
+    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
+    intensities_all = np.concatenate(intensities_list)
+    run_indices_all = np.concatenate(mapped_run_indices)
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(
@@ -1515,26 +1496,44 @@ def zone_axis_search(
     n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
-    from subhkl.core.spacegroup import get_centering
+    centering = get_centering(space_group)
     quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc,
-        q_hat,
-        centering=get_centering(space_group),
-        angle_tol_deg=davenport_angle_tol
+        q_hat, 
+        centering=centering, # <-- Critically apply the centering mask here
+        angle_tol_deg=davenport_angle_tol, 
+        d_min=d_min
     )
 
     if quats is None or len(quats) == 0:
         print("Hough solver failed to find any valid permutations.")
         return
 
-    print("Filtering Prior through Exact Physics Forward-Model...")
-    physics_evaluator = ImageBasedObjective(
-        images_landscape, hkl_pool, B_mat, np.array(R_stack), wavelength_min, wavelength_max,
-        np.array(det_centers), np.array(uhats), np.array(vhats), np.array(widths), np.array(heights), np.array(ms), np.array(ns),
-        np.array([0., 0., 1.]), np.zeros(3), border_frac
+    print("Filtering Prior through Exact Physics Forward-Model (Vectorized)...")
+
+    # Generate CDF for Gaussian scoring mapping
+    t = np.linspace(0, np.pi, 1024)
+    cdf = (t - np.sin(t)) / np.pi
+
+    ray_objective = VectorizedObjective(
+        B=B_mat,
+        kf_ki_dir=q_lab_all,
+        peak_xyz_lab=peaks_xyz_all,
+        wavelength=[wavelength_min, wavelength_max],
+        angle_cdf=cdf,
+        angle_t=t,
+        weights=intensities_all,
+        tolerance_deg=0.5, # Generous static capture radius for RANSAC seeds
+        space_group=space_group,
+        centering=centering,
+        loss_method="soft",
+        cell_params=[a, b, c, alpha, beta, gamma],
+        d_min=d_min,
+        static_R=R_stack,
+        peak_run_indices=run_indices_all
     )
 
-    prior_rots = prior_engine.physics_filter(quats, physics_evaluator, batch_size=batch_size)
+    prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
 
     if prior_rots is None or len(prior_rots) == 0:
         print("Exact physical model rejected all seeds. Exiting.")
