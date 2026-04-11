@@ -219,7 +219,7 @@ class HoughPrior:
         n_calc_raw = np.round(n_calc_raw, 5)
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
         """
         Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
         then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
@@ -286,8 +286,24 @@ class HoughPrior:
         
         print(f"  -> Polishing {len(v_hyp_all)} geometric hypotheses using Angular Laue Indexing...")
         
-        grid = np.arange(-10, 11)
-        u, v, w = np.meshgrid(grid, grid, grid, indexing='ij')
+        # --- DYNAMIC ANISOTROPIC HKL GENERATION ---
+        # Target a physical resolution limit for the angular indexer
+        B_norms = np.linalg.norm(self.B_mat, axis=0) # Lengths of a*, b*, c*
+        
+        # Calculate exactly how many indices are needed on each axis to reach d_min
+        h_max, k_max, l_max = np.ceil(1.0 / (d_min * B_norms)).astype(int)
+        
+        # Hard cap to prevent VRAM explosion on highly pathological cells
+        h_max, k_max, l_max = min(h_max, max_hkl), min(k_max, max_hkl), min(l_max, max_hkl)
+        
+        print(f"  -> Dynamic Reciprocal Grid Limits (d_min={d_min}Å): h(±{h_max}), k(±{k_max}), l(±{l_max})")
+
+        u, v, w = np.meshgrid(
+            np.arange(-h_max, h_max + 1), 
+            np.arange(-k_max, k_max + 1), 
+            np.arange(-l_max, l_max + 1), 
+            indexing='ij'
+        )
         hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
         hkls = hkls[:, np.any(hkls != 0, axis=0)] # Remove (0,0,0)
         
@@ -388,7 +404,7 @@ class HoughPrior:
         s_final = s_unique[final_sort]
         
         print(f"  -> Fast-Hash Deduplication preserved {len(q_final)} unique orientations out of {len(quats_inv)} total permutations.")
-        return jnp.array(q_final), jnp.array(s_final)
+        return jnp.array(q_final), jnp.array(s_final) 
 
     def physics_filter(self, prior_quats, objective_function, batch_size=4096, z_score_threshold=4.0):
         """Evaluates all macroscopic seeds against the strict physical forward-model to gather statistics."""
