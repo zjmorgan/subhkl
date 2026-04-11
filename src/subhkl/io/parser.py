@@ -1315,6 +1315,7 @@ def merge_images(
 @app.command()
 def zone_axis_search(
     merged_h5_filename: str,
+    peaks_h5_filename: str,  # <-- Added parameter
     instrument: str,
     output_h5_filename: str,
     a: float, b: float, c: float,
@@ -1423,14 +1424,86 @@ def zone_axis_search(
     print("\n--- HOUGH-DAVENPORT PRIOR GENERATION ---")
     prior_engine = HoughDavenportPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
-    q_hat = prior_engine.extract_empirical_rays(images_bg, instrument, file_bank_ids,
-                                                min_intensity=min_intensity,
-                                                sigma=sigma,
-                                                top_k_rays=top_k_rays)
+    # --- REFACTORED: Load empirical rays directly from finder HDF5 ---
+    print(f"Loading empirical rays from {peaks_h5_filename}...")
+    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
+        peaks_xyz = f_peaks["peaks/xyz"][()]
+        peaks_intensity = f_peaks["peaks/intensity"][()]
+
+        # Determine logical grouping (fallback to run_index if image_index is missing)
+        if "peaks/image_index" in f_peaks:
+            group_indices = f_peaks["peaks/image_index"][()]
+        else:
+            group_indices = f_peaks["peaks/run_index"][()]
+
+        if "beam/ki_vec" in f_peaks:
+            ki_vec = f_peaks["beam/ki_vec"][()]
+        else:
+            ki_vec = np.array([0.0, 0.0, 1.0])
+
+        R_peaks = f_peaks.get("goniometer/R")
+        if R_peaks is not None:
+            R_peaks = R_peaks[()]
+
+        run_indices = f_peaks.get("peaks/run_index")
+        if run_indices is not None:
+            run_indices = run_indices[()]
+        else:
+            run_indices = group_indices
+
+    q_hat_list = []
+    unique_groups = np.unique(group_indices)
+    for g_idx in unique_groups:
+        # Stop collecting rays if the image index exceeds the sliced num_runs limits
+        if g_idx >= len(images_raw):
+            continue
+
+        mask = group_indices == g_idx
+        grp_xyz = peaks_xyz[mask]
+        grp_intensity = peaks_intensity[mask]
+
+        first_run_idx = run_indices[mask][0]
+
+        # Robustly assign the rotation matrix for this group
+        if R_peaks is not None:
+            if R_peaks.ndim == 3 and R_peaks.shape[0] == len(peaks_xyz):
+                R_gonio = R_peaks[mask][0]
+            elif R_peaks.ndim == 3:
+                R_gonio = R_peaks[first_run_idx]
+            else:
+                R_gonio = R_peaks
+        else:
+            R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
+
+        # Force take the top K rays to guarantee dense intersections
+        top_k_idx = np.argsort(grp_intensity)[::-1][:top_k_rays]
+        grp_xyz_top = grp_xyz[top_k_idx]
+
+        # Derive unnormalized scattering vector and convert to sample frame
+        kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
+        q_lab = kf - ki_vec[None, :]
+        q_sample = np.dot(q_lab, R_gonio)
+
+        # Normalized zone-axis generator
+        q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
+        q_hat_grp = q_sample / q_norms
+        q_hat_list.append(q_hat_grp)
+
+    if not q_hat_list:
+        print("Failed to extract any rays from the peaks file.")
+        return
+
+    q_hat = np.vstack(q_hat_list)
+    # -----------------------------------------------------------------
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
-    n_obs, weights_obs = prior_engine.compute_hough_accumulator(q_hat, grid_resolution=hough_grid_resolution,
-            n_hough=n_hough, plot_filename=output_hough, border_frac=border_frac)
+    n_obs, weights_obs = prior_engine.compute_hough_accumulator(
+        q_hat,
+        grid_resolution=hough_grid_resolution,
+        n_hough=n_hough,
+        plot_filename=output_hough,
+        border_frac=border_frac
+    )
 
     if len(n_obs) == 0:
         print("Failed to find any zone axes.")
@@ -1478,7 +1551,6 @@ def zone_axis_search(
         f.create_dataset("sample/beta", data=beta)
         f.create_dataset("sample/gamma", data=gamma)
 
-        # Pad empty states required by the GA bootstrap loader
         f.create_dataset("sample/offset", data=np.zeros(3))
         f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
         f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))

@@ -48,49 +48,6 @@ class HoughDavenportPrior:
         self.R_stack = R_stack
         self.ki_vec = ki_vec
 
-    def extract_empirical_rays(self, images_bg, instrument, file_bank_ids,
-                              min_intensity=5.0, sigma=1.0, top_k_rays=20):
-        """Extracts and derotates the strongest physical scattering vectors into the Sample Frame."""
-        q_hat_list = []
-
-        for i, phys_bank in enumerate(file_bank_ids):
-            img = images_bg[i]
-            
-            smoothed = scipy.ndimage.gaussian_filter(img, sigma=sigma)
-            local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
-            peak_mask = local_max & (smoothed > min_intensity)
-            rows, cols = np.where(peak_mask)
-            
-            if len(rows) > 0:
-                intensities = smoothed[rows, cols]
-                # Force take the top K rays per image to guarantee dense intersections
-                top_k = min(top_k_rays, len(rows))
-                sort_idx = np.argsort(intensities)[::-1][:top_k]
-                rows, cols = rows[sort_idx], cols[sort_idx]
-
-                from subhkl.instrument.detector import Detector
-                det_config = beamlines[instrument][str(phys_bank)]
-                det = Detector(det_config)
-                R_gonio = self.R_stack[i]
-
-                xyz_lab = det.pixel_to_lab(rows, cols) 
-                norms_ray = np.linalg.norm(xyz_lab, axis=1, keepdims=True)
-                kf = xyz_lab / norms_ray
-                
-                # Unnormalized scattering vector
-                q_lab = kf - self.ki_vec[None, :]
-                q_sample = np.dot(q_lab, R_gonio) 
-                
-                # Normalized zone-axis generator
-                q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
-                q_hat = q_sample / q_norms
-                q_hat_list.append(q_hat)
-
-        if not q_hat_list:
-            return np.zeros((0, 3)), np.zeros((0, 3))
-            
-        return np.vstack(q_hat_list)
-
     def compute_hough_accumulator(self, q_rays, grid_resolution=1024, min_pairs=3, n_hough=15,
                                   plot_filename=None, border_frac=0.1):
         """Executes the 3D Combinatorial Hough Transform using Lambert Azimuthal projection."""
