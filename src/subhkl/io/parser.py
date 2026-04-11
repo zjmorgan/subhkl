@@ -1346,7 +1346,7 @@ def zone_axis_search(
     import jax.numpy as jnp
     from subhkl.config import beamlines, reduction_settings
     from subhkl.optimization import FindUB
-    from subhkl.search.prior import HoughDavenportPrior, ImageBasedObjective
+    from subhkl.search.prior import HoughPrior, ImageBasedObjective
     from subhkl.core.crystallography import generate_reflections
 
     print(f"Loading data from {merged_h5_filename}...")
@@ -1405,8 +1405,8 @@ def zone_axis_search(
     ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
     B_mat = ub_helper.reciprocal_lattice_B()
 
-    print("\n--- HOUGH-DAVENPORT PRIOR GENERATION ---")
-    prior_engine = HoughDavenportPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
+    print("\n--- HOUGH PRIOR GENERATION ---")
+    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
     # --- REFACTORED: Load empirical rays directly from finder HDF5 ---
     print(f"Loading empirical rays from {peaks_h5_filename}...")
@@ -1514,13 +1514,13 @@ def zone_axis_search(
     n_calc = prior_engine.generate_theoretical_zones(top_k=top_k, grid_range=grid_range)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
-    quats, _ = prior_engine.solve_davenport_permutations(
+    quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc,
         q_hat, angle_tol_deg=davenport_angle_tol
     )
 
     if quats is None or len(quats) == 0:
-        print("Davenport solver failed to find any valid permutations.")
+        print("Hough solver failed to find any valid permutations.")
         return
 
     print("Filtering Prior through Exact Physics Forward-Model...")

@@ -2,6 +2,7 @@ import numpy as np
 import scipy.ndimage
 import jax
 import jax.numpy as jnp
+from scipy.spatial.transform import Rotation
 
 from subhkl.config import beamlines
 from subhkl.optimization import rotation_matrix_from_rodrigues_jax
@@ -9,38 +10,45 @@ from subhkl.optimization import rotation_matrix_from_rodrigues_jax
 from functools import partial
 
 @jax.jit
-def davenport_pair(v_pair, u_pair, w_pair):
+def batch_busing_levy(v_lab, u_calc):
     """
-    Calculates the optimal quaternion and eigenvalue for two matched Zone Axes.
+    Vectorized Busing-Levy Orthogonal Triad construction.
+    Directly computes the Sample -> Crystal orientation matrix (U) from two matched vector pairs.
+    
+    v_lab: (batch, 2, 3) - Empirical Zone Axes (Lab Frame)
+    u_calc: (batch, 2, 3) - Theoretical Zone Axes (Crystal Frame)
     """
-    B = jnp.sum(w_pair[:, None, None] * (v_pair[:, :, None] @ u_pair[:, None, :]), axis=0)
-    S = B + B.T
-    sigma = jnp.trace(B)
+    v1 = v_lab[:, 0, :]
+    v2 = v_lab[:, 1, :]
+    u1 = u_calc[:, 0, :]
+    u2 = u_calc[:, 1, :]
     
-    Z = jnp.array([
-        B[1, 2] - B[2, 1],
-        B[2, 0] - B[0, 2],
-        B[0, 1] - B[1, 0]
-    ])
+    # --- Lab Frame Triads ---
+    t1_lab = v1
+    t2_lab_unnorm = jnp.cross(v1, v2)
+    t2_lab = t2_lab_unnorm / (jnp.linalg.norm(t2_lab_unnorm, axis=1, keepdims=True) + 1e-9)
+    t3_lab = jnp.cross(t1_lab, t2_lab)
     
-    K_top = jnp.concatenate([jnp.array([sigma]), Z])[None, :]
-    K_bottom = jnp.concatenate([Z[:, None], S - sigma * jnp.eye(3)], axis=1)
-    K = jnp.concatenate([K_top, K_bottom], axis=0)
+    # --- Crystal Frame Triads ---
+    t1_c = u1
+    t2_c_unnorm = jnp.cross(u1, u2)
+    t2_c = t2_c_unnorm / (jnp.linalg.norm(t2_c_unnorm, axis=1, keepdims=True) + 1e-9)
+    t3_c = jnp.cross(t1_c, t2_c)
     
-    evals, evecs = jnp.linalg.eigh(K)
-    q_passive = evecs[:, -1]
+    # --- 3x3 Basis Matrices ---
+    T_lab = jnp.stack([t1_lab, t2_lab, t3_lab], axis=-1)
+    T_c = jnp.stack([t1_c, t2_c, t3_c], axis=-1)
     
-    # --- Convert Passive (Frame) to Active (Vector) Rotation ---
-    q_active = jnp.array([q_passive[0], -q_passive[1], -q_passive[2], -q_passive[3]])
+    # Calculate U_sc (Sample -> Crystal)
+    # T_c = U_sc @ T_lab  => U_sc = T_c @ T_lab^T
+    U_sc = jnp.einsum('bij,bkj->bik', T_c, T_lab)
     
-    return q_active, evals[-1]
+    return U_sc
 
-batch_davenport = jax.jit(jax.vmap(davenport_pair, in_axes=(0, 0, 0)))
-
-class HoughDavenportPrior:
+class HoughPrior:
     """
     A robust prior generator for Laue crystallography.
-    Fuses Multi-Run Combinatorial Hough Transforms with Davenport's q-method
+    Fuses Multi-Run Combinatorial Hough Transforms with Busing-Levy Matrix Extrapolation
     and an exact physical forward-model filter to seed global evolutionary optimization.
     """
     def __init__(self, B_mat, R_stack, ki_vec=np.array([0.0, 0.0, 1.0])):
@@ -98,9 +106,6 @@ class HoughDavenportPrior:
         sort_order = np.argsort(weights)[::-1]
 
         # --- SPATIAL DIVERSITY NMS (min_distance) ---
-        # Force a minimum separation of ~10 degrees between extracted Zone Axes.
-        # The Lambert grid spans 2*sqrt(2) over `grid_resolution` pixels.
-        # 90 degrees corresponds to a radius of sqrt(2).
         min_dist_deg = 10.0
         min_dist_px = int((min_dist_deg / 90.0) * (grid_resolution / 2.0))
         min_dist_sq = min_dist_px**2
@@ -110,17 +115,15 @@ class HoughDavenportPrior:
         for idx in sort_order:
             r, c, w = row_idx[idx], col_idx[idx], weights[idx]
 
-            # Check distance against already selected (stronger) peaks
             if len(keep_rows) > 0:
                 dist_sq = (np.array(keep_rows) - r)**2 + (np.array(keep_cols) - c)**2
                 if np.min(dist_sq) < min_dist_sq:
-                    continue  # Suppress this peak, it belongs to the same physical cluster
+                    continue  
 
             keep_rows.append(r)
             keep_cols.append(c)
             keep_weights.append(w)
 
-            # Stop once we have 15 physically diverse, dominant axes
             if len(keep_rows) >= n_hough:
                 break
 
@@ -128,44 +131,37 @@ class HoughDavenportPrior:
         col_idx = np.array(keep_cols)
         weights_obs = np.array(keep_weights)
         
-        # Grid dimensions
         dx, dy = xedges[1] - xedges[0], yedges[1] - yedges[0]
         
         # --- THE SUB-PIXEL FIX: Continuous Center of Mass ---
         exact_x, exact_y = [], []
         
         for r, c in zip(row_idx, col_idx):
-            # 1. Define the physical bounding box of the 3x3 grid neighborhood
             x_min = xedges[max(0, r-1)]
             x_max = xedges[min(len(xedges)-1, r+2)]
             y_min = yedges[max(0, c-1)]
             y_max = yedges[min(len(yedges)-1, c+2)]
             
-            # 2. Find all exact, continuous cross-products that fall in this box
             mask = (x_proj >= x_min) & (x_proj <= x_max) & \
                    (y_proj >= y_min) & (y_proj <= y_max)
             
             x_local = x_proj[mask]
             y_local = y_proj[mask]
             
-            # 3. Calculate the continuous centroid (bypassing the grid entirely)
             if len(x_local) > 0:
                 exact_x.append(np.mean(x_local))
                 exact_y.append(np.mean(y_local))
             else:
-                # Fallback to bin center if no points (should never happen for a peak)
                 exact_x.append(xedges[r] + dx/2.0)
                 exact_y.append(yedges[c] + dy/2.0)
                 
         exact_x = np.array(exact_x)
         exact_y = np.array(exact_y)
         
-        # Inverse Lambert Projection using the EXACT continuous coordinates
         r_sq = exact_x**2 + exact_y**2
         factor_inv = np.sqrt(np.clip(1.0 - r_sq / 4.0, 0, 1))
         n_obs = np.column_stack([exact_x * factor_inv, exact_y * factor_inv, 1.0 - r_sq / 2.0])
         
-        # Normalize to ensure perfect spherical geometry
         n_obs /= np.linalg.norm(n_obs, axis=1, keepdims=True)
         
         if plot_filename:
@@ -213,14 +209,13 @@ class HoughDavenportPrior:
         n_calc_raw = np.round(n_calc_raw, 5)
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_davenport_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, angle_tol_deg=0.25):
         """
-        Lifts the permutation problem from pairs to 3-cliques (triplets), 
-        and employs a RANSAC Consensus Polish to permanently eliminate the 'lever-arm' tilt.
+        Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
+        then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
         """
         n_obs_np = np.array(n_obs)
         n_calc_np = np.array(n_calc)
-        weights_obs_np = np.array(weights_obs)
         
         # 1. Compute the exact angle matrices
         S_obs = np.abs(np.dot(n_obs_np, n_obs_np.T))
@@ -264,34 +259,23 @@ class HoughDavenportPrior:
         # 3. Formulate RANSAC Hypotheses (Fully Vectorized GPU Expansion)
         print(f"  -> Vectorizing {len(valid_permutations)} physical matches onto GPU...")
         
-        # Unpack indices into raw NumPy arrays (fast in Python)
         obs_indices = np.array([p[0] for p in valid_permutations], dtype=np.int32)
         calc_indices = np.array([p[1] for p in valid_permutations], dtype=np.int32)
         
-        # Map indices to base triplets
         v_base = jnp.array(n_obs_np)[obs_indices]      # Shape: (M, 3, 3)
         u_base = jnp.array(n_calc_np)[calc_indices]    # Shape: (M, 3, 3)
-        w_base = jnp.array(weights_obs_np)[obs_indices] # Shape: (M, 3)
         
         import itertools
         
-        # 8-way Sign Expansion via JAX Broadcasting (Zero Python loops!)
+        # 8-way Sign Expansion via JAX Broadcasting
         signs = jnp.array(list(itertools.product([1, -1], repeat=3)), dtype=v_base.dtype) # (8, 3)
-        
-        # Multiply (M, 1, 3, 3) with (1, 8, 3, 1) -> (M, 8, 3, 3)
         v_expanded = v_base[:, None, :, :] * signs[None, :, :, None]
         
         v_hyp_all = v_expanded.reshape(-1, 3, 3)  # Flattens to (M*8, 3, 3)
         u_hyp_all = jnp.repeat(u_base, 8, axis=0) # Expands to (M*8, 3, 3)
-        w_hyp_all = jnp.repeat(w_base, 8, axis=0) # Expands to (M*8, 3)
-        
-        v_all_obs = jnp.array(n_obs_np)
-        w_all_obs = jnp.array(weights_obs_np)
-        u_all_calc = jnp.array(n_calc_np)
         
         print(f"  -> Polishing {len(v_hyp_all)} geometric hypotheses using Angular Laue Indexing...")
         
-        # 1. EXPANDED GRID: Increase to -10 to +10 to capture true Laue diffraction limits
         grid = np.arange(-10, 11)
         u, v, w = np.meshgrid(grid, grid, grid, indexing='ij')
         hkls = np.vstack([u.flatten(), v.flatten(), w.flatten()])
@@ -308,41 +292,28 @@ class HoughDavenportPrior:
         q_theor_jax = jnp.array(q_theor_unique)
         q_sample_jax = jnp.array(q_hat_sample)
         
-        # 2. TIGHTER TOLERANCE: Since the sphere is now densely packed with theoretical lines,
-        # we drop the capture radius to 0.5 degrees to suppress the random noise floor.
         cos_tol = jnp.cos(jnp.radians(0.5))
         
         @jax.jit
-        def evaluate_chunk(v_hyp, u_hyp, w_hyp):
-            q_hyp, _ = batch_davenport(v_hyp, u_hyp, w_hyp)
-            q_hyp = jnp.where(q_hyp[:, 0:1] < 0, -q_hyp, q_hyp)
-            
-            rots_hyp = jax.vmap(quaternion_to_rodrigues)(q_hyp)
-            U_hyp = jax.vmap(rotation_matrix_from_rodrigues_jax)(rots_hyp)
+        def evaluate_chunk(v_hyp, u_hyp):
+            # Pass the first two vectors of the triplet directly to the Busing-Levy constructor
+            U_hyp = batch_busing_levy(v_hyp[:, :2, :], u_hyp[:, :2, :])
             
             # Rotate all empirical unit rays into the proposed crystal frame
-            # U_hyp: (batch, 3, 3) | q_sample_jax: (N_rays, 3) -> (batch, N_rays, 3)
             q_cryst_hat = jnp.einsum('bij,nj->bni', U_hyp, q_sample_jax)
             
             # Compute angular alignment against all theoretical reflections
-            # q_cryst_hat: (batch, N_rays, 3) | q_theor_jax: (N_theor, 3) -> (batch, N_rays, N_theor)
             dots = jnp.einsum('bni,mi->bnm', q_cryst_hat, q_theor_jax)
-            
-            # Use abs() to handle Friedel opposites automatically
             max_dots = jnp.max(jnp.abs(dots), axis=2)
             
-            # HARD VOTING: Count how many empirical rays point at a valid theoretical reflection
+            # HARD VOTING
             scores = jnp.sum(max_dots >= cos_tol, axis=1)
             
-            return q_hyp, scores
+            return U_hyp, scores
 
-        all_q_final, all_s_final = [], []
+        all_U_final, all_s_final = [], []
 
-        # 3. VRAM PROTECTION: Dynamically calculate the chunk size to never exceed 10GB of VRAM.
-        # Bytes per single hypothesis evaluation = rays * theoretical_lines * 4 bytes (float32)
         bytes_per_hyp = len(q_hat_sample) * len(q_theor_unique) * 4
-
-        # Target 10 GB limit (10 * 1024**3 bytes)
         target_vram_bytes = 10 * 1024**3
         chunk_size = max(1, int(target_vram_bytes / bytes_per_hyp))
 
@@ -350,24 +321,19 @@ class HoughDavenportPrior:
         
         for start in range(0, len(v_hyp_all), chunk_size):
             end = start + chunk_size
-            
-            # This is an async dispatch. It returns immediately, queueing the kernel on the GPU.
-            q_f, s_f = evaluate_chunk(v_hyp_all[start:end], u_hyp_all[start:end], w_hyp_all[start:end])
-            
-            # CRITICAL: Keep these as JAX DeviceArrays. Do NOT call np.array() here!
-            all_q_final.append(q_f)
+            U_f, s_f = evaluate_chunk(v_hyp_all[start:end], u_hyp_all[start:end])
+            all_U_final.append(U_f)
             all_s_final.append(s_f)
             
         print("  -> Execution queued. Waiting for GPU to drain pipeline...")
         
-        quats_gpu = jnp.concatenate(all_q_final)
+        U_gpu = jnp.concatenate(all_U_final)
         scores_gpu = jnp.concatenate(all_s_final)
         
         # --- DYNAMIC STATISTICAL FILTERING ---
         num_rays = len(q_hat_sample)
         num_lines = len(q_theor_unique)
         
-        # The fraction of the sphere covered by a symmetric 1.5 deg tolerance cone
         fraction_of_sphere_per_line = 1.0 - float(cos_tol)
         random_hit_prob = num_lines * fraction_of_sphere_per_line
         expected_random_hits = num_rays * random_hit_prob
@@ -379,22 +345,26 @@ class HoughDavenportPrior:
         
         valid_mask = scores_gpu >= min_inliers
         
-        quats_valid = quats_gpu[valid_mask]
-        scores_valid = scores_gpu[valid_mask]
-        
-        quats = np.array(quats_valid)
-        scores = np.array(scores_valid)
+        U_valid = np.array(U_gpu[valid_mask])
+        scores_valid = np.array(scores_gpu[valid_mask])
 
-        # INVERT THE QUATERNIONS: Map from Sample->Crystal to Crystal->Sample (Busing-Levy)
-        # Conjugating the vector components [w, -x, -y, -z] perfectly inverts the rotation
+        if len(U_valid) == 0:
+            print("  -> No hypotheses survived the statistical filter.")
+            return None, None
+
+        # --- Convert back to Quaternions via SciPy to maintain interface downstream ---
+        rots = Rotation.from_matrix(U_valid).as_quat() # SciPy returns [x, y, z, w]
+        quats = np.column_stack([rots[:, 3], rots[:, 0], rots[:, 1], rots[:, 2]]) # Map to [w, x, y, z]
+
+        # INVERT THE QUATERNIONS: Map from Sample->Crystal to Crystal->Sample
         quats_inv = quats * np.array([1.0, -1.0, -1.0, -1.0])
 
         print(f"  -> Angular Laue Indexing returned {len(quats)} valid seeds. Deduplicating...")
 
         # --- FAST HASH-BASED DEDUPLICATION ---
-        sort_idx = np.argsort(np.array(scores))[::-1]
-        quats_sorted = np.array(quats_inv)[sort_idx]
-        scores_sorted = np.array(scores)[sort_idx]
+        sort_idx = np.argsort(scores_valid)[::-1]
+        quats_sorted = quats_inv[sort_idx]
+        scores_sorted = scores_valid[sort_idx]
         
         quats_hemi = np.where(quats_sorted[:, 0:1] < 0, -quats_sorted, quats_sorted)
         quats_rounded = np.round(quats_hemi, decimals=2)
@@ -423,7 +393,6 @@ class HoughDavenportPrior:
 
         import tqdm
         rand_scores = []
-        # We use a blocking call (np.array) inside the loop to give tqdm true timings
         for i in tqdm.tqdm(range(0, len(rand_rots), batch_size), desc="Forward Model Filter (random)"):
             batch = rand_rots[i:i+batch_size]
             scores = np.array(-objective_function(batch))
@@ -436,10 +405,9 @@ class HoughDavenportPrior:
 
         print(f"  -> Random Background (N=4096) | Mean: {r_mean:.2f} | Max: {r_max:.2f} | Std: {r_std:.2f}")
 
-        print(f"  -> Forward-Modeling all {len(prior_quats)} Davenport seeds for statistical observation...")
+        print(f"  -> Forward-Modeling all {len(prior_quats)} Prior seeds for statistical observation...")
         prior_rots = jax.vmap(quaternion_to_rodrigues)(prior_quats)
 
-        # 1. Evaluate all with an accurate progress bar
         physics_scores = []
         for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter (prior)"):
             batch = prior_rots[i:i+batch_size]
@@ -448,43 +416,37 @@ class HoughDavenportPrior:
 
         physics_scores_np = np.concatenate(physics_scores)
 
-        # 2. Compute Rank Statistics
-        # Davenport rank is exactly the array index (0 is best consensus score)
-        davenport_ranks = np.arange(len(physics_scores_np))
+        ranks = np.arange(len(physics_scores_np))
 
-        # Physics rank (0 is best forward-model score)
         physics_sort_idx = np.argsort(physics_scores_np)[::-1]
         physics_ranks = np.empty_like(physics_sort_idx)
         physics_ranks[physics_sort_idx] = np.arange(len(physics_scores_np))
 
         import scipy.stats
-        rho, p_val = scipy.stats.spearmanr(davenport_ranks, physics_ranks)
+        rho, p_val = scipy.stats.spearmanr(ranks, physics_ranks)
 
-        print("\n[Observation Stats] Davenport vs. Physical Ranking:")
+        print("\n[Observation Stats] RANSAC vs. Physical Ranking:")
         print(f"  -> Global Spearman Rho: {rho:.4f} (p={p_val:.2e})")
 
-        # Where are the true physical winners located in the Davenport ranking?
         top_1_dav_rank = physics_sort_idx[0]
         top_10_dav_ranks = physics_sort_idx[:10]
         top_100_dav_ranks = physics_sort_idx[:100]
 
-        print(f"  -> Top 1 Physical Seed was Davenport Rank: #{top_1_dav_rank}")
-        print(f"  -> Top 10 Physical Seeds max Davenport Rank: #{np.max(top_10_dav_ranks)}")
-        print(f"  -> Top 100 Physical Seeds max Davenport Rank: #{np.max(top_100_dav_ranks)}")
+        print(f"  -> Top 1 Physical Seed was RANSAC Rank: #{top_1_dav_rank}")
+        print(f"  -> Top 10 Physical Seeds max RANSAC Rank: #{np.max(top_10_dav_ranks)}")
+        print(f"  -> Top 100 Physical Seeds max RANSAC Rank: #{np.max(top_100_dav_ranks)}")
 
-        # Calculate Intersection Overlap for various truncation sizes
         for N in [1000, 10000, 50000]:
             if len(physics_scores_np) >= N:
-                dav_top_n = set(davenport_ranks[:N])
+                dav_top_n = set(ranks[:N])
                 phys_top_n = set(physics_sort_idx[:N])
                 overlap = len(dav_top_n.intersection(phys_top_n))
                 print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
 
-        # 3. Dynamic Scale-Invariant Decision
         best_score = physics_scores_np[physics_sort_idx[0]]
         z_score = (best_score - r_mean) / (r_std + 1e-9)
 
-        print(f"\n  -> Davenport Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
+        print(f"\n  -> RANSAC Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
         print(f"  -> Top 5 Prior Scores: {physics_scores_np[physics_sort_idx[:5]]}")
 
         if z_score >= z_score_threshold:
@@ -558,7 +520,7 @@ def jax_predict_reflections(U, B, hkl, R, ki_vec, sample_offset, center, uhat, v
 @jax.jit
 def quaternion_to_rodrigues(q):
     """Maps a normalized quaternion [w, x, y, z] to a 3D Rodrigues vector safely."""
-    w, x, y, z = q[0], q[1], q[2], q[3] # <--- BACK TO w, x, y, z
+    w, x, y, z = q[0], q[1], q[2], q[3]
     # Safely handle the double-cover without zeroing out w=0
     sign = jnp.where(w < 0, -1.0, 1.0)
     w, x, y, z = w * sign, x * sign, y * sign, z * sign
