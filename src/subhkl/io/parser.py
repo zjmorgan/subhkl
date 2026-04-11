@@ -1442,7 +1442,7 @@ def zone_axis_search(
     widths, heights, ms, ns = [], [], [], []
 
     for i, phys_bank in enumerate(file_bank_ids):
-        de = peaks.get_detector(phys_bank)
+        det = peaks.get_detector(phys_bank)
 
         det_centers.append(det.center)
         uhats.append(det.uhat)
