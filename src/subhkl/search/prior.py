@@ -252,7 +252,8 @@ class HoughPrior:
         # Deduplicate parallel vectors
         return jnp.array(np.unique(n_calc_raw, axis=1).T)
 
-    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, space_group="P 1", angle_tol_deg=0.25, d_min=2.0, max_hkl=35):
+    def solve_permutations(self, n_obs, weights_obs, n_calc, q_hat_sample, space_group="P 1",
+                           angle_tol_deg=0.25, scoring_tol_deg=0.25, d_min=2.0, max_hkl=35):
         """
         Lifts the permutation problem from pairs to 3-cliques (triplets) to robustly reject bad geometry,
         then employs the Normalized Busing-Levy matrix extrapolation on the GPU.
