@@ -565,7 +565,6 @@ class FindUB:
         self.az_phi = data["peaks/azimuthal"]
         self.intensity = data["peaks/intensity"]
         self.sigma_intensity = data["peaks/sigma"]
-        self.radii = data["peaks/radius"]
 
         r_stack = data.get("goniometer/R")
         idx_run = data.get("peaks/run_index")
@@ -781,7 +780,6 @@ class FindUB:
             np.array(self.wavelength),
             tolerance_deg=tolerance_deg,
             cell_params=cell_params_init,
-            peak_radii=self.radii,
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
             lattice_system=lattice_system,
