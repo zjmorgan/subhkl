@@ -855,8 +855,9 @@ class VectorizedObjective:
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
 
             # smooth distance
-            dist_sq = jnp.sum((kf_ki_sample / lambda_opt[:, None, :] *
-                           jnp.matmul(ub_mat, jnp.sin(jnp.pi * hkl_float)))**2, axis=1)
+            # The UB matrix scales the dimensionless HKL sine-error into absolute Q-space
+            delta_Q = jnp.matmul(ub_mat, jnp.sin(jnp.pi * hkl_float))
+            dist_sq = jnp.sum(delta_Q**2, axis=1)
 
             effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
                 k_norm / lambda_opt
