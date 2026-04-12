@@ -1754,6 +1754,14 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # Replaces the old plot_tasks list
     runs_plot_data = defaultdict(lambda: {'images': {}, 'detectors': {}})
 
+    # static per-run data
+    if create_visualizations:
+        for img_key, image_raw in peaks_obj.image.ims:
+            run_id = peaks_obj.get_run_id(img_key)
+            det = peaks_obj.get_detector_by_img(img_key)
+            runs_plot_data[run_id]['images'][img_key] = image_raw
+            runs_plot_data[run_id]['detectors'][img_key] = det
+
     for img_key, indices in tqdm(results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector_by_img(img_key)
@@ -1773,11 +1781,6 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         img_rs = [all_rs[idx] for idx in indices]
         img_cs = [all_cs[idx] for idx in indices]
         bank_tt, bank_az = det.pixel_to_angles(np.array(img_rs), np.array(img_cs), sample_offset=s_lab)
-
-        # Defer plotting by storing the necessary static data per Run
-        if create_visualizations:
-            runs_plot_data[run_id]['images'][img_key] = image_raw
-            runs_plot_data[run_id]['detectors'][img_key] = det
 
         valid_global_indices = []
         valid_local_indices = []
