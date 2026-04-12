@@ -182,7 +182,6 @@ class VectorizedObjective:
         kf_ki_dir,
         peak_xyz_lab,
         wavelength,
-        tolerance_deg=0.1,
         cell_params=None,
         refine_lattice=False,
         lattice_bound_frac=0.05,
@@ -210,7 +209,6 @@ class VectorizedObjective:
 
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
-        self.tolerance_rad = jnp.deg2rad(tolerance_deg)
 
         self.static_R = jnp.array(static_R) if static_R is not None else jnp.eye(3)
 
@@ -414,7 +412,7 @@ class VectorizedObjective:
 
         return UB, B, sample_total, ki_vec, offsets_total, R
 
-    def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002):
+    def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None):
         ub_inv = jnp.linalg.inv(ub_mat)
         v = jnp.matmul(ub_inv, kf_ki_sample)
         abs_v = jnp.abs(v)
@@ -521,7 +519,6 @@ class VectorizedObjective:
             UB,
             kf_ki_vec,
             k_sq_override=k_sq_dyn,
-            tolerance_rad=self.tolerance_rad,
         )
 
         return jax.tree.map(
@@ -563,8 +560,6 @@ class FindUB:
         self.R = data.get("goniometer/R")
         self.two_theta = data["peaks/two_theta"]
         self.az_phi = data["peaks/azimuthal"]
-        self.intensity = data["peaks/intensity"]
-        self.sigma_intensity = data["peaks/sigma"]
 
         r_stack = data.get("goniometer/R")
         idx_run = data.get("peaks/run_index")
@@ -611,7 +606,6 @@ class FindUB:
                 "sample/alpha": f["sample/alpha"][()], "sample/beta": f["sample/beta"][()], "sample/gamma": f["sample/gamma"][()],
                 "instrument/wavelength": f["instrument/wavelength"][()], "goniometer/R": f["goniometer/R"][()],
                 "peaks/two_theta": f["peaks/two_theta"][()], "peaks/azimuthal": f["peaks/azimuthal"][()],
-                "peaks/intensity": f["peaks/intensity"][()], "peaks/sigma": f["peaks/sigma"][()], "peaks/radius": f["peaks/radius"][()],
                 "sample/space_group": f["sample/space_group"][()]
             }
             if "peaks/run_index" in f: data["peaks/run_index"] = f["peaks/run_index"][()]
@@ -697,7 +691,6 @@ class FindUB:
         num_generations: int = 100,
         n_runs: int = 1,
         seed: int = 0,
-        tolerance_deg: float = 0.1,
         init_params: np.ndarray | None = None,
         refine_lattice: bool = False,
         lattice_bound_frac: float = 0.05,
@@ -720,7 +713,7 @@ class FindUB:
         if goniometer_axes is None and self.goniometer_axes is not None:
             goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
-            goniometer_angles = self.goniometer_angles
+            goniometer_angles = self.goniometer_angles.T
         if goniometer_names is None and self.goniometer_names is not None:
             goniometer_names = self.goniometer_names
 
@@ -778,7 +771,6 @@ class FindUB:
             kf_ki_dir_lab,
             self.peak_xyz,
             np.array(self.wavelength),
-            tolerance_deg=tolerance_deg,
             cell_params=cell_params_init,
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
