@@ -394,46 +394,31 @@ def finder_merger(
 
 @app.command()
 def indexer(
-    peaks_h5_filename: str,
-    output_peaks_filename: str,
-    a: float, b: float, c: float,
-    alpha: float, beta: float, gamma: float,
-    space_group: str,
-    wavelength_min: float | None = None,
-    wavelength_max: float | None = None,
-    goniometer_csv_filename: str | None = None,
-    original_nexus_filename: str | None = None,
-    instrument_name: str | None = None,
-    strategy_name: str = typer.Option("DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."),
-    sigma_init: float = typer.Option(None, "--sigma-init", help="Parameter exploration range."),
-    n_runs: int = typer.Option(1, "--n-runs", "-n", help="Number of optimization runs with different seeds."),
-    population_size: int = typer.Option(1000, "--population-size", "--popsize", help="Population size for each generation."),
-    gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
-    seed: int = typer.Option(0, "--seed", help="Base seed for the first optimization run."),
-    tolerance_deg: float = 0.1,
-    refine_lattice: bool = typer.Option(False, "--refine-lattice", help="Refine unit cell parameters during optimization."),
-    lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac", help="Fractional bound for lattice parameter refinement."),
-    refine_goniometer: bool = typer.Option(False, "--refine-goniometer", help="Refine goniometer angles during optimization."),
-    refine_goniometer_axes: str = typer.Option(None, "--refine-goniometer-axes", help="Comma-separated list of goniometer axis names to refine."),
-    goniometer_bound_deg: float = typer.Option(5.0, "--goniometer-bound-deg", help="Bound for goniometer angle refinement in degrees."),
-    refine_sample: bool = typer.Option(False, "--refine-sample", help="Refine sample position offset."),
-    sample_bound_meters: float = typer.Option(0.005, "--sample-bound-meters", help="Bound for sample offset in meters."),
-    refine_beam: bool = typer.Option(False, "--refine-beam", help="Refine beam direction. Default (0,0,1)."),
-    beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg", help="Bound for beam direction in degrees."),
-    bootstrap_filename: str | None = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
-    loss_method: str = typer.Option("cosine", "--loss-method", help="Loss to use for optimization."),
-    d_min: float = typer.Option(None, "--d-min"),
-    d_max: float = typer.Option(None, "--d-max"),
-    hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
-    search_window_size: int = typer.Option(512, "--search-window-size"),
-    batch_size: int = typer.Option(None, "--batch-size"),
-    window_batch_size: int = typer.Option(32, "--window-batch-size"),
-    chunk_size: int = typer.Option(256, "--chunk-size"),
-    num_iters: int = typer.Option(20, "--num-iters"),
-    top_k: int = typer.Option(32, "--top-k"),
-    B_sharpen: float = typer.Option(None, "--b-sharpen", help="Wilson B-factor for peak sharpening (~50 for protein crystals)"),
+    peaks_h5_filename: str, output_peaks_filename: str, a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float, space_group: str,
+    wavelength_min: float | None = None, wavelength_max: float | None = None,
+    goniometer_csv_filename: str | None = None, original_nexus_filename: str | None = None,
+    instrument_name: str | None = None, strategy_name: str = typer.Option("DE", "--strategy"),
+    sigma_init: float = typer.Option(None, "--sigma-init"), n_runs: int = typer.Option(1, "--n-runs", "-n"),
+    population_size: int = typer.Option(1000, "--population-size", "--popsize"),
+    gens: int = typer.Option(100, "--gens"), seed: int = typer.Option(0, "--seed"),
+    tolerance_deg: float = 0.1, refine_lattice: bool = typer.Option(False, "--refine-lattice"),
+    lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
+    refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
+    refine_goniometer_axes: str = typer.Option(None, "--refine-goniometer-axes"),
+    goniometer_bound_deg: float = typer.Option(5.0, "--goniometer-bound-deg"),
+    refine_sample: bool = typer.Option(False, "--refine-sample"),
+    sample_bound_meters: float = typer.Option(0.005, "--sample-bound-meters"),
+    refine_beam: bool = typer.Option(False, "--refine-beam"),
+    beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg"),
+    bootstrap_filename: str | None = typer.Option(None, "--bootstrap"),
+    loss_method: str = typer.Option("cosine", "--loss-method"), d_min: float = typer.Option(None, "--d-min"),
+    d_max: float = typer.Option(None, "--d-max"), hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
+    search_window_size: int = typer.Option(512, "--search-window-size"), batch_size: int = typer.Option(None, "--batch-size"),
+    window_batch_size: int = typer.Option(32, "--window-batch-size"), chunk_size: int = typer.Option(256, "--chunk-size"),
+    num_iters: int = typer.Option(20, "--num-iters"), top_k: int = typer.Option(32, "--top-k"),
+    B_sharpen: float = typer.Option(None, "--b-sharpen"),
 ) -> None:
-    # 1. Resolve Space Group
     sg_to_use = "P 1"
     if space_group:
         from subhkl.core.spacegroup import get_space_group_object
@@ -447,19 +432,15 @@ def indexer(
     print(f"Loading peaks from: {peaks_h5_filename}")
     input_data = {}
 
-    def _val(x):
-        return x.default if hasattr(x, "default") else x
+    def _val(x): return x.default if hasattr(x, "default") else x
 
-    # 2. Extract Base Data
     with h5py.File(peaks_h5_filename, "r") as f:
-        w_min_val = _val(wavelength_min)
-        w_max_val = _val(wavelength_max)
+        w_min_val, w_max_val = _val(wavelength_min), _val(wavelength_max)
         if w_min_val is None or w_max_val is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
                 if w_min_val is None: wavelength_min = float(wl[0])
                 if w_max_val is None: wavelength_max = float(wl[1])
-                print(f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A")
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
 
@@ -467,70 +448,39 @@ def indexer(
             "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma",
             "peaks/radius", "peaks/xyz", "goniometer/R", "goniometer/axes",
             "goniometer/angles", "goniometer/names", "files", "file_offsets",
-            "peaks/run_index", "peaks/image_index", "bank", "bank_ids",
-            "sample/offset", "beam/ki_vec"
+            "peaks/run_index", "peaks/image_index", "bank", "bank_ids", "sample/offset", "beam/ki_vec",
         ]
         for k in keys_to_load:
-            if k in f:
-                input_data[k] = f[k][()]
+            if k in f: input_data[k] = f[k][()]
 
-    input_data["sample/a"] = a
-    input_data["sample/b"] = b
-    input_data["sample/c"] = c
-    input_data["sample/alpha"] = alpha
-    input_data["sample/beta"] = beta
-    input_data["sample/gamma"] = gamma
+    # ToF Geometry mapping constraint
+    if "peaks/image_index" in input_data:
+        input_data["peaks/run_index"] = input_data["peaks/image_index"]
+
+    input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
+    input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha, beta, gamma
     input_data["sample/space_group"] = sg_to_use
     input_data["instrument/wavelength"] = [float(_val(wavelength_min)), float(_val(wavelength_max))]
 
-    # 3. Sanity Checks
-    cell_max = max(a, b, c)
     d_max_val = _val(d_max)
-    if d_max_val is not None and d_max_val < cell_max:
-        print(f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f}).")
-        print("         This will exclude low-order reflections which are critical for orientation.")
+    gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
 
-    gonio_axes_list = None
-    refine_goniometer_axes_val = _val(refine_goniometer_axes)
-    if refine_goniometer_axes_val:
-        gonio_axes_list = [x.strip() for x in refine_goniometer_axes_val.split(",")]
-
-    # 4. Execute Optimization (FindUB natively maps image_index -> R_stack)
     index(
-        input_data=input_data,
-        output_peaks_filename=output_peaks_filename,
-        strategy_name=_val(strategy_name),
-        population_size=_val(population_size),
-        gens=_val(gens),
-        sigma_init=_val(sigma_init),
-        n_runs=_val(n_runs),
-        seed=_val(seed),
-        tolerance_deg=tolerance_deg,
-        refine_lattice=_val(refine_lattice),
-        lattice_bound_frac=_val(lattice_bound_frac),
-        bootstrap_filename=_val(bootstrap_filename),
-        refine_goniometer=_val(refine_goniometer),
-        refine_goniometer_axes=gonio_axes_list,
-        goniometer_bound_deg=_val(goniometer_bound_deg),
-        refine_sample=_val(refine_sample),
-        sample_bound_meters=_val(sample_bound_meters),
-        refine_beam=_val(refine_beam),
-        beam_bound_deg=_val(beam_bound_deg),
-        nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name,
-        loss_method=_val(loss_method),
-        hkl_search_range=_val(hkl_search_range),
-        d_min=_val(d_min),
-        d_max=d_max_val,
-        search_window_size=_val(search_window_size),
-        batch_size=_val(batch_size),
-        window_batch_size=_val(window_batch_size),
-        chunk_size=_val(chunk_size),
-        num_iters=_val(num_iters),
-        top_k=_val(top_k),
-        B_sharpen=_val(B_sharpen),
-        wavelength_min=input_data["instrument/wavelength"][0],
-        wavelength_max=input_data["instrument/wavelength"][1],
+        input_data=input_data, output_peaks_filename=output_peaks_filename,
+        strategy_name=_val(strategy_name), population_size=_val(population_size),
+        gens=_val(gens), sigma_init=_val(sigma_init), n_runs=_val(n_runs), seed=_val(seed),
+        tolerance_deg=tolerance_deg, refine_lattice=_val(refine_lattice),
+        lattice_bound_frac=_val(lattice_bound_frac), bootstrap_filename=_val(bootstrap_filename),
+        refine_goniometer=_val(refine_goniometer), refine_goniometer_axes=gonio_axes_list,
+        goniometer_bound_deg=_val(goniometer_bound_deg), refine_sample=_val(refine_sample),
+        sample_bound_meters=_val(sample_bound_meters), refine_beam=_val(refine_beam),
+        beam_bound_deg=_val(beam_bound_deg), nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name, loss_method=_val(loss_method),
+        hkl_search_range=_val(hkl_search_range), d_min=_val(d_min), d_max=d_max_val,
+        search_window_size=_val(search_window_size), batch_size=_val(batch_size),
+        window_batch_size=_val(window_batch_size), chunk_size=_val(chunk_size),
+        num_iters=_val(num_iters), top_k=_val(top_k), B_sharpen=_val(B_sharpen),
+        wavelength_min=input_data["instrument/wavelength"][0], wavelength_max=input_data["instrument/wavelength"][1],
     )
 
 @app.command()
