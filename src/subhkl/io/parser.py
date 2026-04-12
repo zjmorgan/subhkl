@@ -1386,10 +1386,16 @@ def zone_axis_search(
     prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
     print(f"Loading empirical rays from {peaks_h5_filename}...")
+    
+    # 1. Use the Peaks API to handle instrument geometry mapping
+    from subhkl.integration.api import Peaks
+    peaks_api = Peaks(merged_h5_filename, instrument)
+
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
 
+        # CRITICAL: image_index maps 1:1 to the N_banks dimension of R_stack in merged.h5
         if "peaks/image_index" in f_peaks:
             group_indices = f_peaks["peaks/image_index"][()]
         else:
@@ -1400,21 +1406,12 @@ def zone_axis_search(
         else:
             ki_vec = np.array([0.0, 0.0, 1.0])
 
-        R_peaks = f_peaks.get("goniometer/R")
-        if R_peaks is not None:
-            R_peaks = R_peaks[()]
+        # If Peaks file overrides the goniometer entirely, use it. Otherwise rely on Peaks API/merged.h5
+        R_peaks_override = f_peaks.get("goniometer/R")
+        if R_peaks_override is not None:
+            R_peaks_override = R_peaks_override[()]
 
-        run_indices = f_peaks.get("peaks/run_index")
-        if run_indices is not None:
-            run_indices = run_indices[()]
-        else:
-            run_indices = group_indices
-
-    q_hat_list = []
-    q_lab_list = []
-    peaks_xyz_list = []
-    intensities_list = []
-    mapped_run_indices = []
+    q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = [], [], [], [], []
 
     unique_groups = np.unique(group_indices)
     for g_idx in unique_groups:
@@ -1425,23 +1422,18 @@ def zone_axis_search(
         grp_xyz = peaks_xyz[mask]
         grp_intensity = peaks_intensity[mask]
 
-        # THE CRUCIAL LINK: What physical run does this ToF slice belong to?
-        first_run_idx = run_indices[mask][0] 
-
-        # Robustly assign the rotation matrix for this group
-        if R_peaks is not None:
-            if R_peaks.ndim == 3 and R_peaks.shape[0] == len(peaks_xyz):
-                R_gonio = R_peaks[mask][0]
-            elif R_peaks.ndim == 3:
-                R_gonio = R_peaks[first_run_idx]
+        # 2. Safely grab the rotation matrix using the flat bank index (g_idx)
+        if R_peaks_override is not None:
+            if R_peaks_override.ndim == 3 and R_peaks_override.shape[0] == len(peaks_xyz):
+                R_gonio = R_peaks_override[mask][0]
+            elif R_peaks_override.ndim == 3 and R_peaks_override.shape[0] > g_idx:
+                R_gonio = R_peaks_override[g_idx]
             else:
-                R_gonio = R_peaks
+                R_gonio = R_peaks_override
         else:
-            # FIX 1: Use first_run_idx, NOT g_idx!
-            # All 52 ToF slices in Run 0 must share R_stack[0].
-            R_gonio = R_stack[first_run_idx] if first_run_idx < len(R_stack) else np.eye(3)
+            # Let the flat R_stack (N_banks, 3, 3) map directly to the image/bank index
+            R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
 
-        # Filter by minimum intensity first to reject noise before Top-K selection
         intensity_mask = grp_intensity >= min_intensity
         if not np.any(intensity_mask): 
             continue
@@ -1461,45 +1453,36 @@ def zone_axis_search(
         q_hat_grp = q_sample / q_norms
         
         q_hat_list.append(q_hat_grp)
-        
         q_lab_list.append(q_lab)
         peaks_xyz_list.append(grp_xyz_top)
         intensities_list.append(grp_intensity_top)
         
-        # FIX 2: Revert VectorizedObjective mapping back to first_run_idx 
-        # so the physics model aligns perfectly with RANSAC
-        mapped_run_indices.append(np.full(len(grp_xyz_top), first_run_idx))
+        # 3. Map the VectorizedObjective strictly to the flat bank index
+        mapped_bank_indices.append(np.full(len(grp_xyz_top), g_idx))
 
     if not q_hat_list:
         print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
         return
 
     q_hat = np.vstack(q_hat_list)
-
-    # Transpose arrays to (3, N) layout expected by the VectorizedObjective
-    q_lab_all = np.vstack(q_lab_list).T
-    peaks_xyz_all = np.vstack(peaks_xyz_list).T
+    q_lab_all = np.vstack(q_lab_list).T  
+    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
     intensities_all = np.concatenate(intensities_list)
-    run_indices_all = np.concatenate(mapped_run_indices)
+    
+    # This array now contains the exact bank index (0 to N_banks-1) for every single ray
+    bank_indices_all = np.concatenate(mapped_bank_indices)
 
-    # --- Robust Intensity Normalization ---
-    # Normalize by the median to handle massive outliers, then clip to a max weight of 10.0.
-    # This prevents a single nuclear-bright spot from dominating the entire objective function.
     median_intensity = np.median(intensities_all)
     weights_all = intensities_all / (median_intensity + 1e-6)
     weights_all = np.clip(weights_all, 0.0, 10.0)
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(
-        q_hat,
-        grid_resolution=hough_grid_resolution,
-        n_hough=n_hough,
-        plot_filename=output_hough,
-        border_frac=border_frac
+        q_hat, grid_resolution=hough_grid_resolution, n_hough=n_hough,
+        plot_filename=output_hough, border_frac=border_frac
     )
 
     if len(n_obs) == 0:
-        print("Failed to find any zone axes.")
         return
 
     n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
@@ -1507,20 +1490,18 @@ def zone_axis_search(
 
     centering = get_centering(space_group)
     quats, _ = prior_engine.solve_permutations(
-        jnp.array(n_obs), jnp.array(weights_obs), n_calc,
-        q_hat,
-        space_group=space_group, # <-- Pass the full Space Group
+        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat, 
+        centering=centering, 
         angle_tol_deg=davenport_angle_tol,
+        scoring_tol_deg=vector_tolerance, 
         d_min=d_min
     )
 
     if quats is None or len(quats) == 0:
-        print("Hough solver failed to find any valid permutations.")
         return
 
     print(f"Filtering Prior through Exact Physics Forward-Model (Method: {loss_method})...")
 
-    # Generate CDF for Gaussian scoring mapping
     t = np.linspace(0, np.pi, 1024)
     cdf = (t - np.sin(t)) / np.pi
 
@@ -1532,14 +1513,18 @@ def zone_axis_search(
         angle_cdf=cdf,
         angle_t=t,
         weights=weights_all,
-        tolerance_deg=vector_tolerance,  # <-- Wired to CLI option
+        tolerance_deg=vector_tolerance, 
         space_group=space_group,
         centering=centering,
-        loss_method=loss_method,         # <-- Wired to CLI option
+        loss_method=loss_method,
         cell_params=[a, b, c, alpha, beta, gamma],
         d_min=d_min,
+        
+        # 4. The Magic Link:
+        # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
+        # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
         static_R=R_stack,
-        peak_run_indices=run_indices_all
+        peak_run_indices=bank_indices_all 
     )
 
     prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
