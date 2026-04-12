@@ -144,12 +144,12 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
                        s=40, linewidths=0.25, label=label)
             added_finder_label = True
 
-    # 3. Plot the Projected 3D Ellipsoids
+    is_isotropic = True
     if getattr(peaks, 'var_u', None) is not None and getattr(peaks, 'peak_rows', None) is not None:
-
         is_isotropic = np.allclose(peaks.var_u, peaks.var_v) and np.allclose(peaks.cov_uv, 0)
-        base_label = 'Isotropic Radius' if is_isotropic else 'Projected 3D Tensor'
-        
+
+    # 3. Plot the Projected 3D Ellipsoids
+    if not is_isotropic:
         added_ellipse_label = False
         theta = np.linspace(0, 2 * np.pi, 50)
         cos_t, sin_t = np.cos(theta), np.sin(theta)
@@ -184,7 +184,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
             e_roty = compress_roty(e_roty)
 
-            label = base_label if not added_ellipse_label else ""
+            label = 'Projected Shape Tensor'
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
@@ -290,7 +290,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # FORCE PHYSICAL ASPECT RATIO 
     # -------------------------------------------------------------
     aspect_ratio = 180.0 / (np.pi * mean_radius)
-    ax.set_aspect(aspect_ratio, adjustable='datalim')
+    ax.set_aspect(aspect_ratio, adjustable='box')
 
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
