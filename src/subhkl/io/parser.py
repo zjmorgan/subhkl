@@ -406,7 +406,6 @@ def finder_merger(
         f["sample/space_group"] = space_group
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
-
 @app.command()
 def indexer(
     peaks_h5_filename: str, output_peaks_filename: str, a: float, b: float, c: float,
@@ -417,7 +416,7 @@ def indexer(
     sigma_init: float = typer.Option(None, "--sigma-init"), n_runs: int = typer.Option(1, "--n-runs", "-n"),
     population_size: int = typer.Option(1000, "--population-size", "--popsize"),
     gens: int = typer.Option(100, "--gens"), seed: int = typer.Option(0, "--seed"),
-    tolerance_deg: float = 0.1, refine_lattice: bool = typer.Option(False, "--refine-lattice"),
+    refine_lattice: bool = typer.Option(False, "--refine-lattice"),
     lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
     refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
     refine_goniometer_axes: str = typer.Option(None, "--refine-goniometer-axes"),
@@ -427,12 +426,7 @@ def indexer(
     refine_beam: bool = typer.Option(False, "--refine-beam"),
     beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg"),
     bootstrap_filename: str | None = typer.Option(None, "--bootstrap"),
-    loss_method: str = typer.Option("cosine", "--loss-method"), d_min: float = typer.Option(None, "--d-min"),
-    d_max: float = typer.Option(None, "--d-max"), hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
-    search_window_size: int = typer.Option(512, "--search-window-size"), batch_size: int = typer.Option(None, "--batch-size"),
-    window_batch_size: int = typer.Option(32, "--window-batch-size"), chunk_size: int = typer.Option(256, "--chunk-size"),
-    num_iters: int = typer.Option(20, "--num-iters"), top_k: int = typer.Option(32, "--top-k"),
-    B_sharpen: float = typer.Option(None, "--b-sharpen"),
+    batch_size: int = typer.Option(None, "--batch-size"),
 ) -> None:
     sg_to_use = "P 1"
     if space_group:
@@ -477,24 +471,19 @@ def indexer(
     input_data["sample/space_group"] = sg_to_use
     input_data["instrument/wavelength"] = [float(_val(wavelength_min)), float(_val(wavelength_max))]
 
-    d_max_val = _val(d_max)
     gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
 
     index(
         input_data=input_data, output_peaks_filename=output_peaks_filename,
         strategy_name=_val(strategy_name), population_size=_val(population_size),
         gens=_val(gens), sigma_init=_val(sigma_init), n_runs=_val(n_runs), seed=_val(seed),
-        tolerance_deg=tolerance_deg, refine_lattice=_val(refine_lattice),
-        lattice_bound_frac=_val(lattice_bound_frac), bootstrap_filename=_val(bootstrap_filename),
-        refine_goniometer=_val(refine_goniometer), refine_goniometer_axes=gonio_axes_list,
-        goniometer_bound_deg=_val(goniometer_bound_deg), refine_sample=_val(refine_sample),
-        sample_bound_meters=_val(sample_bound_meters), refine_beam=_val(refine_beam),
-        beam_bound_deg=_val(beam_bound_deg), nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name, loss_method=_val(loss_method),
-        hkl_search_range=_val(hkl_search_range), d_min=_val(d_min), d_max=d_max_val,
-        search_window_size=_val(search_window_size), batch_size=_val(batch_size),
-        window_batch_size=_val(window_batch_size), chunk_size=_val(chunk_size),
-        num_iters=_val(num_iters), top_k=_val(top_k), B_sharpen=_val(B_sharpen),
+        refine_lattice=_val(refine_lattice), lattice_bound_frac=_val(lattice_bound_frac), 
+        bootstrap_filename=_val(bootstrap_filename), refine_goniometer=_val(refine_goniometer), 
+        refine_goniometer_axes=gonio_axes_list, goniometer_bound_deg=_val(goniometer_bound_deg), 
+        refine_sample=_val(refine_sample), sample_bound_meters=_val(sample_bound_meters), 
+        refine_beam=_val(refine_beam), beam_bound_deg=_val(beam_bound_deg), 
+        nexus_filename=original_nexus_filename, instrument_name=instrument_name, 
+        batch_size=_val(batch_size),
         wavelength_min=input_data["instrument/wavelength"][0], wavelength_max=input_data["instrument/wavelength"][1],
     )
 
