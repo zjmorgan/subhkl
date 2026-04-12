@@ -1494,6 +1494,11 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     if sample_offset is None:
         sample_offset = np.zeros(3)
 
+    total_images = len(peaks_obj.image.ims)
+    def get_R_for_img(img_key_str):
+        if all_R is None: return None
+        return all_R[int(img_key_str)]
+
     integrator = SparseLaueIntegrator(
         alpha=alpha,  min_sigma=min(sigmas), max_sigma=max(sigmas), gamma=gamma,
         loss='poisson', border_width=border_width, nominal_sigma=nominal_sigma,
@@ -1555,11 +1560,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         det = peaks_obj.get_detector_by_img(img_key)
         run_id = peaks_obj.image.get_run_id(img_key)
 
-        if all_R is not None and all_R.ndim == 3:
-            current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
-        else:
-            current_R_val = all_R
-
+        current_R_val = get_R_for_img(img_key)
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
         batch_rs = np.array([i_arr[d['rep_idx']] for d in keep_data])
@@ -1605,12 +1606,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     for idx, img_key in enumerate(meta_keys):
         det = peaks_obj.get_detector_by_img(img_key)
         run_id = frames[idx] 
-        
-        if all_R is not None and all_R.ndim == 3:
-            current_R = all_R[run_id] if run_id < len(all_R) else all_R[0]
-        else:
-            current_R = all_R
-        s_lab = current_R @ sample_offset if current_R is not None else sample_offset
+        current_R = get_R_for_img(img_key)
+        s_lab = current_R @ sample_offset if current_R is not None else sample_offset 
         
         pixel_xyz = det.pixel_to_lab(all_rs[idx], all_cs[idx])
         k_f = pixel_xyz - s_lab
@@ -1733,11 +1730,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         H, W = image_raw.shape
         bw = border_width
 
-        if all_R is not None and all_R.ndim == 3:
-            current_R_val = all_R[run_id] if run_id < len(all_R) else all_R[0]
-        else:
-            current_R_val = all_R
-
+        current_R_val = get_R_for_img(img_key)
         s_lab = current_R_val @ sample_offset if current_R_val is not None else sample_offset
 
         img_rs = [all_rs[idx] for idx in indices]
