@@ -3,12 +3,37 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
 def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
-    """
-    Plots an unrolled cylindrical detector from a DetectorPeaks object and image dict,
-    handling the 180-degree wrapping seam, dynamically cutting out large x-axis gaps,
-    strictly removing all margins, and preserving the physical 1:1 aspect ratio.
-    """
     fig, ax = plt.subplots(figsize=(16, 6))
+
+    # --- NEW: Extract Sample Offset and Rotation Stack ---
+    sample_offset = getattr(peaks, 'sample_offset', np.zeros(3))
+    
+    # We must robustly handle R being a single matrix, a run-stack, or a peak-stack
+    R_stack = getattr(peaks, 'R', None)
+    if R_stack is not None:
+        R_stack = np.array(R_stack)
+        if R_stack.ndim == 2:
+            R_stack = R_stack[np.newaxis, ...] # Force to 3D for consistent indexing
+
+    # Helper to fetch the correct R matrix for a specific image index
+    def get_s_lab_for_image(img_index_val):
+        if R_stack is None:
+            return sample_offset
+            
+        n_rotations = R_stack.shape[0]
+        if n_rotations == 1:
+            return R_stack[0] @ sample_offset
+            
+        # If R_stack is per-image (ToF), map directly
+        if n_rotations > 10: # Safe heuristic for ToF vs Run
+            idx = int(img_index_val)
+            if idx < n_rotations:
+                return R_stack[idx] @ sample_offset
+                
+        # If it's per-run, we would need the run_id, but the plotter doesn't easily have it here.
+        # Fallback to the first matrix if we can't perfectly map it.
+        return R_stack[0] @ sample_offset
+
 
     # ==========================================
     # PRE-PASS: Find Wrap Bounds, Gaps & Radius
@@ -21,8 +46,12 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         det = detectors.get(img_key)
         if det is None: continue
         
+        # --- FIX: Apply s_lab to background image projection ---
+        s_lab = get_s_lab_for_image(img_key)
+        
         c, r = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
-        xyz = det.pixel_to_lab(r, c)
+        # Pass s_lab here!
+        xyz = det.pixel_to_lab(r, c, sample_offset=s_lab) 
         
         X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
         roty = np.rad2deg(np.arctan2(X, Z))
@@ -32,8 +61,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             wrapped_panels.add(img_key)
             
         panel_bounds.append([np.min(roty), np.max(roty)])
-        
-        # Calculate the physical radius to this panel to fix the aspect ratio later
         radii.append(np.mean(np.sqrt(X**2 + Z**2)))
 
     # Calculate average radius of the instrument cylinder (in meters)
@@ -66,23 +93,16 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             gaps.append((g_start, g_end))
 
     def compress_roty(r_orig):
-        """Maps physical rotation angles to a compressed plotting axis."""
         if not gaps: return r_orig
         r_out = np.copy(r_orig)
-        
         for g_start, g_end in gaps:
             actual_gap = g_end - g_start
             shift = actual_gap - visual_gap_size
-            
-            # Shift everything to the right of the gap
             r_out[r_orig >= g_end] -= shift
-            
-            # Linearly compress anything inside the gap
             inside = (r_orig > g_start) & (r_orig < g_end)
             if np.any(inside):
                 fraction = (r_orig[inside] - g_start) / actual_gap
                 r_out[inside] -= fraction * shift
-                
         return r_out
 
     # ==========================================
@@ -91,7 +111,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     global_vmax = 1
     if images:
         global_vmax = max(np.max(img) for img in images.values())
-    
     global_norm = colors.LogNorm(vmin=1, vmax=global_vmax + 1)
     mesh_handle = None
 
@@ -100,21 +119,21 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         det = detectors.get(img_key)
         if det is None: continue
 
+        # --- FIX: Apply s_lab to background image projection ---
+        s_lab = get_s_lab_for_image(img_key)
+
         cols, rows = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
-        lab_xyz = det.pixel_to_lab(rows, cols)
+        # Pass s_lab here!
+        lab_xyz = det.pixel_to_lab(rows, cols, sample_offset=s_lab)
         X, Y, Z = lab_xyz[..., 0], lab_xyz[..., 1], lab_xyz[..., 2]
 
         roty = np.rad2deg(np.arctan2(X, Z))
         if img_key in wrapped_panels:
             roty = np.where(roty < 0, roty + 360, roty)
 
-        # Apply spatial compression
         roty = compress_roty(roty)
 
-        mesh = ax.pcolormesh(
-            roty, Y, img,
-            shading='auto', cmap='binary', norm=global_norm
-        )
+        mesh = ax.pcolormesh(roty, Y, img, shading='auto', cmap='binary', norm=global_norm)
         if mesh_handle is None: mesh_handle = mesh
 
     # 2. Plot Finder Peaks
@@ -125,10 +144,14 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             det = detectors.get(img_key)
             if det is None: continue
 
+            # --- FIX: Apply s_lab to finder peaks ---
+            s_lab = get_s_lab_for_image(img_key)
+
             coords = np.atleast_2d(coords)
             f_rows, f_cols = coords[:, 1], coords[:, 2]
 
-            f_xyz = det.pixel_to_lab(f_rows, f_cols)
+            # Pass s_lab here!
+            f_xyz = det.pixel_to_lab(f_rows, f_cols, sample_offset=s_lab)
             if f_xyz.ndim == 1: f_xyz = f_xyz[np.newaxis, :]
 
             f_X, f_Y, f_Z = f_xyz[:, 0], f_xyz[:, 1], f_xyz[:, 2]
@@ -140,16 +163,14 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             f_roty = compress_roty(f_roty)
 
             label = 'Finder Candidates' if not added_finder_label else ""
-            ax.scatter(f_roty, f_Y, marker='o', facecolors='none', edgecolors='blue',
-                       s=40, linewidths=0.25, label=label)
+            ax.scatter(f_roty, f_Y, marker='o', facecolors='none', edgecolors='blue', s=40, linewidths=0.25, label=label)
             added_finder_label = True
 
-    is_isotropic = True
+    # 3. Plot the Projected 3D Ellipsoids
     if getattr(peaks, 'var_u', None) is not None and getattr(peaks, 'peak_rows', None) is not None:
         is_isotropic = np.allclose(peaks.var_u, peaks.var_v) and np.allclose(peaks.cov_uv, 0)
-
-    # 3. Plot the Projected 3D Ellipsoids
-    if not is_isotropic:
+        base_label = 'Isotropic Radius' if is_isotropic else 'Projected 3D Tensor'
+        
         added_ellipse_label = False
         theta = np.linspace(0, 2 * np.pi, 50)
         cos_t, sin_t = np.cos(theta), np.sin(theta)
@@ -158,6 +179,9 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             img_key = peaks.image_index[i]
             det = detectors.get(img_key)
             if det is None: continue
+            
+            # --- FIX: Apply s_lab to ellipse projection ---
+            s_lab = get_s_lab_for_image(img_key)
 
             r_center, c_center = peaks.peak_rows[i], peaks.peak_cols[i]
             var_u, var_v, cov_uv = peaks.var_u[i], peaks.var_v[i], peaks.cov_uv[i]
@@ -175,7 +199,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             u_ell = c_center + a * cos_t * np.cos(phi) - b * sin_t * np.sin(phi)
             v_ell = r_center + a * cos_t * np.sin(phi) + b * sin_t * np.cos(phi)
 
-            ell_xyz = det.pixel_to_lab(v_ell, u_ell)
+            # Pass s_lab here!
+            ell_xyz = det.pixel_to_lab(v_ell, u_ell, sample_offset=s_lab)
             e_X, e_Y, e_Z = ell_xyz[..., 0], ell_xyz[..., 1], ell_xyz[..., 2]
             e_roty = np.rad2deg(np.arctan2(e_X, e_Z))
 
@@ -184,25 +209,28 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
             e_roty = compress_roty(e_roty)
 
-            label = 'Projected Shape Tensor'
+            label = base_label if not added_ellipse_label else ""
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
-    # 4. Plot the Integrated Peaks
+    # 4. Plot the Integrated Peaks (FIXED: Re-calculate XYZ from Pixels)
     if getattr(peaks, 'peak_rows', None) is not None and getattr(peaks, 'peak_cols', None) is not None:
         p_rotys = []
         p_Ys = []
         
-        for i in range(len(peaks.image_index)):
+        for i in range(len(peaks.intensity)):
             img_key = peaks.image_index[i]
             det = detectors.get(img_key)
             if det is None: continue
             
+            # --- FIX: Apply s_lab to integrated peak projection ---
+            s_lab = get_s_lab_for_image(img_key)
+            
             r_center = peaks.peak_rows[i]
             c_center = peaks.peak_cols[i]
             
-            # Recalculate exact Lab frame position directly from detector geometry
-            p_xyz = det.pixel_to_lab(r_center, c_center)
+            # Pass s_lab here!
+            p_xyz = det.pixel_to_lab(r_center, c_center, sample_offset=s_lab)
             
             p_X, p_Y, p_Z = p_xyz[0], p_xyz[1], p_xyz[2]
             p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
@@ -215,8 +243,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             
         if p_rotys:
             p_rotys = compress_roty(np.array(p_rotys))
-            ax.scatter(p_rotys, p_Ys, marker='o', facecolors='none', edgecolors='red',
-                       s=40, linewidths=0.25, label='Integrated Peaks')
+            ax.scatter(p_rotys, p_Ys, marker='o', facecolors='none', edgecolors='red', s=40, linewidths=0.25, label='Integrated Peaks')
 
     # ==========================================
     # FORMATTING & GAPS VISUALIZATION
