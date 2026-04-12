@@ -685,7 +685,6 @@ def peak_predictor(
             if "optimization/goniometer_offsets" in f_idx
             else None
         )
-        idx_R = f_idx["goniometer/R"][()] if "goniometer/R" in f_idx else None
 
         if "sample/offset" in f_idx:
             sample_offset = f_idx["sample/offset"][()]
@@ -713,32 +712,18 @@ def peak_predictor(
     # We always start with the nominal geometry of the TARGET file (filename)
     all_R = peaks.goniometer.rotation
 
-    # Then we apply refined parameters from the INDEXER file
     if offsets is not None:
         print(f"Applying refined goniometer offsets from indexer: {offsets}")
-        # Re-calculate refined R stack for the TARGET images
-        if (
-            peaks.goniometer.angles_raw is not None
-            and peaks.goniometer.axes_raw is not None
-        ):
+        if peaks.goniometer.angles_raw is not None and peaks.goniometer.axes_raw is not None:
             angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
-            all_R = np.stack(
-                [
-                    calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
-                    for ang in angles_refined
-                ]
-            )
+            all_R = np.stack([
+                calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
+                for ang in angles_refined
+            ])
         else:
-            print(
-                "WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack."
-            )
-    elif idx_R is not None:
-        # --- FIX: Removed the strict length equality check ---
-        # If the indexer successfully produced a refined stack of geometry,
-        # we must use it. The robust orchestrator _resolve logic will map it perfectly.
-        print("Using precise R stack geometry natively recovered from the indexer.")
-        all_R = idx_R
-
+            print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
+    else:
+        print("Using nominal R stack directly from raw images (no offsets applied).")
 
     UB = U @ B
 
