@@ -205,6 +205,8 @@ def prepare_predict_tasks(
     sorted_keys = sorted(image_data.ims.keys())
     use_stack = RUB.ndim == 3 and RUB.shape[0] > 1
 
+    num_runs = max([image_data.get_run_id(k) for k in sorted_keys]) + 1 if sorted_keys else 1
+
     print(f"Predicting peaks for {len(ims)} banks...")
 
     for _i, bank in enumerate(sorted_keys):
@@ -212,19 +214,19 @@ def prepare_predict_tasks(
         run_id = image_data.get_run_id(bank)
 
         if use_stack:
-            # Use image index if stack matches image count, otherwise use run index
-            idx = bank if RUB.shape[0] == len(ims) else run_id
+            # If stack length > num_runs, it's a per-image stack. Index via the physical image key.
+            idx = int(bank) if RUB.shape[0] > num_runs else run_id
             if idx >= RUB.shape[0]:
                 idx = -1
             rub_val = RUB[idx]
         else:
             rub_val = RUB if RUB.ndim == 2 else RUB[0]
 
-        # Resolve current R for this bank (used for sample offset rotation)
+        # Resolve current R for this bank
         current_R_val = None
         if R_all is not None:
             if R_all.ndim == 3:
-                idx_r = bank if R_all.shape[0] == len(ims) else run_id
+                idx_r = int(bank) if R_all.shape[0] > num_runs else run_id
                 if idx_r < R_all.shape[0]:
                     current_R_val = R_all[idx_r]
                 else:
@@ -245,8 +247,7 @@ def prepare_predict_tasks(
                 current_R_val,
             )
         )
-    return tasks
-
+    return tasks 
 
 def prepare_integrate_tasks(
     image: ImageData,
