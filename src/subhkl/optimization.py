@@ -50,6 +50,7 @@ def require_jax():
             'Install with: pip install -e ".[jax]" or pip install jax jaxlib evosax'
         )
 
+
 def _inverse_map_param(value, bound):
     if bound < 1e-12:
         return 0.5
@@ -335,10 +336,15 @@ class VectorizedObjective:
         self.mask_range_k = k_max
         self.mask_range_l = l_max
 
+    def orientation_U_jax(self, param):
+        """Vectorized U matrix calculation from Rodrigues vectors"""
+        U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
+        return U
+
     def _get_physical_params_jax(self, x):
         idx = 0
         rot_params = x[:, idx : idx + 3]
-        U = jax.vmap(rotation_matrix_from_rodrigues_jax)(rot_params)
+        U = self.orientation_U_jax(rot_params)
         idx += 3
 
         if self.refine_lattice:
@@ -786,7 +792,6 @@ class FindUB:
         beam_bound_deg: float = 1.0,
         d_min: float | None = None,
         d_max: float | None = None,
-        hkl_search_range: int = 20,
         batch_size: int | None = None,
         sigma_init: float | None = None,
         B_sharpen: float = 50,
@@ -797,7 +802,7 @@ class FindUB:
         if goniometer_axes is None and self.goniometer_axes is not None:
             goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
-            goniometer_angles = self.goniometer_angles.T
+            goniometer_angles = self.goniometer_angles
         if goniometer_names is None and self.goniometer_names is not None:
             goniometer_names = self.goniometer_names
 
@@ -1008,121 +1013,3 @@ class FindUB:
         score, accum_probs, hkl, lamb = objective.get_results(x_batch)
         num_peaks_soft = float(np.sum(accum_probs[0]))
         return int(num_peaks_soft), np.array(hkl[0]), np.array(lamb[0]), np.array(U)
-
-class ImageBasedFindUB:
-    def __init__(self, data_dict):
-        self.images_landscape = data_dict['images_landscape']
-        self.hkl_pool = data_dict['hkl_pool']
-        self.B_mat = data_dict['B_mat']
-        self.R_stack = data_dict['R_stack']
-        self.wl_min = data_dict['wl_min']
-        self.wl_max = data_dict['wl_max']
-        self.det_centers = data_dict['det_centers']
-        self.uhats = data_dict['uhats']
-        self.vhats = data_dict['vhats']
-        self.widths = data_dict['widths']
-        self.heights = data_dict['heights']
-        self.ms = data_dict['ms']
-        self.ns = data_dict['ns']
-        self.ki_vec = data_dict['ki_vec']
-        self.sample_offset = data_dict['sample_offset']
-        self.border_frac = data_dict['border_frac']
-
-    def minimize_evosax(self, strategy_name, population_size=1000, num_generations=100, seed=0, batch_size=1, n_runs=1, injected_rotations=None):
-        from subhkl.search.prior import ImageBasedObjective
-        objective = ImageBasedObjective(
-            self.images_landscape, self.hkl_pool, self.B_mat, self.R_stack, self.wl_min, self.wl_max,
-            self.det_centers, self.uhats, self.vhats, self.widths, self.heights, self.ms, self.ns,
-            self.ki_vec, self.sample_offset, border_frac=self.border_frac
-        )
-
-        sample_solution = jnp.zeros(3)
-        from subhkl.utils.shim import DifferentialEvolution, NamedSharding, Mesh, P
-        strategy = DifferentialEvolution(solution=sample_solution, population_size=population_size)
-        es_params = strategy.default_params
-
-        n_inject = population_size // 4
-        use_injection = False
-
-        if injected_rotations is not None and len(injected_rotations) > 0:
-            base_rot = injected_rotations[0]
-            key = jax.random.PRNGKey(seed)
-            noise = jax.random.normal(key, (n_inject, 3)) * 0.02 
-            static_injected_rots = base_rot + noise
-            static_injected_rots = static_injected_rots.at[0].set(base_rot)
-            use_injection = True
-        else:
-            static_injected_rots = jnp.zeros((n_inject, 3))
-
-        def init_single_run(rng, _):
-            rng, rng_pop, rng_init = jax.random.split(rng, 3)
-            population_init = jax.random.normal(rng_pop, (population_size, 3)) * 0.05
-            loss_init = objective(population_init)
-            return strategy.init(rng_init, population_init, loss_init, es_params)
-
-        try: mesh = NamedSharding(Mesh(np.array(jax.devices()), ('i')), P('i'))
-        except: mesh = None
-
-        def step_single_run(rng, state, gen):
-            rng, rng_ask, rng_tell = jax.random.split(rng, 3)
-            x, state_ask = strategy.ask(rng_ask, state, es_params)
-
-            def inject_fn(x_cands): return jax.lax.dynamic_update_slice(x_cands, static_injected_rots, (0, 0))
-            if use_injection: x = jax.lax.cond(gen == 0, inject_fn, lambda x_c: x_c, x)
-
-            loss = objective(x)
-            if mesh is not None:
-                try: x = jax.lax.with_sharding_constraint(x, mesh)
-                except: pass
-
-            state_tell, metrics = strategy.tell(rng_tell, x, loss, state_ask, es_params)
-            return rng, state_tell, metrics
-
-        init_batch_jit = jax.jit(jax.vmap(init_single_run, in_axes=(0, None)))
-        step_batch_jit = jax.jit(jax.vmap(step_single_run, in_axes=(0, 0, None)))
-
-        exec_batch_size = batch_size if batch_size is not None else n_runs
-        batch_keys_list, batch_states_list = [], []
-        seeds = jnp.arange(seed, seed + n_runs)
-
-        for b_i in range(int(np.ceil(n_runs / exec_batch_size))):
-            start_idx = b_i * exec_batch_size
-            end_idx = min((b_i + 1) * exec_batch_size, n_runs)
-            chunk_keys = jax.vmap(jax.random.PRNGKey)(seeds[start_idx:end_idx])
-            batch_states_list.append(init_batch_jit(chunk_keys, None))
-            batch_keys_list.append(chunk_keys)
-
-        pbar = trange(num_generations, desc="Sparse Laue Optimization") if trange is not None else range(num_generations)
-        for gen in pbar:
-            current_gen_best = float('inf')
-            for b_i in range(len(batch_keys_list)):
-                batch_keys_list[b_i], batch_states_list[b_i], _ = step_batch_jit(batch_keys_list[b_i], batch_states_list[b_i], gen)
-                current_gen_best = min(current_gen_best, float(jnp.min(batch_states_list[b_i].best_fitness)))
-
-            if trange is not None:
-                pbar.set_description(f"Gen {gen+1} | Score (Peaks Hit): {-current_gen_best:.1f}")
-
-        all_loss = jnp.concatenate([b.best_fitness for b in batch_states_list], axis=0)
-        all_solutions = jnp.concatenate([b.best_solution for b in batch_states_list], axis=0)
-
-        best_overall_member = all_solutions[np.argmin(all_loss)]
-        return rotation_matrix_from_rodrigues_jax(best_overall_member), best_overall_member
-
-    def get_reflections(self, U, real_images):
-        from subhkl.search.prior import jax_predict_reflections
-        @jax.jit
-        def process_all_frames():
-            def map_fn(frame_data):
-                R, center, uhat, vhat, w, h, m, n, real_img = frame_data
-                row, col, lam, valid = jax_predict_reflections(
-                    U, self.B_mat, self.hkl_pool, R, self.ki_vec, self.sample_offset,
-                    center, uhat, vhat, w, h, m, n, self.wl_min, self.wl_max
-                )
-                coords = jnp.stack([row, col], axis=0)
-                c_star = jax.scipy.ndimage.map_coordinates(real_img, coords, order=1, mode='constant', cval=0.0)
-                return jnp.where(valid, c_star, 0.0), row, col, lam, valid
-
-            return jax.lax.map(map_fn, (self.R_stack, self.det_centers, self.uhats, self.vhats,
-                                        self.widths, self.heights, self.ms, self.ns, jnp.array(real_images)))
-
-        return process_all_frames()
