@@ -739,6 +739,17 @@ def peak_predictor(
         print("Using precise R stack geometry natively recovered from the indexer.")
         all_R = idx_R
 
+
+    UB = U @ B
+
+    # Handle R being a stack or single matrix
+    if all_R.ndim == 3:
+        # Broadcast matmul: (N, 3, 3) @ (3, 3) -> (N, 3, 3)
+        RUB = np.matmul(all_R, UB)
+    else:
+        # Standard matmul: (3, 3) @ (3, 3) -> (3, 3)
+        RUB = all_R @ UB
+
     # 4. Call Parallelized Prediction
     # This uses the optimized worker (scalar params) + ProcessPoolExecutor
     results_map = peaks.predict_peaks(
