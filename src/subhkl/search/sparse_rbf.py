@@ -1699,10 +1699,13 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     # We require at least 15 valid peaks to mathematically constrain a 6-parameter 3D tensor
     MIN_PEAKS_FOR_GLOBAL_FIT = 15
     
-    if len(opt_patches) < MIN_PEAKS_FOR_GLOBAL_FIT:
+    if not anisotropic or len(opt_patches) < MIN_PEAKS_FOR_GLOBAL_FIT:
         if show_progress:
-            tqdm.write(f"  > Too few valid peaks ({len(opt_patches)}) for 3D tensor fit. Falling back to nominal isotropic shapes.")
-        
+            if not anisotropic:
+                tqdm.write("  > Anisotropic profile fitting disabled. Using nominal isotropic circles.")
+            else:
+                tqdm.write(f"  > Too few valid peaks ({len(opt_patches)}) for 3D tensor fit. Falling back to nominal isotropic circles.") 
+
         all_var_u = np.full(len(all_rs), integrator.nominal_sigma**2, dtype=np.float32)
         all_var_v = np.full(len(all_rs), integrator.nominal_sigma**2, dtype=np.float32)
         all_cov_uv = np.zeros(len(all_rs), dtype=np.float32)

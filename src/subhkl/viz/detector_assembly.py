@@ -146,6 +146,11 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
     # 3. Plot the Projected 3D Ellipsoids
     if getattr(peaks, 'var_u', None) is not None and getattr(peaks, 'peak_rows', None) is not None:
+
+        # Check if we bypassed profile fitting
+        is_isotropic = np.allclose(peaks.var_u, peaks.var_v) and np.allclose(peaks.cov_uv, 0)
+        base_label = 'Isotropic Radius' if is_isotropic else 'Projected 3D Tensor'
+        
         added_ellipse_label = False
         theta = np.linspace(0, 2 * np.pi, 50)
         cos_t, sin_t = np.cos(theta), np.sin(theta)
@@ -177,10 +182,10 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
 
             if img_key in wrapped_panels or np.ptp(e_roty) > 180:
                 e_roty = np.where(e_roty < 0, e_roty + 360, e_roty)
-                
+
             e_roty = compress_roty(e_roty)
 
-            label = 'Projected 3D Tensor' if not added_ellipse_label else ""
+            label = base_label if not added_ellipse_label else ""
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
