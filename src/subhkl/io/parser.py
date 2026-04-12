@@ -748,21 +748,11 @@ def peak_predictor(
                 "WARNING: Cannot apply refined offsets (nominal angles/axes missing in target). Using nominal R stack."
             )
     elif idx_R is not None:
-        # Fallback: if the indexer has a stack that happens to match the image count,
-        # we use it, but warn that this is less robust than offsets.
-        if idx_R.ndim == 3 and idx_R.shape[0] == len(peaks.image.ims):
-            print("Using R stack directly from indexer (matches image count).")
-            all_R = idx_R
-
-    UB = U @ B
-
-    # Handle R being a stack or single matrix
-    if all_R.ndim == 3:
-        # Broadcast matmul: (N, 3, 3) @ (3, 3) -> (N, 3, 3)
-        RUB = np.matmul(all_R, UB)
-    else:
-        # Standard matmul: (3, 3) @ (3, 3) -> (3, 3)
-        RUB = all_R @ UB
+        # --- FIX: Removed the strict length equality check ---
+        # If the indexer successfully produced a refined stack of geometry,
+        # we must use it. The robust orchestrator _resolve logic will map it perfectly.
+        print("Using precise R stack geometry natively recovered from the indexer.")
+        all_R = idx_R
 
     # 4. Call Parallelized Prediction
     # This uses the optimized worker (scalar params) + ProcessPoolExecutor
