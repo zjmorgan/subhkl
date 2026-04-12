@@ -411,88 +411,32 @@ def finder_merger(
 def indexer(
     peaks_h5_filename: str,
     output_peaks_filename: str,
-    a: float,
-    b: float,
-    c: float,
-    alpha: float,
-    beta: float,
-    gamma: float,
+    a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float,
     space_group: str,
     wavelength_min: float | None = None,
     wavelength_max: float | None = None,
     goniometer_csv_filename: str | None = None,
     original_nexus_filename: str | None = None,
     instrument_name: str | None = None,
-    strategy_name: str = typer.Option(
-        "DE",
-        "--strategy",
-        help="Optimization strategy to use (e.g., 'DE' or 'PSO').",
-    ),
-    sigma_init: float = typer.Option(
-        None, "--sigma-init", help="Parameter exploration range."
-    ),
-    n_runs: int = typer.Option(
-        1,
-        "--n-runs",
-        "-n",
-        help="Number of optimization runs with different seeds.",
-    ),
-    population_size: int = typer.Option(
-        1000,
-        "--population-size",
-        "--popsize",
-        help="Population size for each generation.",
-    ),
+    strategy_name: str = typer.Option("DE", "--strategy", help="Optimization strategy to use (e.g., 'DE' or 'PSO')."),
+    sigma_init: float = typer.Option(None, "--sigma-init", help="Parameter exploration range."),
+    n_runs: int = typer.Option(1, "--n-runs", "-n", help="Number of optimization runs with different seeds."),
+    population_size: int = typer.Option(1000, "--population-size", "--popsize", help="Population size for each generation."),
     gens: int = typer.Option(100, "--gens", help="Number of generations to run."),
-    seed: int = typer.Option(
-        0, "--seed", help="Base seed for the first optimization run."
-    ),
+    seed: int = typer.Option(0, "--seed", help="Base seed for the first optimization run."),
     tolerance_deg: float = 0.1,
-    refine_lattice: bool = typer.Option(
-        False,
-        "--refine-lattice",
-        help="Refine unit cell parameters during optimization.",
-    ),
-    lattice_bound_frac: float = typer.Option(
-        0.05,
-        "--lattice-bound-frac",
-        help="Fractional bound for lattice parameter refinement.",
-    ),
-    refine_goniometer: bool = typer.Option(
-        False,
-        "--refine-goniometer",
-        help="Refine goniometer angles during optimization.",
-    ),
-    refine_goniometer_axes: str = typer.Option(
-        None,
-        "--refine-goniometer-axes",
-        help="Comma-separated list of goniometer axis names to refine.",
-    ),
-    goniometer_bound_deg: float = typer.Option(
-        5.0,
-        "--goniometer-bound-deg",
-        help="Bound for goniometer angle refinement in degrees.",
-    ),
-    refine_sample: bool = typer.Option(
-        False, "--refine-sample", help="Refine sample position offset."
-    ),
-    sample_bound_meters: float = typer.Option(
-        0.005,
-        "--sample-bound-meters",
-        help="Bound for sample offset in meters.",
-    ),
-    refine_beam: bool = typer.Option(
-        False, "--refine-beam", help="Refine beam direction. Default (0,0,1)."
-    ),
-    beam_bound_deg: float = typer.Option(
-        1.0, "--beam-bound-deg", help="Bound for beam direction in degrees."
-    ),
-    bootstrap_filename: str | None = typer.Option(
-        None, "--bootstrap", help="Previous HDF5 solution to refine"
-    ),
-    loss_method: str = typer.Option(
-        "cosine", "--loss-method", help="Loss to use for optimization."
-    ),
+    refine_lattice: bool = typer.Option(False, "--refine-lattice", help="Refine unit cell parameters during optimization."),
+    lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac", help="Fractional bound for lattice parameter refinement."),
+    refine_goniometer: bool = typer.Option(False, "--refine-goniometer", help="Refine goniometer angles during optimization."),
+    refine_goniometer_axes: str = typer.Option(None, "--refine-goniometer-axes", help="Comma-separated list of goniometer axis names to refine."),
+    goniometer_bound_deg: float = typer.Option(5.0, "--goniometer-bound-deg", help="Bound for goniometer angle refinement in degrees."),
+    refine_sample: bool = typer.Option(False, "--refine-sample", help="Refine sample position offset."),
+    sample_bound_meters: float = typer.Option(0.005, "--sample-bound-meters", help="Bound for sample offset in meters."),
+    refine_beam: bool = typer.Option(False, "--refine-beam", help="Refine beam direction. Default (0,0,1)."),
+    beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg", help="Bound for beam direction in degrees."),
+    bootstrap_filename: str | None = typer.Option(None, "--bootstrap", help="Previous HDF5 solution to refine"),
+    loss_method: str = typer.Option("cosine", "--loss-method", help="Loss to use for optimization."),
     d_min: float = typer.Option(None, "--d-min"),
     d_max: float = typer.Option(None, "--d-max"),
     hkl_search_range: int = typer.Option(20, "--hkl-search-range"),
@@ -502,17 +446,12 @@ def indexer(
     chunk_size: int = typer.Option(256, "--chunk-size"),
     num_iters: int = typer.Option(20, "--num-iters"),
     top_k: int = typer.Option(32, "--top-k"),
-    B_sharpen: float = typer.Option(
-        None,
-        "--b-sharpen",
-        help="Wilson B-factor for peak sharpening (~50 for protein crystals)",
-    ),
+    B_sharpen: float = typer.Option(None, "--b-sharpen", help="Wilson B-factor for peak sharpening (~50 for protein crystals)"),
 ) -> None:
-    # Logic to resolve SG
+    # 1. Resolve Space Group
     sg_to_use = "P 1"
     if space_group:
         from subhkl.core.spacegroup import get_space_group_object
-
         try:
             get_space_group_object(space_group)
             sg_to_use = space_group
@@ -523,146 +462,32 @@ def indexer(
     print(f"Loading peaks from: {peaks_h5_filename}")
     input_data = {}
 
-    # Handle OptionInfo objects if called directly as a function
     def _val(x):
         return x.default if hasattr(x, "default") else x
 
+    # 2. Extract Base Data
     with h5py.File(peaks_h5_filename, "r") as f:
-        # Load auto-detected wavelength if not provided
         w_min_val = _val(wavelength_min)
         w_max_val = _val(wavelength_max)
         if w_min_val is None or w_max_val is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
-                if w_min_val is None:
-                    wavelength_min = float(wl[0])
-                if w_max_val is None:
-                    wavelength_max = float(wl[1])
-                print(
-                    f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A"
-                )
+                if w_min_val is None: wavelength_min = float(wl[0])
+                if w_max_val is None: wavelength_max = float(wl[1])
+                print(f"Auto-detected wavelength: {float(_val(wavelength_min)):.2f} - {float(_val(wavelength_max)):.2f} A")
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
 
-        # Read standard datasets
         keys_to_load = [
-            "peaks/two_theta",
-            "peaks/azimuthal",
-            "peaks/intensity",
-            "peaks/sigma",
-            "peaks/radius",
-            "peaks/xyz",
-            "goniometer/R",
-            "goniometer/axes",
-            "goniometer/angles",
-            "goniometer/names",
-            "files",
-            "file_offsets",
-            "peaks/run_index",
-            "peaks/image_index",
-            "bank",
-            "bank_ids",
-            "sample/offset",
-            "beam/ki_vec",
+            "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma",
+            "peaks/radius", "peaks/xyz", "goniometer/R", "goniometer/axes",
+            "goniometer/angles", "goniometer/names", "files", "file_offsets",
+            "peaks/run_index", "peaks/image_index", "bank", "bank_ids",
+            "sample/offset", "beam/ki_vec"
         ]
-
         for k in keys_to_load:
             if k in f:
                 input_data[k] = f[k][()]
-
-    # --- FIX: Refine run_index to prevent Geometry Compression ---
-    # We must ensure that every unique rotation matrix or angle set has its own
-    # run_index during optimization, otherwise the indexer picks only the first one per run.
-    R_stack = input_data.get("goniometer/R")
-    angles_stack = input_data.get("goniometer/angles")
-    old_run_indices = input_data.get("peaks/run_index")
-    num_peaks = len(old_run_indices) if old_run_indices is not None else 0
-
-    if old_run_indices is not None:
-        combined_keys = [old_run_indices[:, None].astype(float)]
-
-        # Add R to uniqueness check (broadcast if per-run)
-        if R_stack is not None and R_stack.ndim == 3:
-            if R_stack.shape[0] == num_peaks:
-                R_flat = R_stack.reshape(num_peaks, -1)
-            else:
-                # Broadcast per-run R to per-peak for uniqueness check
-                R_flat = R_stack[old_run_indices].reshape(num_peaks, -1)
-            combined_keys.append(R_flat)
-
-        # Add angles to uniqueness check (broadcast if per-run)
-        if angles_stack is not None and angles_stack.ndim == 2:
-            # Determine if angles are per-peak or per-run, and which axis is which
-            # Standard is (num_axes, num_entries). But user reported (num_entries, num_axes).
-            if angles_stack.shape[1] == num_peaks:
-                combined_keys.append(angles_stack.T)
-            elif angles_stack.shape[0] == num_peaks:
-                combined_keys.append(angles_stack)
-            else:
-                # Per-run. We must broadcast to per-peak for the uniqueness check.
-                # Try to guess which axis is the number of axes
-                num_axes = len(input_data.get("goniometer/axes", []))
-                if num_axes == 0:
-                    num_axes = 3  # Fallback
-
-                if angles_stack.shape[0] == num_axes:
-                    # Shape is (num_axes, num_runs)
-                    combined_keys.append(angles_stack[:, old_run_indices].T)
-                else:
-                    # Shape is (num_runs, num_axes)
-                    combined_keys.append(angles_stack[old_run_indices])
-
-        if len(combined_keys) > 1:
-            print("Refining run_index based on unique geometries...")
-            combined = np.hstack(combined_keys)
-
-            # Use rounding to handle floating point jitter in uniqueness check.
-            # We scale and cast to integer to ensure robust comparison in np.unique.
-            # Scaling by 1e6 handles 1e-7 tolerance (sub-pixel/sub-arcsec).
-            combined_int = np.round(combined * 1e6).astype(np.int64)
-            _, unique_mapping = np.unique(combined_int, axis=0, return_inverse=True)
-            input_data["peaks/run_index"] = unique_mapping
-
-            # Update R and angles to match the new unique mapping
-            num_unique_runs = np.max(unique_mapping) + 1
-            unique_indices = np.zeros(num_unique_runs, dtype=int)
-            for i in range(num_unique_runs):
-                unique_indices[i] = np.where(unique_mapping == i)[0][0]
-
-            if R_stack is not None and R_stack.ndim == 3:
-                if R_stack.shape[0] == num_peaks:
-                    input_data["goniometer/R"] = R_stack[unique_indices]
-                else:
-                    # Expand per-run R to the new unique runs
-                    input_data["goniometer/R"] = R_stack[
-                        old_run_indices[unique_indices]
-                    ]
-
-            if angles_stack is not None and angles_stack.ndim == 2:
-                # Use same robust logic for final expansion
-                if angles_stack.shape[1] == num_peaks:
-                    input_data["goniometer/angles"] = angles_stack[:, unique_indices]
-                elif angles_stack.shape[0] == num_peaks:
-                    input_data["goniometer/angles"] = angles_stack[unique_indices].T
-                else:
-                    # Per-run
-                    num_axes = len(input_data.get("goniometer/axes", []))
-                    if num_axes == 0:
-                        num_axes = 3
-
-                    if angles_stack.shape[0] == num_axes:
-                        # (num_axes, num_runs)
-                        expanded = angles_stack[:, old_run_indices]
-                        input_data["goniometer/angles"] = expanded[:, unique_indices]
-                    else:
-                        # (num_runs, num_axes)
-                        expanded = angles_stack[old_run_indices]
-                        input_data["goniometer/angles"] = expanded[unique_indices].T
-
-            print(
-                f"  > Expanded runs from {np.max(old_run_indices) + 1} to "
-                f"{np.max(unique_mapping) + 1} unique geometries."
-            )
 
     input_data["sample/a"] = a
     input_data["sample/b"] = b
@@ -671,32 +496,21 @@ def indexer(
     input_data["sample/beta"] = beta
     input_data["sample/gamma"] = gamma
     input_data["sample/space_group"] = sg_to_use
+    input_data["instrument/wavelength"] = [float(_val(wavelength_min)), float(_val(wavelength_max))]
 
-    # Handle OptionInfo objects if called directly as a function
-    def _val(x):
-        return x.default if hasattr(x, "default") else x
-
-    input_data["instrument/wavelength"] = [
-        float(_val(wavelength_min)),
-        float(_val(wavelength_max)),
-    ]
-
-    # --- NEW: Check d_max for sanity ---
+    # 3. Sanity Checks
     cell_max = max(a, b, c)
     d_max_val = _val(d_max)
     if d_max_val is not None and d_max_val < cell_max:
-        print(
-            f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f})."
-        )
-        print(
-            "         This will exclude low-order reflections which are critical for orientation."
-        )
+        print(f"WARNING: --d-max ({d_max_val}) is smaller than largest unit cell dimension ({cell_max:.2f}).")
+        print("         This will exclude low-order reflections which are critical for orientation.")
 
     gonio_axes_list = None
     refine_goniometer_axes_val = _val(refine_goniometer_axes)
     if refine_goniometer_axes_val:
         gonio_axes_list = [x.strip() for x in refine_goniometer_axes_val.split(",")]
 
+    # 4. Execute Optimization (FindUB natively maps image_index -> R_stack)
     index(
         input_data=input_data,
         output_peaks_filename=output_peaks_filename,
@@ -733,7 +547,6 @@ def indexer(
         wavelength_min=input_data["instrument/wavelength"][0],
         wavelength_max=input_data["instrument/wavelength"][1],
     )
-
 
 @app.command()
 def indexer_using_file(
