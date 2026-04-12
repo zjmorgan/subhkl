@@ -1756,7 +1756,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
 
     # static per-run data
     if create_visualizations:
-        for img_key, image_raw in peaks_obj.image.ims:
+        for img_key, image_raw in peaks_obj.image.ims.items():
             run_id = peaks_obj.get_run_id(img_key)
             det = peaks_obj.get_detector_by_img(img_key)
             runs_plot_data[run_id]['images'][img_key] = image_raw
