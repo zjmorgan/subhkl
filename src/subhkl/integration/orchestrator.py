@@ -199,13 +199,41 @@ def prepare_predict_tasks(
     bank_mapping = image_data.bank_mapping
     tasks = []
 
-    # Package scalar params to send to workers
     unit_cell_params = (a, b, c, alpha, beta, gamma, space_group, d_min)
 
     sorted_keys = sorted(image_data.ims.keys())
-    use_stack = RUB.ndim == 3 and RUB.shape[0] > 1
+    if not sorted_keys:
+        return []
 
-    num_runs = max([image_data.get_run_id(k) for k in sorted_keys]) + 1 if sorted_keys else 1
+    # Calculate exact physical bounds
+    num_runs = max([image_data.get_run_id(k) for k in sorted_keys]) + 1
+    max_img_key = max(sorted_keys)
+
+    def _resolve(stack, img_key, r_id, name):
+        if stack is None: 
+            return None
+            
+        # Distinguish between single matrices/vectors and batched stacks
+        is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
+        if not is_batch:
+            return stack
+        
+        n_items = stack.shape[0]
+        if n_items == 1:
+            return stack[0]
+            
+        # ToF Stack Validation: Must be large enough to be indexed by the highest image key
+        if n_items > num_runs and n_items > max_img_key:
+            return stack[img_key]
+            
+        # Run Stack Validation: Must match the exact number of physical runs
+        if n_items == num_runs:
+            return stack[r_id]
+            
+        raise ValueError(
+            f"Geometry dimension mismatch for {name}: Stack length is {n_items}. "
+            f"Expected exactly {num_runs} (for per-run) or >= {max_img_key + 1} (for per-image ToF)."
+        )
 
     print(f"Predicting peaks for {len(ims)} banks...")
 
@@ -213,33 +241,15 @@ def prepare_predict_tasks(
         det_config = beamlines[instrument][str(bank_mapping.get(bank, bank))]
         run_id = image_data.get_run_id(bank)
 
-        if use_stack:
-            # If stack length > num_runs, it's a per-image stack. Index via the physical image key.
-            idx = int(bank) if RUB.shape[0] > num_runs else run_id
-            if idx >= RUB.shape[0]:
-                idx = -1
-            rub_val = RUB[idx]
-        else:
-            rub_val = RUB if RUB.ndim == 2 else RUB[0]
-
-        # Resolve current R for this bank
-        current_R_val = None
-        if R_all is not None:
-            if R_all.ndim == 3:
-                idx_r = int(bank) if R_all.shape[0] > num_runs else run_id
-                if idx_r < R_all.shape[0]:
-                    current_R_val = R_all[idx_r]
-                else:
-                    current_R_val = R_all[0]
-            else:
-                current_R_val = R_all
+        current_rub = _resolve(RUB, bank, run_id, "RUB")
+        current_R_val = _resolve(R_all, bank, run_id, "R_all")
 
         tasks.append(
             (
                 bank,
                 det_config,
                 unit_cell_params,
-                rub_val,
+                current_rub,
                 wavelength_min,
                 wavelength_max,
                 sample_offset,
@@ -247,7 +257,7 @@ def prepare_predict_tasks(
                 current_R_val,
             )
         )
-    return tasks 
+    return tasks
 
 def prepare_integrate_tasks(
     image: ImageData,
@@ -266,128 +276,55 @@ def prepare_integrate_tasks(
     file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
-    found_peaks_xyz = None
-    found_peaks_bank = None
-    found_peaks_run = None
-    if found_peaks_file is not None:
-        try:
-            import h5py
 
-            print(f"Loading found peaks from: {found_peaks_file}")
-            with h5py.File(found_peaks_file, "r") as f:
-                if "files" in f and "file_offsets" in f and "peaks/xyz" in f:
-                    files_db = f["files"][()]
-                    offsets = f["file_offsets"][()]
-                    target_name = os.path.basename(filename)
-                    match_idxs = []
-                    # 1. Direct match
-                    for i, fname_bytes in enumerate(files_db):
-                        fname_str = (
-                            fname_bytes.decode("utf-8")
-                            if isinstance(fname_bytes, bytes)
-                            else str(fname_bytes)
-                        )
-                        if target_name in fname_str:
-                            match_idxs.append(i)
+    # ... [Keep all your existing found_peaks loading logic exactly as is] ...
 
-                    # 2. Match via source files (if is a merged master)
-                    if not match_idxs and image.raw_files:
-                        for src_file in image.raw_files:
-                            src_name = os.path.basename(src_file)
-                            for i, fname_bytes in enumerate(files_db):
-                                fname_str = (
-                                    fname_bytes.decode("utf-8")
-                                    if isinstance(fname_bytes, bytes)
-                                    else str(fname_bytes)
-                                )
-                                if src_name == os.path.basename(fname_str):
-                                    if i not in match_idxs:
-                                        match_idxs.append(i)
-
-                    if match_idxs:
-                        # Load and concatenate from all matched indices
-                        xyz_list = []
-                        bank_list = []
-                        run_list = []
-                        for idx in match_idxs:
-                            start = int(offsets[idx])
-                            end = (
-                                int(offsets[idx + 1])
-                                if idx < len(files_db) - 1
-                                else f["peaks/xyz"].shape[0]
-                            )
-                            xyz_list.append(f["peaks/xyz"][start:end])
-                            if "bank" in f:
-                                bank_list.append(f["bank"][start:end])
-                            elif "peaks/bank" in f:
-                                bank_list.append(f["peaks/bank"][start:end])
-
-                            if "peaks/run_index" in f:
-                                run_list.append(f["peaks/run_index"][start:end])
-
-                        found_peaks_xyz = (
-                            np.concatenate(xyz_list, axis=0) if xyz_list else None
-                        )
-                        found_peaks_bank = (
-                            np.concatenate(bank_list, axis=0) if bank_list else None
-                        )
-                        found_peaks_run = (
-                            np.concatenate(run_list, axis=0) if run_list else None
-                        )
-                elif "peaks/xyz" in f:
-                    found_peaks_xyz = f["peaks/xyz"][()]
-                    if "bank" in f:
-                        found_peaks_bank = f["bank"][()]
-                    elif "peaks/bank" in f:
-                        found_peaks_bank = f["peaks/bank"][()]
-                    if "peaks/run_index" in f:
-                        found_peaks_run = f["peaks/run_index"][()]
-        except Exception as e:
-            print(f"Failed to load found peaks: {e}")
-
+    # [Code resumes below the found_peaks loading block]
     tasks = []
     os.path.basename(filename)
 
-    num_runs = max([image.get_run_id(k) for k in sorted_keys]) + 1 if sorted_keys else 1
+    sorted_keys = sorted(peak_dict.keys())
+    if not sorted_keys:
+        return []
+
+    # Calculate exact physical bounds
+    num_runs = max([image.get_run_id(k) for k in sorted_keys]) + 1
+    max_img_key = max(sorted_keys)
+
+    def _resolve(stack, img_key, r_id, name):
+        if stack is None:
+            return None
+
+        is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
+        if not is_batch:
+            return stack
+
+        n_items = stack.shape[0]
+        if n_items == 1:
+            return stack[0]
+
+        if n_items > num_runs and n_items > max_img_key:
+            return stack[img_key]
+
+        if n_items == num_runs:
+            return stack[r_id]
+
+        raise ValueError(
+            f"Geometry dimension mismatch for {name}: Stack length is {n_items}. "
+            f"Expected exactly {num_runs} (for per-run) or >= {max_img_key + 1} (for per-image ToF)."
+        )
 
     for bank, peaks in peak_dict.items():
         physical_bank = image.bank_mapping.get(bank, bank)
         det_config = beamlines[instrument][str(physical_bank)]
         run_id = image.get_run_id(bank)
 
-        # UPDATED: Generate nice labels for visualization
         img_label = image.get_label(bank)
         viz_label = f"{img_label}_bank{physical_bank}"
 
-        # Handle RUB
-        if RUB.ndim == 3 and RUB.shape[0] > 1:
-            idx = int(bank) if RUB.shape[0] > num_runs else run_id
-            if idx >= RUB.shape[0]:
-                idx = -1
-            current_rub = RUB[idx]
-        else:
-            current_rub = RUB if RUB.ndim == 2 else RUB[0]
-
-        # Resolve R and angles
-        current_R_val = None
-        if R_stack is not None:
-            if R_stack.ndim == 3:
-                idx_r = int(bank) if R_stack.shape[0] > num_runs else run_id
-                if idx_r < R_stack.shape[0]:
-                    current_R_val = R_stack[idx_r]
-                else:
-                    current_R_val = R_stack[0]
-            else:
-                current_R_val = R_stack
-
-        current_angles_val = None
-        if angles_stack is not None:
-            # angles_stack is (N, 3), so ndim is 2
-            idx_a = int(bank) if angles_stack.shape[0] > num_runs else run_id
-            if idx_a < angles_stack.shape[0]:
-                current_angles_val = angles_stack[idx_a]
-            else:
-                current_angles_val = angles_stack[0]
+        current_rub = _resolve(RUB, bank, run_id, "RUB")
+        current_R_val = _resolve(R_stack, bank, run_id, "R_stack")
+        current_angles_val = _resolve(angles_stack, bank, run_id, "angles_stack")
 
         metrics_info = (
             found_peaks_xyz,
@@ -400,7 +337,6 @@ def prepare_integrate_tasks(
             sample_offset,
             ki_vec,
         )
-        # Pass viz_label instead of fname_clean
         viz_info = (create_visualizations, file_prefix, viz_label)
 
         tasks.append(
@@ -417,6 +353,5 @@ def prepare_integrate_tasks(
             )
         )
     return tasks
-
 
 # NOTE(vivek): handle multiprocessing orchestration
