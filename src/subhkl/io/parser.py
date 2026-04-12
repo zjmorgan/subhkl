@@ -1349,6 +1349,8 @@ def zone_axis_search(
     from subhkl.optimization import FindUB, VectorizedObjective
     from subhkl.search.prior import HoughPrior
     from subhkl.core.crystallography import generate_reflections
+    from subhkl.core.spacegroup import get_centering
+
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
@@ -1505,6 +1507,7 @@ def zone_axis_search(
     t = np.linspace(0, np.pi, 1024)
     cdf = (t - np.sin(t)) / np.pi
 
+    centering = get_centering(space_group)
     ray_objective = VectorizedObjective(
         B=B_mat,
         kf_ki_dir=q_lab_all,
