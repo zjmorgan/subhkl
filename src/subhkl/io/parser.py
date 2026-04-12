@@ -1347,7 +1347,6 @@ def zone_axis_search(
     from subhkl.optimization import FindUB, VectorizedObjective
     from subhkl.search.prior import HoughPrior
     from subhkl.core.crystallography import generate_reflections
-    from subhkl.core.spacegroup import get_centering
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
@@ -1488,12 +1487,11 @@ def zone_axis_search(
     n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
     print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
 
-    centering = get_centering(space_group)
     quats, _ = prior_engine.solve_permutations(
-        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat, 
-        centering=centering, 
+        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat,
+        space_group=space_group,
         angle_tol_deg=davenport_angle_tol,
-        scoring_tol_deg=vector_tolerance, 
+        scoring_tol_deg=vector_tolerance,
         d_min=d_min
     )
 
