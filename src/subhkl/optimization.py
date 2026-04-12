@@ -4,16 +4,10 @@ from functools import partial
 
 import h5py
 import numpy as np
-import scipy.interpolate
 import scipy.linalg
-import scipy.spatial
 
 from subhkl.instrument.detector import scattering_vector_from_angles
-from subhkl.core.spacegroup import (
-    generate_hkl_mask,
-    get_centering,
-    get_space_group_object,
-)
+from subhkl.core.spacegroup import get_space_group_object
 
 from subhkl.utils.shim import (
     CMA_ES,
@@ -188,7 +182,6 @@ class VectorizedObjective:
         kf_ki_dir,
         peak_xyz_lab,
         wavelength,
-        weights=None,
         tolerance_deg=0.1,
         cell_params=None,
         refine_lattice=False,
@@ -206,11 +199,6 @@ class VectorizedObjective:
         refine_beam=False,
         beam_bound_deg=1.0,
         beam_nominal=None,
-        peak_radii=None,
-        d_min=None,
-        d_max=100.0,
-        space_group="P 1",
-        centering="P",
         static_R=None,
         kf_lab_fixed_vectors=None,
         peak_run_indices=None,
@@ -222,7 +210,6 @@ class VectorizedObjective:
 
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
-        self.centering = centering
         self.tolerance_rad = jnp.deg2rad(tolerance_deg)
 
         self.static_R = jnp.array(static_R) if static_R is not None else jnp.eye(3)
@@ -272,7 +259,6 @@ class VectorizedObjective:
             self.kf_lab_fixed = q_vecs + self.beam_nominal[:, None]
             self.kf_lab_fixed = self.kf_lab_fixed / jnp.linalg.norm(self.kf_lab_fixed, axis=0)
 
-        self.space_group = space_group
         self.refine_lattice = refine_lattice
         self.lattice_system = lattice_system
         self.lattice_bound_frac = lattice_bound_frac
@@ -314,27 +300,6 @@ class VectorizedObjective:
         self.wl_min_val = wavelength[0]
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
-
-        self.weights = jnp.array(weights).flatten() if weights is not None else jnp.ones(num_peaks)
-        self.peak_radii = jnp.array(peak_radii).flatten() if peak_radii is not None else jnp.zeros(num_peaks)
-
-        self.d_min = d_min if d_min is not None else 0.0
-        self.d_max = d_max if d_max is not None else 1000.0
-
-        # --- HKL Mask Generation ---
-        a_real, b_real, c_real = jnp.sqrt(jnp.diag(jnp.linalg.inv(self.B @ self.B.T)))
-        q_obs_max = jnp.max(jnp.linalg.norm(self.kf_ki_dir_init, axis=0))
-        d_limit = self.d_min if self.d_min > 0 else (1.0 / (q_obs_max + 1e-9))
-
-        h_max = min(max(20, int(jnp.ceil(a_real / d_limit))), 64)
-        k_max = min(max(20, int(jnp.ceil(b_real / d_limit))), 64)
-        l_max = min(max(20, int(jnp.ceil(c_real / d_limit))), 64)
-
-        mask_cpu = generate_hkl_mask(h_max, k_max, l_max, self.space_group)
-        self.valid_hkl_mask = jnp.array(mask_cpu)
-        self.mask_range_h = h_max
-        self.mask_range_k = k_max
-        self.mask_range_l = l_max
 
     def orientation_U_jax(self, param):
         """Vectorized U matrix calculation from Rodrigues vectors"""
@@ -449,26 +414,6 @@ class VectorizedObjective:
 
         return UB, B, sample_total, ki_vec, offsets_total, R
 
-    def is_allowed_jax(self, h, k, l):
-        rh, rk, rl = self.mask_range_h, self.mask_range_k, self.mask_range_l
-        idx_h = jnp.clip(h + rh, 0, 2 * rh).astype(jnp.int32)
-        idx_k = jnp.clip(k + rk, 0, 2 * rk).astype(jnp.int32)
-        idx_l = jnp.clip(l + rl, 0, 2 * rl).astype(jnp.int32)
-
-        in_bounds = (h >= -rh) & (h <= rh) & (k >= -rk) & (k <= rk) & (l >= -rl) & (l <= rl)
-
-        h_even, k_even, l_even = h % 2 == 0, k % 2 == 0, l % 2 == 0
-
-        if self.centering == "F": allowed_out = (h_even == k_even) & (k_even == l_even)
-        elif self.centering == "I": allowed_out = (h + k + l) % 2 == 0
-        elif self.centering == "A": allowed_out = (k + l) % 2 == 0
-        elif self.centering == "B": allowed_out = (h + l) % 2 == 0
-        elif self.centering == "C": allowed_out = (h + k) % 2 == 0
-        elif self.centering == "R": allowed_out = (-h + k + l) % 3 == 0
-        else: allowed_out = True
-
-        return jnp.where(in_bounds, self.valid_hkl_mask[idx_h, idx_k, idx_l], allowed_out)
-
     def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None, tolerance_rad=0.002):
         ub_inv = jnp.linalg.inv(ub_mat)
         v = jnp.matmul(ub_inv, kf_ki_sample)
@@ -479,14 +424,13 @@ class VectorizedObjective:
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
 
         initial_carry = (
-            jnp.zeros(max_v_val.shape),
-            jnp.zeros(max_v_val.shape),
+            jnp.inf * jnp.ones(max_v_val.shape),
             jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32),
             jnp.zeros(max_v_val.shape),
         )
 
         def scan_body(carry, i):
-            curr_sum, curr_max, curr_best_hkl, curr_best_lamb = carry
+            curr_min, curr_best_hkl, curr_best_lamb = carry
             n = start_int + i
             n_safe = jnp.where(n == 0, 1e-9, n)
             lamda_cand = max_v_val / n_safe
@@ -496,42 +440,21 @@ class VectorizedObjective:
             q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+            lambda_opt = k_sq / safe_dot
             
-            # Map dimensionless sin to absolute Q-space and calculate dist_sq
-            delta_Q = jnp.matmul(ub_mat, jnp.sin(jnp.pi * hkl_float))
-            dist_sq = jnp.sum(delta_Q**2, axis=1)
+            delta_hkl = jnp.sin(jnp.pi * hkl_float) / jnp.pi
+            dist = jnp.linalg.norm(delta_hkl, axis=1)
 
-            # Absolute Q-space tolerance (Delta_Theta / Lambda)
-            effective_sigma = (tolerance_rad + self.peak_radii[None, :]) / lambda_opt
-            
-            log_p_narrow = -dist_sq / (2 * effective_sigma**2 + 1e-9)
-            sigma_wide = jnp.deg2rad(5.0) / lambda_opt
-            log_p_wide = -dist_sq / (2 * sigma_wide**2 + 1e-9)
-
-            log_prob = jax.nn.logsumexp(jnp.stack([log_p_narrow, log_p_wide - 4.605]), axis=0)
-            prob = jnp.exp(log_prob)
-
-            q_sq_pred = jnp.sum(q_int**2, axis=1)
-            d_pred = 1.0 / jnp.sqrt(q_sq_pred + 1e-9)
-            valid_res = (d_pred >= self.d_min) & (d_pred <= self.d_max)
-
-            h, k, l = hkl_int[:, 0, :], hkl_int[:, 1, :], hkl_int[:, 2, :]
-            is_allowed = self.is_allowed_jax(h, k, l)
-            final_mask = is_allowed & valid_res
-            prob = jnp.where(final_mask, prob, 0.0)
-
-            new_sum = curr_sum + prob
-            update_mask = prob > curr_max
-            new_max = jnp.where(update_mask, prob, curr_max)
+            update_mask = dist < curr_min
+            new_min = jnp.where(update_mask, dist, curr_min)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
-            return (new_sum, new_max, new_best_hkl, new_best_lamb), None
+            return (new_min, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
-        accum_probs, prob_max, best_hkl, best_lamb = final_carry
-        score = -jnp.sum(self.weights * prob_max, axis=1)
-        return score, prob_max, best_hkl.transpose((0, 2, 1)), best_lamb
+        dist_min, best_hkl, best_lamb = final_carry
+        loss = jnp.mean(dist_min, axis=1)
+        return loss, dist_min, best_hkl.transpose((0, 2, 1)), best_lamb
 
     @partial(jax.jit, static_argnames="self")
     def get_results(self, x):
@@ -594,7 +517,6 @@ class VectorizedObjective:
         else:
             kf_ki_vec = q_lab
 
-        # Exclusively use soft dynamic JAX indexer
         res = self.indexer_dynamic_soft_jax(
             UB,
             kf_ki_vec,
@@ -790,11 +712,8 @@ class FindUB:
         sample_bound_meters: float = 2.0,
         refine_beam: bool = False,
         beam_bound_deg: float = 1.0,
-        d_min: float | None = None,
-        d_max: float | None = None,
         batch_size: int | None = None,
         sigma_init: float | None = None,
-        B_sharpen: float = 50,
         **kwargs
     ):
         require_jax()
@@ -852,15 +771,6 @@ class FindUB:
             else:
                 goniometer_refine_mask = np.ones(len(goniometer_axes), dtype=bool)
 
-        snr = self.intensity / (self.sigma_intensity + 1e-6)
-        if B_sharpen is not None:
-            theta_rad = np.deg2rad(self.two_theta) / 2.0
-            weights = snr * np.exp(B_sharpen * (np.sin(theta_rad) ** 2))
-            weights = weights / np.mean(weights)
-        else:
-            weights = snr
-        weights = np.clip(weights, 0, 10.0)
-
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
         lattice_system, num_lattice_params = get_lattice_system(self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group)
 
@@ -869,10 +779,7 @@ class FindUB:
             kf_ki_dir_lab,
             self.peak_xyz,
             np.array(self.wavelength),
-            weights=weights,
             tolerance_deg=tolerance_deg,
-            space_group=self.space_group,
-            centering=get_centering(self.space_group),
             cell_params=cell_params_init,
             peak_radii=self.radii,
             refine_lattice=refine_lattice,
@@ -889,9 +796,6 @@ class FindUB:
             refine_beam=refine_beam,
             beam_bound_deg=beam_bound_deg,
             beam_nominal=self.ki_vec,
-            goniometer_bound_deg=goniometer_bound_deg,
-            d_min=d_min,
-            d_max=d_max if d_max is not None else 100.0,
             static_R=static_R_input,
             kf_lab_fixed_vectors=kf_ki_dir_lab,
             peak_run_indices=self.run_indices,
@@ -970,13 +874,13 @@ class FindUB:
             for b_i in range(len(batch_keys_list)):
                 batch_keys_list[b_i], batch_states_list[b_i], _ = step_batch_jit(batch_keys_list[b_i], batch_states_list[b_i])
                 current_gen_best = min(current_gen_best, jnp.min(batch_states_list[b_i].best_fitness))
-            if trange: pbar.set_description(f"Gen {gen + 1} | Best: {-current_gen_best:.1f}/{num_obs}")
+            if trange: pbar.set_description(f"Gen {gen + 1} | Best Loss: {current_gen_best:.5f}")
 
-        all_fitness = jnp.concatenate([b.best_fitness for b in batch_states_list], axis=0)
+        all_loss = jnp.concatenate([b.best_fitness for b in batch_states_list], axis=0)
         all_solutions = jnp.concatenate([b.best_solution for b in batch_states_list], axis=0)
 
-        best_idx = np.argmin(all_fitness)
-        best_overall_fitness, best_overall_member = all_fitness[best_idx], all_solutions[best_idx]
+        best_idx = np.argmin(all_loss)
+        best_overall_loss, best_overall_member = all_loss[best_idx], all_solutions[best_idx]
 
         print("Polishing solution with BFGS refinement...")
         from scipy.optimize import minimize as scipy_minimize
@@ -989,8 +893,8 @@ class FindUB:
             options={"maxiter": 50},
         )
 
-        if res_ref.success and res_ref.fun < best_overall_fitness:
-            best_overall_member, best_overall_fitness = res_ref.x, res_ref.fun
+        if res_ref.success and res_ref.fun < best_overall_loss:
+            best_overall_member, best_overall_loss = res_ref.x, res_ref.fun
 
         self.x = np.array(best_overall_member)
         x_batch = jnp.array(self.x[None, :])
@@ -1010,6 +914,16 @@ class FindUB:
             self.a, self.b, self.c = p_full[:3]
             self.alpha, self.beta, self.gamma = p_full[3:]
 
-        score, accum_probs, hkl, lamb = objective.get_results(x_batch)
-        num_peaks_soft = float(np.sum(accum_probs[0]))
-        return int(num_peaks_soft), np.array(hkl[0]), np.array(lamb[0]), np.array(U)
+        loss_score, dist_min, hkl, lamb = objective.get_results(x_batch)
+        dist_min_final = np.array(dist_min[0])
+        
+        # Calculate number of correctly indexed peaks based on sub-pixel HKL distance
+        mask = dist_min_final < 0.15
+        num_indexed = int(np.sum(mask))
+        
+        hkl_final = np.array(hkl[0])
+        hkl_final[~mask] = 0
+
+        print(f"Final Solution indexed {num_indexed}/{num_obs} peaks.")
+
+        return num_indexed, hkl_final, np.array(lamb[0]), np.array(U)
