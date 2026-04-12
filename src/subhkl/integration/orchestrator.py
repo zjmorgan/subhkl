@@ -348,6 +348,8 @@ def prepare_integrate_tasks(
     tasks = []
     os.path.basename(filename)
 
+    num_runs = max([image.get_run_id(k) for k in sorted_keys]) + 1 if sorted_keys else 1
+
     for bank, peaks in peak_dict.items():
         physical_bank = image.bank_mapping.get(bank, bank)
         det_config = beamlines[instrument][str(physical_bank)]
@@ -357,28 +359,31 @@ def prepare_integrate_tasks(
         img_label = image.get_label(bank)
         viz_label = f"{img_label}_bank{physical_bank}"
 
-        # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
+        # Handle RUB
         if RUB.ndim == 3 and RUB.shape[0] > 1:
-            # Use image index if stack matches image count, otherwise use run index
-            idx = bank if RUB.shape[0] == len(image.ims) else run_id
+            idx = int(bank) if RUB.shape[0] > num_runs else run_id
             if idx >= RUB.shape[0]:
                 idx = -1
             current_rub = RUB[idx]
         else:
             current_rub = RUB if RUB.ndim == 2 else RUB[0]
 
-        # Resolve R and angles for this image
+        # Resolve R and angles
         current_R_val = None
         if R_stack is not None:
-            idx_r = bank if R_stack.shape[0] == len(image.ims) else run_id
-            if idx_r < R_stack.shape[0]:
-                current_R_val = R_stack[idx_r]
+            if R_stack.ndim == 3:
+                idx_r = int(bank) if R_stack.shape[0] > num_runs else run_id
+                if idx_r < R_stack.shape[0]:
+                    current_R_val = R_stack[idx_r]
+                else:
+                    current_R_val = R_stack[0]
             else:
-                current_R_val = R_stack[0]
+                current_R_val = R_stack
 
         current_angles_val = None
         if angles_stack is not None:
-            idx_a = bank if angles_stack.shape[0] == len(image.ims) else run_id
+            # angles_stack is (N, 3), so ndim is 2
+            idx_a = int(bank) if angles_stack.shape[0] > num_runs else run_id
             if idx_a < angles_stack.shape[0]:
                 current_angles_val = angles_stack[idx_a]
             else:
