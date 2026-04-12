@@ -147,7 +147,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # 3. Plot the Projected 3D Ellipsoids
     if getattr(peaks, 'var_u', None) is not None and getattr(peaks, 'peak_rows', None) is not None:
 
-        # Check if we bypassed profile fitting
         is_isotropic = np.allclose(peaks.var_u, peaks.var_v) and np.allclose(peaks.cov_uv, 0)
         base_label = 'Isotropic Radius' if is_isotropic else 'Projected 3D Tensor'
         
@@ -190,21 +189,33 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             added_ellipse_label = True
 
     # 4. Plot the Integrated Peaks
-    if peaks is not None and getattr(peaks, 'xyz', None) is not None and len(peaks.xyz) > 0:
-        p_xyz = np.array(peaks.xyz)
-        if p_xyz.ndim == 1: p_xyz = p_xyz[np.newaxis, :]
-
-        p_X, p_Y, p_Z = p_xyz[:, 0], p_xyz[:, 1], p_xyz[:, 2]
-        p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
-
-        if getattr(peaks, 'image_index', None) is not None:
-            for i, img_key in enumerate(peaks.image_index):
-                if img_key in wrapped_panels and p_roty[i] < 0:
-                    p_roty[i] += 360
-                    
-        p_roty = compress_roty(p_roty)
-
-        ax.scatter(p_roty, p_Y, marker='o', facecolors='none', edgecolors='red',
+    if getattr(peaks, 'peak_rows', None) is not None and getattr(peaks, 'peak_cols', None) is not None:
+        p_rotys = []
+        p_Ys = []
+        
+        for i in range(len(peaks.intensity)):
+            img_key = peaks.image_index[i]
+            det = detectors.get(img_key)
+            if det is None: continue
+            
+            r_center = peaks.peak_rows[i]
+            c_center = peaks.peak_cols[i]
+            
+            # Recalculate exact Lab frame position directly from detector geometry
+            p_xyz = det.pixel_to_lab(r_center, c_center)
+            
+            p_X, p_Y, p_Z = p_xyz[0], p_xyz[1], p_xyz[2]
+            p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
+            
+            if img_key in wrapped_panels and p_roty < 0:
+                p_roty += 360
+                
+            p_rotys.append(p_roty)
+            p_Ys.append(p_Y)
+            
+        if p_rotys:
+            p_rotys = compress_roty(np.array(p_rotys))
+            ax.scatter(p_rotys, p_Ys, marker='o', facecolors='none', edgecolors='red',
                        s=40, linewidths=0.25, label='Integrated Peaks')
 
     # ==========================================
@@ -279,7 +290,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # FORCE PHYSICAL ASPECT RATIO 
     # -------------------------------------------------------------
     aspect_ratio = 180.0 / (np.pi * mean_radius)
-    ax.set_aspect(aspect_ratio, adjustable='box')
+    ax.set_aspect(aspect_ratio, adjustable='datalim')
 
     ax.set_xlabel('Rotation Angle (roty) [degrees]')
     ax.set_ylabel('Lab Vertical (Y) [m]')
