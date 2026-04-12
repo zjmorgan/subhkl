@@ -193,7 +193,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         p_rotys = []
         p_Ys = []
         
-        for i in range(len(peaks.intensity)):
+        for i in range(len(peaks.image_index)):
             img_key = peaks.image_index[i]
             det = detectors.get(img_key)
             if det is None: continue
