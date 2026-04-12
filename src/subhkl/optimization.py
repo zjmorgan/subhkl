@@ -859,15 +859,14 @@ class VectorizedObjective:
             delta_Q = jnp.matmul(ub_mat, jnp.sin(jnp.pi * hkl_float))
             dist_sq = jnp.sum(delta_Q**2, axis=1)
 
-            effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
-                k_norm / lambda_opt
-            )
+            effective_sigma = (tolerance_rad + self.peak_radii[None, :]) / lambda_opt
+
             # Robust Multi-Scale Kernel
             # 1. Narrow (High precision)
             log_p_narrow = -dist_sq / (2 * effective_sigma**2 + 1e-9)
 
             # 2. Wide (Capture range: 5 degrees)
-            sigma_wide = jnp.deg2rad(5.0) * (k_norm / lambda_opt)
+            sigma_wide = jnp.deg2rad(5.0) / lambda_opt
             log_p_wide = -dist_sq / (2 * sigma_wide**2 + 1e-9)
 
             # Combine via LogSumExp with 1% weight on wide kernel
