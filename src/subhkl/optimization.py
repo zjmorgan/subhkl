@@ -853,8 +853,10 @@ class VectorizedObjective:
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
-            q_obs = kf_ki_sample / lambda_opt[:, None, :]
-            dist_sq = jnp.sum((q_obs - q_int) ** 2, axis=1)
+
+            # smooth distance
+            dist_sq = jnp.sum((kf_ki_sample / lambda_opt[:, None, :] *
+                           jnp.matmul(ub_mat, jnp.sin(jnp.pi * hkl_float)))**2, axis=1)
 
             effective_sigma = (tolerance_rad + self.peak_radii[None, :]) * (
                 k_norm / lambda_opt
