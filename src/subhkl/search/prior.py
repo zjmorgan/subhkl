@@ -429,7 +429,7 @@ class HoughPrior:
         r_std = np.std(rand_losses)
         r_max = np.max(rand_losses)
 
-        print(f"  -> Random Background (N=4096) | Mean: {r_mean:.2f} | Max: {r_max:.2f} | Std: {r_std:.2f}")
+        print(f"  -> Random Background (N=4096) | Mean: {r_mean:.3f} | Max: {r_max:.3f} | Std: {r_std:.3f}")
 
         print(f"  -> Forward-Modeling all {len(prior_quats)} Prior seeds for statistical observation...")
         prior_rots = jax.vmap(quaternion_to_rodrigues)(prior_quats)
@@ -467,7 +467,7 @@ class HoughPrior:
                 dav_top_n = set(ranks[:N])
                 phys_top_n = set(physics_sort_idx[:N])
                 overlap = len(dav_top_n.intersection(phys_top_n))
-                print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
+                print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.3f}%)")
 
         best_loss = physics_losses_np[physics_sort_idx[0]]
         z_score = (r_mean - best_loss) / (r_std + 1e-9)
