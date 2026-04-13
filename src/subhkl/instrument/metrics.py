@@ -313,4 +313,4 @@ def compute_metrics(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {"error_message": f"Exception during metrics computation: {e!s}"
+        return {"error_message": f"Exception during metrics computation: {e!s}"}
