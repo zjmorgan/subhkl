@@ -5,17 +5,14 @@ import matplotlib.colors as colors
 def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name='unrolled_detector_peaks.png', instrument=None):
     fig, ax = plt.subplots(figsize=(16, 6))
 
-    # --- NEW: Extract Sample Offset and Rotation Stack ---
     sample_offset = getattr(peaks, 'sample_offset', np.zeros(3))
     
-    # We must robustly handle R being a single matrix, a run-stack, or a peak-stack
     R_stack = getattr(peaks, 'R', None)
     if R_stack is not None:
         R_stack = np.array(R_stack)
         if R_stack.ndim == 2:
-            R_stack = R_stack[np.newaxis, ...] # Force to 3D for consistent indexing
+            R_stack = R_stack[np.newaxis, ...] 
 
-    # Helper to fetch the correct R matrix for a specific image index
     def get_s_lab_for_image(img_index_val):
         if R_stack is None:
             return sample_offset
@@ -24,16 +21,11 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         if n_rotations == 1:
             return R_stack[0] @ sample_offset
             
-        # If R_stack is per-image (ToF), map directly
-        if n_rotations > 10: # Safe heuristic for ToF vs Run
-            idx = int(img_index_val)
-            if idx < n_rotations:
-                return R_stack[idx] @ sample_offset
+        idx = int(img_index_val)
+        if idx < n_rotations:
+            return R_stack[idx] @ sample_offset
                 
-        # If it's per-run, we would need the run_id, but the plotter doesn't easily have it here.
-        # Fallback to the first matrix if we can't perfectly map it.
         return R_stack[0] @ sample_offset
-
 
     # ==========================================
     # PRE-PASS: Find Wrap Bounds, Gaps & Radius
@@ -46,7 +38,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         det = detectors.get(img_key)
         if det is None: continue
         
-        # --- FIX: Apply s_lab to background image projection ---
         s_lab = get_s_lab_for_image(img_key)
         
         c, r = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
@@ -54,6 +45,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         xyz = xyz - s_lab
         
         X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
+        
+        # Strictly use absolute room frame roty
         roty = np.rad2deg(np.arctan2(X, Z))
         
         if np.ptp(roty) > 180:
@@ -63,10 +56,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         panel_bounds.append([np.min(roty), np.max(roty)])
         radii.append(np.mean(np.sqrt(X**2 + Z**2)))
 
-    # Calculate average radius of the instrument cylinder (in meters)
     mean_radius = np.mean(radii) if radii else 1.0
 
-    # Merge intervals (with 5-degree tolerance)
     if panel_bounds:
         panel_bounds.sort(key=lambda x: x[0])
         merged = []
@@ -82,9 +73,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     else:
         merged = []
 
-    # Find significant gaps (> 72 degrees, which is 20% of 360)
     gaps = []
-    visual_gap_size = 3.0 # Compacted visual sliver for the break marks
+    visual_gap_size = 3.0 
     
     for i in range(len(merged) - 1):
         g_start = merged[i][1]
@@ -245,7 +235,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
     # FORMATTING & GAPS VISUALIZATION
     # ==========================================
     
-    # Pre-calculate true limits based exclusively on the image boundaries
     if merged:
         global_min = merged[0][0]
         global_max = merged[-1][1]
@@ -255,7 +244,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         c_min, c_max = ax.get_xlim()
         global_min, global_max = c_min, c_max
 
-    # Format the X-Axis Ticks dynamically
     if merged:
         start_tick = np.floor(global_min / 45.0) * 45
         end_tick = np.ceil(global_max / 45.0) * 45
@@ -274,7 +262,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             ax.set_xticks(tick_pos)
             ax.set_xticklabels([f"{int(t) % 360}$^\circ$" for t in valid_ticks])
 
-    # Draw the custom broken spines if gaps exist
     if gaps:
         ax.spines['bottom'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -282,10 +269,9 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         valid_start = c_min
         trans = ax.get_xaxis_transform()
         
-        # Reduced marker sizes
-        d_y = 0.0075  # 50% height of the slash
-        d_x = 0.8     # Width of the slash
-        m_lw = 0.8    # Thinner line weight for the marker
+        d_y = 0.0075 
+        d_x = 0.8     
+        m_lw = 0.8   
         
         for g_start, g_end in gaps:
             t_start = compress_roty(np.array([g_start]))[0]
@@ -305,13 +291,9 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         ax.plot([valid_start, c_max], [0, 0], color='black', lw=1, transform=trans, clip_on=False)
         ax.plot([valid_start, c_max], [1, 1], color='black', lw=1, transform=trans, clip_on=False)
 
-    # Force Matplotlib to respect our boundaries absolutely
     ax.margins(0, 0)
     ax.set_xlim(c_min, c_max)
 
-    # -------------------------------------------------------------
-    # FORCE PHYSICAL ASPECT RATIO 
-    # -------------------------------------------------------------
     aspect_ratio = 180.0 / (np.pi * mean_radius)
     ax.set_aspect(aspect_ratio, adjustable='box')
 
