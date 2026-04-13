@@ -323,13 +323,19 @@ class VectorizedObjective:
             self.peak_det_idx = jnp.array(peak_pixel_coords['bank_indices'], dtype=jnp.int32)
             self.num_banks = self.det_centers.shape[0]
 
+            # Dynamic Metrology Parameter Allocation
             self.det_modes = detector_params.get('modes', ['independent'])
             self.det_param_slices = {}
             self.num_det_params = 0
             
+            # Extract and normalize the custom rotation axis
+            rot_axis = jnp.array(detector_params.get("global_rot_axis", [0.0, 1.0, 0.0]))
+            self.det_global_rot_axis = rot_axis / (jnp.linalg.norm(rot_axis) + 1e-9)
+            
             self.bounds = {
                 "radial": detector_params.get("radial_bound", 0.05),
                 "global_rot": jnp.deg2rad(detector_params.get("global_rot_bound_deg", 2.0)),
+                "global_rot_axis": jnp.deg2rad(detector_params.get("global_rot_bound_deg", 2.0)),
                 "global_trans": detector_params.get("global_trans_bound_meters", 0.01),
                 "independent_trans": detector_trans_bound_meters,
                 "independent_rot": jnp.deg2rad(detector_rot_bound_deg)
@@ -338,6 +344,7 @@ class VectorizedObjective:
             for mode in self.det_modes:
                 if mode == "radial": size = 1
                 elif mode == "global_rot": size = 3
+                elif mode == "global_rot_axis": size = 1  # <--- NEW: 1D parameter
                 elif mode == "global_trans": size = 3
                 elif mode == "independent": size = self.num_banks * 6
                 else: raise ValueError(f"Unknown detector refinement mode: {mode}")
@@ -478,11 +485,26 @@ class VectorizedObjective:
                 scale = _forward_map_param(scale_norm, self.bounds["radial"])
                 c = c * (1.0 + scale[:, :, None])
 
+            # Mode 2: Global Roll/Pitch/Yaw (Unconstrained 3D)
             if "global_rot" in self.det_modes:
                 slc = self.det_param_slices["global_rot"]
                 rot_norm = det_params[:, slc]
                 rot_vec = _forward_map_param(rot_norm, self.bounds["global_rot"])
                 R_global = jax.vmap(rotation_matrix_from_rodrigues_jax)(rot_vec)
+                
+                c = jnp.einsum("sij,snj->sni", R_global, c)
+                u = jnp.einsum("sij,snj->sni", R_global, u)
+                v = jnp.einsum("sij,snj->sni", R_global, v)
+
+            # Mode 2b: Global Rotation around a Fixed Axis (Constrained 1D)
+            if "global_rot_axis" in self.det_modes:
+                slc = self.det_param_slices["global_rot_axis"]
+                # Extract the 1D angle and squeeze to shape (S,) for broadcasting
+                angle_norm = det_params[:, slc, 0] 
+                angle_rad = _forward_map_param(angle_norm, self.bounds["global_rot_axis"])
+                
+                # JAX broadcasts angle_rad (S,) perfectly into (S, 3, 3) rotation matrices
+                R_global = rotation_matrix_from_axis_angle_jax(self.det_global_rot_axis, angle_rad)
                 
                 c = jnp.einsum("sij,snj->sni", R_global, c)
                 u = jnp.einsum("sij,snj->sni", R_global, u)

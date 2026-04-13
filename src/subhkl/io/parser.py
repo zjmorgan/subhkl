@@ -81,7 +81,8 @@ def indexer(
     beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg"),
     refine_detector: bool = typer.Option(False, "--refine-detector"),
     refine_detector_banks: str = typer.Option(None, "--refine-detector-banks", help="Comma-separated bank IDs to refine"),
-    detector_modes: str = typer.Option("independent", "--detector-modes", help="Comma-separated list of refinement modes (e.g. radial,global_rot,independent)"),
+    detector_modes: str = typer.Option("independent", "--detector-modes", help="Modes: radial, global_rot, global_rot_axis, global_trans, independent"),
+    detector_global_rot_axis: str = typer.Option("0,1,0", "--detector-global-rot-axis", help="Axis vector for global_rot_axis mode (e.g. 0,1,0)"),
     detector_trans_bound_meters: float = typer.Option(0.005, "--detector-trans-bound-meters"),
     detector_rot_bound_deg: float = typer.Option(1.0, "--detector-rot-bound-deg"),
     detector_global_rot_bound_deg: float = typer.Option(2.0, "--detector-global-rot-bound-deg"),
@@ -109,7 +110,9 @@ def indexer(
     gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
     det_banks_list = [int(x.strip()) for x in _val(refine_detector_banks).split(",")] if _val(refine_detector_banks) else None
     det_modes_list = [x.strip().lower() for x in _val(detector_modes).split(",")] if _val(detector_modes) else ["independent"]
-
+    
+    # Parse the custom rotation axis
+    det_rot_axis = np.array([float(x.strip()) for x in _val(detector_global_rot_axis).split(",")])
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
         if a_val is None: a_val = f["sample/a"][()] if "sample/a" in f else None
@@ -240,6 +243,7 @@ def indexer(
                     'modes': det_modes_list,
                     'radial_bound': _val(detector_radial_bound_frac),
                     'global_rot_bound_deg': _val(detector_global_rot_bound_deg),
+                    'global_rot_axis': det_rot_axis, # <--- NEW
                     'global_trans_bound_meters': _val(detector_global_trans_bound_meters)
                 }
 
