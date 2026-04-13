@@ -202,6 +202,11 @@ class VectorizedObjective:
         static_R=None,
         kf_lab_fixed_vectors=None,
         peak_run_indices=None,
+        refine_detector=False,
+        detector_params=None,
+        peak_pixel_coords=None,
+        detector_trans_bound_meters=0.005,
+        detector_rot_bound_deg=2.0,
     ):
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
@@ -300,6 +305,25 @@ class VectorizedObjective:
         self.wl_min_val = wavelength[0]
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
+
+        # --- JOINT DETECTOR REFINEMENT SETUP ---
+        self.refine_detector = refine_detector
+        if self.refine_detector:
+            self.det_centers = jnp.array(detector_params['centers'])
+            self.det_uhats = jnp.array(detector_params['uhats'])
+            self.det_vhats = jnp.array(detector_params['vhats'])
+            self.det_m = jnp.array(detector_params['m'])
+            self.det_n = jnp.array(detector_params['n'])
+            self.det_pw = jnp.array(detector_params['pw'])
+            self.det_ph = jnp.array(detector_params['ph'])
+            
+            self.peak_rows = jnp.array(peak_pixel_coords['rows'])
+            self.peak_cols = jnp.array(peak_pixel_coords['cols'])
+            self.peak_det_idx = jnp.array(peak_pixel_coords['bank_indices'], dtype=jnp.int32)
+            
+            self.num_banks = self.det_centers.shape[0]
+            self.det_trans_bound = detector_trans_bound_meters
+            self.det_rot_bound_rad = jnp.deg2rad(detector_rot_bound_deg)
 
     def orientation_U_jax(self, param):
         """Vectorized U matrix calculation from Rodrigues vectors"""
@@ -417,7 +441,26 @@ class VectorizedObjective:
             offsets_total = None
             R = None
 
-        return UB, B, sample_total, ki_vec, offsets_total, R
+        # --- DYNAMIC DETECTOR CALIBRATION ---
+        if self.refine_detector:
+            n_det_params = self.num_banks * 6
+            det_params = x[:, idx : idx + n_det_params]
+            idx += n_det_params
+            
+            det_trans_norm = det_params[:, :self.num_banks * 3].reshape(-1, self.num_banks, 3)
+            det_trans = _forward_map_param(det_trans_norm, self.det_trans_bound)
+            dyn_centers = self.det_centers[None, :, :] + det_trans
+            
+            det_rot_norm = det_params[:, self.num_banks * 3:].reshape(-1, self.num_banks, 3)
+            det_rot_vecs = _forward_map_param(det_rot_norm, self.det_rot_bound_rad)
+            det_R = jax.vmap(jax.vmap(rotation_matrix_from_rodrigues_jax))(det_rot_vecs)
+            
+            dyn_uhats = jnp.einsum("sbij,bj->sbi", det_R, self.det_uhats)
+            dyn_vhats = jnp.einsum("sbij,bj->sbi", det_R, self.det_vhats)
+        else:
+            dyn_centers, dyn_uhats, dyn_vhats = None, None, None
+
+        return UB, B, sample_total, ki_vec, offsets_total, R, dyn_centers, dyn_uhats, dyn_vhats
 
     def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None):
         ub_inv = jnp.linalg.inv(ub_mat)
@@ -473,7 +516,7 @@ class VectorizedObjective:
         pad_size = max(0, 2 - original_S)
         x_pad = jnp.pad(x, ((0, pad_size), (0, 0)), mode="edge")
 
-        UB, _, sample_total, ki_vec, _, R = self._get_physical_params_jax(x_pad)
+        UB, _, sample_total, ki_vec, _, R, dyn_centers, dyn_uhats, dyn_vhats = self._get_physical_params_jax(x_pad)
 
         R_curr = R if R is not None else self.static_R
 
@@ -487,21 +530,42 @@ class VectorizedObjective:
         else:
             R_per_peak = None
 
-        if self.peak_xyz is not None:
-            if R_per_peak is not None:
-                if R_per_peak.ndim == 4:
-                    s_lab = jnp.matmul(R_per_peak, sample_total[:, None, :, None]).squeeze(-1)
-                    s = s_lab.transpose(0, 2, 1)
-                elif R_per_peak.ndim == 3:
-                    s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, None, :, None]).squeeze(-1)
-                    s = s_lab.transpose(0, 2, 1)
-                else:
-                    s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, :, None]).squeeze(-1)
-                    s = s_lab[:, :, None]
+        # Determine Sample Origin Offset per peak
+        if R_per_peak is not None:
+            if R_per_peak.ndim == 4:
+                s_lab = jnp.matmul(R_per_peak, sample_total[:, None, :, None]).squeeze(-1)
+                s = s_lab.transpose(0, 2, 1)
+            elif R_per_peak.ndim == 3:
+                s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, None, :, None]).squeeze(-1)
+                s = s_lab.transpose(0, 2, 1)
             else:
-                s = sample_total[:, :, None]
+                s_lab = jnp.matmul(R_per_peak[None, ...], sample_total[:, :, None]).squeeze(-1)
+                s = s_lab[:, :, None]
+        else:
+            s = sample_total[:, :, None]
 
-            v = self.peak_xyz[None, :, :] - s
+        # Calculate dynamic XYZ from panels if refining
+        if self.refine_detector:
+            c = dyn_centers[:, self.peak_det_idx, :]
+            u_vec = dyn_uhats[:, self.peak_det_idx, :]
+            v_vec = dyn_vhats[:, self.peak_det_idx, :]
+            
+            m = self.det_m[self.peak_det_idx]
+            n = self.det_n[self.peak_det_idx]
+            pw = self.det_pw[self.peak_det_idx]
+            ph = self.det_ph[self.peak_det_idx]
+            
+            u_offset = (self.peak_cols - m / 2.0) * pw
+            v_offset = (self.peak_rows - n / 2.0) * ph
+            
+            dynamic_xyz = c + u_offset[None, :, None] * u_vec + v_offset[None, :, None] * v_vec
+            p = dynamic_xyz.transpose(0, 2, 1)
+        else:
+            p = self.peak_xyz[None, :, :] if self.peak_xyz is not None else None
+
+        # Construct Ray
+        if p is not None:
+            v = p - s
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
             kf = v / jnp.where(dist == 0, 1.0, dist)
             ki = ki_vec[:, :, None]
@@ -513,6 +577,7 @@ class VectorizedObjective:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
+        # Rotate to Crystal Frame
         if R_per_peak is not None:
             q_lab_vec = q_lab.transpose(0, 2, 1)[..., None]
             if R_per_peak.ndim == 4:
@@ -719,6 +784,11 @@ class FindUB:
         beam_bound_deg: float = 1.0,
         batch_size: int | None = None,
         sigma_init: float | None = None,
+        refine_detector: bool = False,
+        detector_params: dict | None = None,
+        peak_pixel_coords: dict | None = None,
+        detector_trans_bound_meters: float = 0.005,
+        detector_rot_bound_deg: float = 1.0,
         **kwargs
     ):
         require_jax()
@@ -779,6 +849,10 @@ class FindUB:
         cell_params_init = np.array([self.a, self.b, self.c, self.alpha, self.beta, self.gamma])
         lattice_system, num_lattice_params = get_lattice_system(self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group)
 
+        if refine_detector:
+            if detector_params is None or peak_pixel_coords is None:
+                raise ValueError("To use --refine-detector, detector_params and peak_pixel_coords must be passed from parser.py")
+
         objective = VectorizedObjective(
             self.reciprocal_lattice_B(),
             kf_ki_dir_lab,
@@ -802,12 +876,18 @@ class FindUB:
             static_R=static_R_input,
             kf_lab_fixed_vectors=kf_ki_dir_lab,
             peak_run_indices=self.run_indices,
+            refine_detector=refine_detector,
+            detector_params=detector_params,
+            peak_pixel_coords=peak_pixel_coords,
+            detector_trans_bound_meters=detector_trans_bound_meters,
+            detector_rot_bound_deg=detector_rot_bound_deg,
         )
 
         num_dims = 3 + (num_lattice_params if refine_lattice else 0)
         if refine_sample and self.peak_xyz is not None: num_dims += 3
         if refine_beam and self.peak_xyz is not None: num_dims += 2
         if refine_goniometer: num_dims += np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
+        if refine_detector: num_dims += len(detector_params['centers']) * 6
 
         start_sol_processed = None
         if init_params is not None:
@@ -901,7 +981,7 @@ class FindUB:
 
         self.x = np.array(best_overall_member)
         x_batch = jnp.array(self.x[None, :])
-        (UB_final_batch, B_new_batch, s_total_batch, ki_vec_batch, offsets_total_batch, R_batch) = objective._get_physical_params_jax(x_batch)
+        (UB_final_batch, B_new_batch, s_total_batch, ki_vec_batch, offsets_total_batch, R_batch, dyn_centers, dyn_uhats, dyn_vhats) = objective._get_physical_params_jax(x_batch)
 
         self.sample_offset = np.array(s_total_batch[0])
         self.ki_vec = np.array(ki_vec_batch[0]).flatten()
@@ -916,6 +996,14 @@ class FindUB:
             p_full = np.array(objective.reconstruct_cell_params(cell_norm)[0])
             self.a, self.b, self.c = p_full[:3]
             self.alpha, self.beta, self.gamma = p_full[3:]
+
+        if refine_detector:
+            self.calibrated_centers = np.array(dyn_centers[0])
+            self.calibrated_uhats = np.array(dyn_uhats[0])
+            self.calibrated_vhats = np.array(dyn_vhats[0])
+            max_drift = np.max(np.linalg.norm(self.calibrated_centers - detector_params['centers'], axis=1)) * 1000
+            print("--- Refined Detector Geometry ---")
+            print(f"Max Center Translation: {max_drift:.3f} mm")
 
         loss_score, dist_min, hkl, lamb = objective.get_results(x_batch)
         dist_min_final = np.array(dist_min[0])
