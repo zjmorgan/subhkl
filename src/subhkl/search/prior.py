@@ -418,35 +418,35 @@ class HoughPrior:
         rand_rots = jax.vmap(quaternion_to_rodrigues)(rand_q)
 
         import tqdm
-        rand_scores = []
+        rand_losses = []
         for i in tqdm.tqdm(range(0, len(rand_rots), batch_size), desc="Forward Model Filter (random)"):
             batch = rand_rots[i:i+batch_size]
-            scores = np.array(-objective_function(batch))
-            rand_scores.append(scores)
+            losses = np.array(-objective_function(batch))
+            rand_losses.append(losses)
         rand_scores = np.concatenate(rand_scores)
 
-        r_mean = np.mean(rand_scores)
-        r_std = np.std(rand_scores)
-        r_max = np.max(rand_scores)
+        r_mean = np.mean(rand_losses)
+        r_std = np.std(rand_losses)
+        r_max = np.max(rand_losses)
 
         print(f"  -> Random Background (N=4096) | Mean: {r_mean:.2f} | Max: {r_max:.2f} | Std: {r_std:.2f}")
 
         print(f"  -> Forward-Modeling all {len(prior_quats)} Prior seeds for statistical observation...")
         prior_rots = jax.vmap(quaternion_to_rodrigues)(prior_quats)
 
-        physics_scores = []
+        physics_losses = []
         for i in tqdm.tqdm(range(0, len(prior_rots), batch_size), desc="Forward Model Filter (prior)"):
             batch = prior_rots[i:i+batch_size]
-            scores = np.array(-objective_function(batch))
-            physics_scores.append(scores)
+            losses = np.array(objective_function(batch))
+            physics_losses.append(losses)
 
-        physics_scores_np = np.concatenate(physics_scores)
+        physics_losses_np = np.concatenate(physics_losses)
 
-        ranks = np.arange(len(physics_scores_np))
+        ranks = np.arange(len(physics_losses_np))
 
-        physics_sort_idx = np.argsort(physics_scores_np)[::-1]
+        physics_sort_idx = np.argsort(physics_losses_np)
         physics_ranks = np.empty_like(physics_sort_idx)
-        physics_ranks[physics_sort_idx] = np.arange(len(physics_scores_np))
+        physics_ranks[physics_sort_idx] = np.arange(len(physics_losses_np))
 
         import scipy.stats
         rho, p_val = scipy.stats.spearmanr(ranks, physics_ranks)
@@ -463,23 +463,23 @@ class HoughPrior:
         print(f"  -> Top 100 Physical Seeds max RANSAC Rank: #{np.max(top_100_dav_ranks)}")
 
         for N in [1000, 10000, 50000]:
-            if len(physics_scores_np) >= N:
+            if len(physics_losses_np) >= N:
                 dav_top_n = set(ranks[:N])
                 phys_top_n = set(physics_sort_idx[:N])
                 overlap = len(dav_top_n.intersection(phys_top_n))
                 print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
 
-        best_score = physics_scores_np[physics_sort_idx[0]]
-        z_score = (best_score - r_mean) / (r_std + 1e-9)
+        best_loss = physics_losses_np[physics_sort_idx[0]]
+        z_loss = (best_loss - r_mean) / (r_std + 1e-9)
 
-        print(f"\n  -> RANSAC Top Score:       | Score: {best_score:.2f} | Z-Score: {z_score:.1f} sigma")
-        print(f"  -> Top 5 Prior Scores: {physics_scores_np[physics_sort_idx[:5]]}")
+        print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.2f} | Z-Score: {z_loss:.1f} sigma")
+        print(f"  -> Top 5 Prior Scores: {physics_losses_np[physics_sort_idx[:5]]}")
 
-        if z_score >= z_score_threshold:
-            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
+        if z_loss >= z_loss_threshold:
+            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_loss:.1f} sigma). Proceeding to GA...")
             return prior_rots[physics_sort_idx]
         else:
-            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.1f} < {z_score_threshold}). Falling back to Uniform GA...")
+            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_loss:.1f} < {z_loss_threshold}). Falling back to Uniform GA...")
             return None
 
 @jax.jit
