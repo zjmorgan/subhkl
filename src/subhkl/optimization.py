@@ -182,6 +182,7 @@ class VectorizedObjective:
         kf_ki_dir,
         peak_xyz_lab,
         wavelength,
+        tolerance_deg=0.1,
         cell_params=None,
         refine_lattice=False,
         lattice_bound_frac=0.05,
@@ -209,6 +210,7 @@ class VectorizedObjective:
 
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
+        self.tolerance_rad = jnp.deg2rad(tolerance_deg)
 
         self.static_R = jnp.array(static_R) if static_R is not None else jnp.eye(3)
 
@@ -304,6 +306,33 @@ class VectorizedObjective:
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
+    def reconstruct_cell_params(self, params_norm):
+        p_free = _forward_map_lattice(params_norm, self.free_params_init, self.lattice_bound_frac)
+        
+        S = params_norm.shape[0]
+        deg90, deg120 = jnp.full((S,), 90.0), jnp.full((S,), 120.0)
+        
+        if self.lattice_system == "Cubic":
+            a = p_free[:, 0]
+            return jnp.stack([a, a, a, deg90, deg90, deg90], axis=1)
+        if self.lattice_system == "Hexagonal":
+            a, c = p_free[:, 0], p_free[:, 1]
+            return jnp.stack([a, a, c, deg90, deg90, deg120], axis=1)
+        if self.lattice_system == "Tetragonal":
+            a, c = p_free[:, 0], p_free[:, 1]
+            return jnp.stack([a, a, c, deg90, deg90, deg90], axis=1)
+        if self.lattice_system == "Rhombohedral":
+            a, alpha = p_free[:, 0], p_free[:, 1]
+            return jnp.stack([a, a, a, alpha, alpha, alpha], axis=1)
+        if self.lattice_system == "Orthorhombic":
+            a, b, c = p_free[:, 0], p_free[:, 1], p_free[:, 2]
+            return jnp.stack([a, b, c, deg90, deg90, deg90], axis=1)
+        if self.lattice_system == "Monoclinic":
+            a, b, c, beta = p_free[:, 0], p_free[:, 1], p_free[:, 2], p_free[:, 3]
+            return jnp.stack([a, b, c, deg90, beta, deg90], axis=1)
+            
+        return p_free
+
     def _get_physical_params_jax(self, x):
         idx = 0
         rot_params = x[:, idx : idx + 3]
@@ -313,29 +342,7 @@ class VectorizedObjective:
         if self.refine_lattice:
             n_lat = self.free_params_init.size
             cell_params_norm = x[:, idx : idx + n_lat]
-            p = _forward_map_lattice(cell_params_norm, self.free_params_init, self.lattice_bound_frac)
-            
-            S = cell_params_norm.shape[0]
-            deg90, deg120 = jnp.full((S,), 90.0), jnp.full((S,), 120.0)
-            
-            if self.lattice_system == "Cubic":
-                a = p[:, 0]
-                p = jnp.stack([a, a, a, deg90, deg90, deg90], axis=1)
-            elif self.lattice_system == "Hexagonal":
-                a, c = p[:, 0], p[:, 1]
-                p = jnp.stack([a, a, c, deg90, deg90, deg120], axis=1)
-            elif self.lattice_system == "Tetragonal":
-                a, c = p[:, 0], p[:, 1]
-                p = jnp.stack([a, a, c, deg90, deg90, deg90], axis=1)
-            elif self.lattice_system == "Rhombohedral":
-                a, alpha = p[:, 0], p[:, 1]
-                p = jnp.stack([a, a, a, alpha, alpha, alpha], axis=1)
-            elif self.lattice_system == "Orthorhombic":
-                a, b, c = p[:, 0], p[:, 1], p[:, 2]
-                p = jnp.stack([a, b, c, deg90, deg90, deg90], axis=1)
-            elif self.lattice_system == "Monoclinic":
-                a, b, c, beta = p[:, 0], p[:, 1], p[:, 2], p[:, 3]
-                p = jnp.stack([a, b, c, deg90, beta, deg90], axis=1)
+            p = self.reconstruct_cell_params(cell_params_norm)
 
             deg2rad = jnp.pi / 180.0
             a, b, c = p[:, 0], p[:, 1], p[:, 2]
@@ -415,7 +422,7 @@ class VectorizedObjective:
     def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None):
         ub_inv = jnp.linalg.inv(ub_mat)
         v = jnp.matmul(ub_inv, kf_ki_sample)
-
+        
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
 
         lam_grid = jnp.logspace(
@@ -433,17 +440,17 @@ class VectorizedObjective:
 
         def scan_body(carry, i):
             curr_min, curr_best_hkl, curr_best_lamb = carry
-
+            
             lamda_cand = lam_grid[i]
             hkl_float = v / lamda_cand
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-
+            
             q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-
+            
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
-
+            
             delta_hkl = jnp.sin(jnp.pi * hkl_float) / jnp.pi
             dist = jnp.linalg.norm(delta_hkl, axis=1)
 
@@ -451,12 +458,12 @@ class VectorizedObjective:
             new_min = jnp.where(update_mask, dist, curr_min)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
-
+            
             return (new_min, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
         dist_min, best_hkl, best_lamb = final_carry
-
+        
         loss = jnp.mean(dist_min, axis=1)
         return loss, dist_min, best_hkl.transpose((0, 2, 1)), best_lamb
 
@@ -719,7 +726,7 @@ class FindUB:
         if goniometer_axes is None and self.goniometer_axes is not None:
             goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
-            goniometer_angles = self.goniometer_angles.T
+            goniometer_angles = self.goniometer_angles
         if goniometer_names is None and self.goniometer_names is not None:
             goniometer_names = self.goniometer_names
 
@@ -913,7 +920,6 @@ class FindUB:
         loss_score, dist_min, hkl, lamb = objective.get_results(x_batch)
         dist_min_final = np.array(dist_min[0])
         
-        # Calculate number of correctly indexed peaks based on sub-pixel HKL distance
         mask = dist_min_final < 0.15
         num_indexed = int(np.sum(mask))
         
