@@ -1062,7 +1062,6 @@ def zone_axis_search(
     d_min: float = 1.0,
     sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
     vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
-    loss_method: str = typer.Option("cosine", help="Loss method for the objective function (cosine, soft, forward, sinkhorn)."),
     border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
     min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
     hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
@@ -1240,20 +1239,13 @@ def zone_axis_search(
     if quats is None or len(quats) == 0:
         return
 
-    print(f"Filtering Prior through Exact Physics Forward-Model (Method: {loss_method})...")
+    print(f"Filtering Prior through Exact Physics Forward-Model...")
 
-    centering = get_centering(space_group)
     ray_objective = VectorizedObjective(
         B=B_mat,
         kf_ki_dir=q_lab_all,
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
-        angle_t=t,
-        weights=weights_all,
-        tolerance_deg=vector_tolerance, 
-        space_group=space_group,
-        centering=centering,
-        loss_method=loss_method,
         cell_params=[a, b, c, alpha, beta, gamma],
         d_min=d_min,
         # 4. The Magic Link:
