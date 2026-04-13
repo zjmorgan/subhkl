@@ -207,6 +207,8 @@ class VectorizedObjective:
         peak_pixel_coords=None,
         detector_trans_bound_meters=0.005,
         detector_rot_bound_deg=2.0,
+        freeze_orientation=False,
+        fixed_rot_params=None,
     ):
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
@@ -216,6 +218,8 @@ class VectorizedObjective:
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
         self.tolerance_rad = jnp.deg2rad(tolerance_deg)
+        self.freeze_orientation = freeze_orientation
+        self.fixed_rot_params = jnp.array(fixed_rot_params) if fixed_rot_params is not None else jnp.zeros(3)
 
         self.static_R = jnp.array(static_R) if static_R is not None else jnp.eye(3)
 
@@ -306,7 +310,6 @@ class VectorizedObjective:
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
 
-        # --- JOINT DETECTOR REFINEMENT PIPELINE ---
         self.refine_detector = refine_detector
         if self.refine_detector:
             self.det_centers = jnp.array(detector_params['centers'])
@@ -322,7 +325,6 @@ class VectorizedObjective:
             self.peak_det_idx = jnp.array(peak_pixel_coords['bank_indices'], dtype=jnp.int32)
             self.num_banks = self.det_centers.shape[0]
 
-            # Dynamic Metrology Parameter Allocation
             self.det_modes = detector_params.get('modes', ['independent'])
             self.det_param_slices = {}
             self.num_det_params = 0
@@ -378,9 +380,12 @@ class VectorizedObjective:
 
     def _get_physical_params_jax(self, x):
         idx = 0
-        rot_params = x[:, idx : idx + 3]
+        if self.freeze_orientation:
+            rot_params = self.fixed_rot_params[None, :].repeat(x.shape[0], axis=0)
+        else:
+            rot_params = x[:, idx : idx + 3]
+            idx += 3
         U = self.orientation_U_jax(rot_params)
-        idx += 3
 
         if self.refine_lattice:
             n_lat = self.free_params_init.size
@@ -460,25 +465,21 @@ class VectorizedObjective:
             offsets_total = None
             R = None
 
-        # --- DYNAMIC DETECTOR CALIBRATION (TRANSFORMATION PIPELINE) ---
         if self.refine_detector:
             det_params = x[:, idx : idx + self.num_det_params]
             idx += self.num_det_params
             
             S = x.shape[0]
-            # Initialize with nominal spatial vectors
             c = self.det_centers[None, :, :].repeat(S, axis=0)
             u = self.det_uhats[None, :, :].repeat(S, axis=0)
             v = self.det_vhats[None, :, :].repeat(S, axis=0)
 
-            # Mode 1: Breathing (Radial Scaling)
             if "radial" in self.det_modes:
                 slc = self.det_param_slices["radial"]
                 scale_norm = det_params[:, slc]
                 scale = _forward_map_param(scale_norm, self.bounds["radial"])
                 c = c * (1.0 + scale[:, :, None])
 
-            # Mode 2: Global Roll/Pitch/Yaw
             if "global_rot" in self.det_modes:
                 slc = self.det_param_slices["global_rot"]
                 rot_norm = det_params[:, slc]
@@ -489,14 +490,12 @@ class VectorizedObjective:
                 u = jnp.einsum("sij,snj->sni", R_global, u)
                 v = jnp.einsum("sij,snj->sni", R_global, v)
 
-            # Mode 3: Global Translation
             if "global_trans" in self.det_modes:
                 slc = self.det_param_slices["global_trans"]
                 trans_norm = det_params[:, slc]
                 trans_vec = _forward_map_param(trans_norm, self.bounds["global_trans"])
                 c = c + trans_vec[:, None, :]
 
-            # Mode 4: Independent Panel Metrology
             if "independent" in self.det_modes:
                 slc = self.det_param_slices["independent"]
                 indep_params = det_params[:, slc]
@@ -570,7 +569,7 @@ class VectorizedObjective:
     def get_results(self, x):
         original_S = x.shape[0]
         pad_size = max(0, 2 - original_S)
-        x_pad = jnp.pad(x, ((0, pad_size), (0, 0)), mode="edge")
+        x_pad = jnp.pad(x, ((0, pad_size), (0, 0)), mode="edge") if pad_size > 0 else x
 
         UB, _, sample_total, ki_vec, _, R, dyn_centers, dyn_uhats, dyn_vhats = self._get_physical_params_jax(x_pad)
 
@@ -625,7 +624,7 @@ class VectorizedObjective:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
         else:
-            kf = self.kf_lab_fixed[None, :, :].repeat(x.shape[0], axis=0)
+            kf = self.kf_lab_fixed[None, :, :].repeat(x_pad.shape[0], axis=0)
             ki = ki_vec[:, :, None]
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
@@ -673,6 +672,7 @@ class FindUB:
         self.ki_vec = None
         self.base_sample_offset = np.zeros(3)
         self.base_gonio_offset = None
+        self.fixed_rot_params = np.zeros(3)
 
         if filename is not None:
             self.load_peaks(filename)
@@ -770,6 +770,7 @@ class FindUB:
         refine_goniometer=False,
         goniometer_bound_deg=5.0,
         refine_goniometer_axes=None,
+        freeze_orientation=False,
     ):
         print(f"Bootstrapping from physical solution: {bootstrap_filename}")
         with h5py.File(bootstrap_filename, "r") as f:
@@ -787,7 +788,11 @@ class FindUB:
                 if raw_x is None: raw_x = rodrigues_vec
                 else: raw_x[:3] = rodrigues_vec
 
-        new_params = [raw_x[:3] if raw_x is not None else np.zeros(3)]
+        if freeze_orientation:
+            self.fixed_rot_params = raw_x[:3] if raw_x is not None else np.zeros(3)
+            new_params = []
+        else:
+            new_params = [raw_x[:3] if raw_x is not None else np.zeros(3)]
 
         if refine_lattice:
             self.a, self.b, self.c = b_a, b_b, b_c
@@ -812,7 +817,7 @@ class FindUB:
                 active_mask = [any(req in name for req in refine_goniometer_axes) for name in self.goniometer_names]
             new_params.append(np.full(sum(active_mask), 0.5))
 
-        return np.concatenate([np.atleast_1d(p) for p in new_params])
+        return np.concatenate([np.atleast_1d(p) for p in new_params]) if new_params else np.array([])
 
     def minimize(
         self,
@@ -841,6 +846,7 @@ class FindUB:
         peak_pixel_coords: dict | None = None,
         detector_trans_bound_meters: float = 0.005,
         detector_rot_bound_deg: float = 1.0,
+        freeze_orientation: bool = False,
         **kwargs
     ):
         require_jax()
@@ -933,16 +939,42 @@ class FindUB:
             peak_pixel_coords=peak_pixel_coords,
             detector_trans_bound_meters=detector_trans_bound_meters,
             detector_rot_bound_deg=detector_rot_bound_deg,
+            freeze_orientation=freeze_orientation,
+            fixed_rot_params=self.fixed_rot_params,
         )
 
-        num_dims = 3 + (num_lattice_params if refine_lattice else 0)
+        num_dims = (0 if freeze_orientation else 3) + (num_lattice_params if refine_lattice else 0)
         if refine_sample and self.peak_xyz is not None: num_dims += 3
         if refine_beam and self.peak_xyz is not None: num_dims += 2
         if refine_goniometer: num_dims += np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
         if refine_detector: num_dims += objective.num_det_params
 
+        # --- FAST EVALUATION BYPASS ---
+        # If there are 0 parameters to refine, simply evaluate the initial geometry.
+        if num_dims == 0:
+            print("No parameters selected for refinement. Evaluating static physical model...")
+            self.x = np.array([])
+            x_batch = jnp.zeros((1, 0))
+            (UB_final_batch, B_new_batch, s_total_batch, ki_vec_batch, offsets_total_batch, R_batch, dyn_centers, dyn_uhats, dyn_vhats) = objective._get_physical_params_jax(x_batch)
+            self.sample_offset = np.array(s_total_batch[0])
+            self.ki_vec = np.array(ki_vec_batch[0]).flatten()
+            if offsets_total_batch is not None: self.goniometer_offsets = np.array(offsets_total_batch[0])
+            if R_batch is not None: self.R = np.array(R_batch[0])
+
+            rot_params = self.fixed_rot_params if freeze_orientation else np.zeros(3)
+            U = objective.orientation_U_jax(rot_params[None])[0]
+
+            loss_score, dist_min, hkl, lamb = objective.get_results(x_batch)
+            dist_min_final = np.array(dist_min[0])
+            mask = dist_min_final < 0.15
+            num_indexed = int(np.sum(mask))
+            hkl_final = np.array(hkl[0])
+            hkl_final[~mask] = 0
+            
+            return num_indexed, hkl_final, np.array(lamb[0]), np.array(U)
+
         start_sol_processed = None
-        if init_params is not None:
+        if init_params is not None and init_params.size > 0:
             start_sol = jnp.array(init_params)
             if start_sol.shape[0] < num_dims:
                 start_sol_processed = jnp.concatenate([start_sol, jnp.full((num_dims - start_sol.shape[0],), 0.5)])
@@ -964,17 +996,26 @@ class FindUB:
             if start_sol is not None:
                 if strategy_type == "population_based":
                     noise = jax.random.normal(rng_pop, (population_size, num_dims)) * target_sigma
-                    population_init = jnp.concatenate([start_sol[:3] + noise[:, :3], jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)], axis=1)
+                    if freeze_orientation:
+                        population_init = jnp.clip(start_sol + noise, 0.0, 1.0)
+                    else:
+                        population_init = jnp.concatenate([start_sol[:3] + noise[:, :3], jnp.clip(start_sol[3:] + noise[:, 3:], 0.0, 1.0)], axis=1)
                     state = strategy.init(rng_init, population_init, objective(population_init), es_params)
                 else:
                     state = strategy.init(rng_init, start_sol, es_params).replace(std=target_sigma)
             elif strategy_type == "population_based":
-                pop_orient = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
-                pop_rest = jax.random.uniform(jax.random.split(rng_pop)[0], (population_size, max(0, num_dims - 3)))
-                population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
+                if freeze_orientation:
+                    population_init = jax.random.uniform(rng_pop, (population_size, num_dims))
+                else:
+                    pop_orient = jax.random.normal(rng_pop, (population_size, 3)) * target_sigma
+                    pop_rest = jax.random.uniform(jax.random.split(rng_pop)[0], (population_size, max(0, num_dims - 3)))
+                    population_init = jnp.concatenate([pop_orient, pop_rest], axis=1)
                 state = strategy.init(rng_init, population_init, objective(population_init), es_params)
             else:
-                solution_init = jnp.concatenate([jnp.zeros(3), jnp.full((max(0, num_dims - 3),), 0.5)])
+                if freeze_orientation:
+                    solution_init = jnp.full((num_dims,), 0.5)
+                else:
+                    solution_init = jnp.concatenate([jnp.zeros(3), jnp.full((max(0, num_dims - 3),), 0.5)])
                 state = strategy.init(rng_init, solution_init, es_params).replace(std=target_sigma)
             return state
 
@@ -983,7 +1024,10 @@ class FindUB:
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
-            x_valid = jnp.concatenate([x[:, :3], jnp.clip(x[:, 3:], 0.0, 1.0)], axis=1)
+            if freeze_orientation:
+                x_valid = jnp.clip(x, 0.0, 1.0)
+            else:
+                x_valid = jnp.concatenate([x[:, :3], jnp.clip(x[:, 3:], 0.0, 1.0)], axis=1)
             
             if mesh: x_valid = jax.lax.with_sharding_constraint(x_valid, NamedSharding(mesh, P("i")))
             
@@ -1024,7 +1068,7 @@ class FindUB:
             np.array(best_overall_member),
             jac=lambda x_flat: np.array(jax.grad(lambda x: objective(x[None, :])[0])(x_flat)),
             method="L-BFGS-B",
-            bounds=[(0.0, 1.0) if i >= 3 else (None, None) for i in range(num_dims)],
+            bounds=[(0.0, 1.0) for _ in range(num_dims)] if freeze_orientation else [(0.0, 1.0) if i >= 3 else (None, None) for i in range(num_dims)],
             options={"maxiter": 50},
         )
 
@@ -1040,11 +1084,14 @@ class FindUB:
         if offsets_total_batch is not None: self.goniometer_offsets = np.array(offsets_total_batch[0])
         if R_batch is not None: self.R = np.array(R_batch[0])
 
-        rot_params = self.x[:3]
+        if freeze_orientation:
+            rot_params = self.fixed_rot_params
+        else:
+            rot_params = self.x[:3]
         U = objective.orientation_U_jax(rot_params[None])[0]
 
         if refine_lattice:
-            cell_norm = jnp.array(self.x[None, 3 : 3 + num_lattice_params])
+            cell_norm = jnp.array(self.x[None, (0 if freeze_orientation else 3) : (0 if freeze_orientation else 3) + num_lattice_params])
             p_full = np.array(objective.reconstruct_cell_params(cell_norm)[0])
             self.a, self.b, self.c = p_full[:3]
             self.alpha, self.beta, self.gamma = p_full[3:]

@@ -13,7 +13,7 @@ from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExpor
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
-from subhkl.core.spacegroup import get_space_group_object
+from subhkl.core.crystallography.space_group import get_space_group_object
 
 app = typer.Typer()
 
@@ -40,6 +40,7 @@ def indexer(
     gens: int = typer.Option(100, "--gens"), 
     seed: int = typer.Option(0, "--seed"),
     tolerance_deg: float = typer.Option(0.1, "--tolerance-deg"),
+    freeze_orientation: bool = typer.Option(False, "--freeze-orientation", help="Lock the U matrix to its initial state."),
     refine_lattice: bool = typer.Option(False, "--refine-lattice"),
     lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
     refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
@@ -78,6 +79,7 @@ def indexer(
     pop_val, gens_val, runs_val, seed_val = _val(population_size), _val(gens), _val(n_runs), _val(seed)
     tol_val = _val(tolerance_deg)
     sigma_val = _val(sigma_init)
+    freeze_val = _val(freeze_orientation)
     
     gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
     det_banks_list = [int(x.strip()) for x in _val(refine_detector_banks).split(",")] if _val(refine_detector_banks) else None
@@ -136,6 +138,7 @@ def indexer(
     print(f"Starting evosax optimization with strategy: {strat_val}")
     print(f"Running {runs_val} run(s)...")
     print(f"Settings per run: Population Size={pop_val}, Generations={gens_val}")
+    if freeze_val: print("ORIENTATION LOCKED: U Matrix will not be refined.")
     if _val(refine_lattice): print(f"Refining lattice parameters with {_val(lattice_bound_frac) * 100}% bounds.")
     if _val(refine_sample): print(f"Refining sample offset with {1000 * _val(sample_bound_meters)} mm bounds.")
     if _val(refine_beam): print(f"Refining beam tilt with {_val(beam_bound_deg)}° bounds.")
@@ -254,6 +257,7 @@ def indexer(
             refine_goniometer=refine_gonio_flag,
             goniometer_bound_deg=_val(goniometer_bound_deg),
             refine_goniometer_axes=gonio_axes_list,
+            freeze_orientation=freeze_val,
         )
 
     num, hkl, lamda, U = opt.minimize(
@@ -284,6 +288,7 @@ def indexer(
         peak_pixel_coords=peak_pixel_coords,
         detector_trans_bound_meters=_val(detector_trans_bound_meters),
         detector_rot_bound_deg=_val(detector_rot_bound_deg),
+        freeze_orientation=freeze_val,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
@@ -346,7 +351,9 @@ def indexer(
         f["peaks/k"] = hkl[:, 1]
         f["peaks/l"] = hkl[:, 2]
         f["peaks/lambda"] = lamda
-        f["optimization/best_params"] = opt.x
+        
+        if opt.x is not None and opt.x.size > 0:
+            f["optimization/best_params"] = opt.x
         
         if refine_det_flag and hasattr(opt, 'calibrated_centers'):
             for b_idx, b_id in enumerate(target_banks):
@@ -1355,6 +1362,7 @@ def index_images(
     population_size: int = 1000,
     gens: int = 400,
     n_runs: int = 1,
+    freeze_orientation: bool = typer.Option(False, "--freeze-orientation", help="Do not refine the U matrix over SO(3)."),
     batch_size: int = typer.Option(None, help="Number of runs to execute in parallel on GPU."),
     seed: int = 0,
     create_visualizations: bool = typer.Option(False, "--create-visualizations", help="Output PNG overlays of predicted vs extracted peaks."),
@@ -1492,7 +1500,7 @@ def index_images(
         rodrigues_vec = u_rot.as_rotvec()
         injected_rots = np.array([rodrigues_vec])
 
-    if gens > 0:
+    if gens > 0 and not freeze_orientation:
         print(f"Starting Unified Sparse Laue Optimization over SO(3)...")
         print(f"  Images: {len(images_bg)} | Target HKLs: {hkl_pool.shape[1]}")
         opt_U, opt_params = indexer.minimize_evosax(
@@ -1501,7 +1509,10 @@ def index_images(
             injected_rotations=injected_rots
         )
     else:
-        print(f"Skipping SO(3) search. Integrating using provided U matrix...")
+        if freeze_orientation:
+            print(f"Skipping SO(3) search (--freeze-orientation active). Integrating using provided U matrix...")
+        else:
+            print(f"Skipping SO(3) search (gens=0). Integrating using provided U matrix...")
         opt_U = U_initial
         opt_params = np.zeros(3)
 
