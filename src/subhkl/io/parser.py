@@ -13,6 +13,7 @@ from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExpor
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
+from subhkl.core.crystallography.space_group import get_space_group_object
 
 app = typer.Typer()
 
@@ -62,10 +63,6 @@ def index(
     wavelength_min: float | None = None,
     wavelength_max: float | None = None,
 ):
-    """
-    Index the given peak file and save it using the evosax optimizer.
-    """
-
     if input_data is not None:
         opt = FindUB(data=input_data)
     else:
@@ -104,7 +101,6 @@ def index(
             print("WARNING: refine_goniometer requested but goniometer data not found. Skipping.")
             refine_goniometer = False
 
-    # --- DETECTOR METROLOGY SETUP ---
     detector_params = None
     peak_pixel_coords = None
 
@@ -371,8 +367,6 @@ def indexer(
 
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
-        # 1. Resolve Global Physics (Use CLI args first, then fallback to file)
-        
         file_a = f["sample/a"][()] if "sample/a" in f else None
         a_val = _val(a) if _val(a) is not None else file_a
         
@@ -936,9 +930,18 @@ def integrator(
 def mtz_exporter(
     indexed_h5_filename: str,
     output_mtz_filename: str,
-    space_group: str,
+    space_group: str = typer.Option(None, help="Optional. Loaded from indexer h5 if missing."),
 ):
-    algorithm = MTZExporter(indexed_h5_filename, space_group)
+    sg = space_group
+    if sg is None:
+        with h5py.File(indexed_h5_filename, 'r') as f:
+            if "sample/space_group" in f:
+                raw_sg = f["sample/space_group"][()]
+                sg = raw_sg.decode('utf-8') if isinstance(raw_sg, bytes) else str(raw_sg)
+            else:
+                raise ValueError("space_group must be provided as it is missing from the HDF5 file.")
+                
+    algorithm = MTZExporter(indexed_h5_filename, sg)
     algorithm.write_mtz(output_mtz_filename)
 
 
@@ -1007,7 +1010,21 @@ def merge_images(
         ..., help="Glob pattern for reduced .h5 files (e.g. 'reduced/*.h5')"
     ),
     output_filename: str = typer.Argument(..., help="Output master .h5 file"),
+    a: float = typer.Argument(..., help="Unit cell parameter a"), 
+    b: float = typer.Argument(..., help="Unit cell parameter b"), 
+    c: float = typer.Argument(..., help="Unit cell parameter c"),
+    alpha: float = typer.Argument(..., help="Unit cell parameter alpha"), 
+    beta: float = typer.Argument(..., help="Unit cell parameter beta"), 
+    gamma: float = typer.Argument(..., help="Unit cell parameter gamma"), 
+    space_group: str = typer.Argument(..., help="Space group (e.g. 'P 1')"),
 ):
+    
+    try:
+        get_space_group_object(space_group)
+    except ValueError as e:
+        print(f"ERROR: Invalid space group '{space_group}': {e}")
+        raise typer.Exit(code=1)
+
     if " " in input_pattern:
         h5_files = []
         for p in input_pattern.split():
@@ -1024,8 +1041,17 @@ def merge_images(
     print(f"Found {len(h5_files)} files. Merging...")
     merger = ImageStackMerger(h5_files)
     merger.merge(output_filename)
+    
+    with h5py.File(output_filename, "a") as f:
+        f["sample/a"] = a
+        f["sample/b"] = b
+        f["sample/c"] = c
+        f["sample/alpha"] = alpha
+        f["sample/beta"] = beta
+        f["sample/gamma"] = gamma
+        f["sample/space_group"] = space_group.encode('utf-8')
 
-    print(f"Successfully created {output_filename}")
+    print(f"Successfully created {output_filename} with cell constraints embedded.")
 
 @app.command()
 def zone_axis_search(
@@ -1033,9 +1059,13 @@ def zone_axis_search(
     peaks_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
-    a: float, b: float, c: float,
-    alpha: float, beta: float, gamma: float,
-    space_group: str,
+    a: float = typer.Option(None, help="Override unit cell parameter a"), 
+    b: float = typer.Option(None, help="Override unit cell parameter b"), 
+    c: float = typer.Option(None, help="Override unit cell parameter c"),
+    alpha: float = typer.Option(None, help="Override unit cell parameter alpha"), 
+    beta: float = typer.Option(None, help="Override unit cell parameter beta"), 
+    gamma: float = typer.Option(None, help="Override unit cell parameter gamma"), 
+    space_group: str = typer.Option(None, help="Override Space group (e.g. 'P 1')"),
     d_min: float = 1.0,
     sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
     vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
@@ -1056,15 +1086,10 @@ def zone_axis_search(
     Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
     Outputs an HDF5 file that can be passed directly to 'indexer --bootstrap'.
     """
-    import h5py
-    import numpy as np
     import jax.numpy as jnp
-    from subhkl.config import beamlines, reduction_settings
-    from subhkl.optimization import FindUB, VectorizedObjective
+    from subhkl.config import reduction_settings
+    from subhkl.optimization import VectorizedObjective
     from subhkl.search.prior import HoughPrior
-    from subhkl.core.crystallography import generate_reflections
-    from subhkl.core.spacegroup import get_centering
-
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
@@ -1072,9 +1097,33 @@ def zone_axis_search(
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
 
-        from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
         R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
         file_offsets = f_in["file_offsets"][()]
+        
+        file_a = f_in["sample/a"][()] if "sample/a" in f_in else None
+        a_val = a if a is not None else file_a
+        
+        file_b = f_in["sample/b"][()] if "sample/b" in f_in else None
+        b_val = b if b is not None else file_b
+        
+        file_c = f_in["sample/c"][()] if "sample/c" in f_in else None
+        c_val = c if c is not None else file_c
+        
+        file_alpha = f_in["sample/alpha"][()] if "sample/alpha" in f_in else None
+        alpha_val = alpha if alpha is not None else file_alpha
+        
+        file_beta = f_in["sample/beta"][()] if "sample/beta" in f_in else None
+        beta_val = beta if beta is not None else file_beta
+        
+        file_gamma = f_in["sample/gamma"][()] if "sample/gamma" in f_in else None
+        gamma_val = gamma if gamma is not None else file_gamma
+        
+        file_sg = f_in["sample/space_group"][()] if "sample/space_group" in f_in else None
+        if file_sg is not None and isinstance(file_sg, bytes): file_sg = file_sg.decode('utf-8')
+        sg_val = space_group if space_group is not None else file_sg
+        
+        if None in (a_val, b_val, c_val, alpha_val, beta_val, gamma_val, sg_val):
+            raise ValueError("Unit cell parameters and Space Group must be present in the merged.h5 file or provided via CLI.")
 
     if num_runs > 0:
         if len(file_offsets) > num_runs:
@@ -1094,8 +1143,8 @@ def zone_axis_search(
     wavelength_min, wavelength_max = settings.get("Wavelength")
 
     ub_helper = FindUB()
-    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
-    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    ub_helper.a, ub_helper.b, ub_helper.c = a_val, b_val, c_val
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha_val, beta_val, gamma_val
     B_mat = ub_helper.reciprocal_lattice_B()
 
     print("\n--- HOUGH PRIOR GENERATION ---")
@@ -1103,9 +1152,6 @@ def zone_axis_search(
 
     print(f"Loading empirical rays from {peaks_h5_filename}...")
     
-    from subhkl.integration.api import Peaks
-    peaks_api = Peaks(merged_h5_filename, instrument)
-
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
@@ -1199,7 +1245,7 @@ def zone_axis_search(
 
     quats, _ = prior_engine.solve_permutations(
         jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat,
-        space_group=space_group,
+        space_group=sg_val,
         angle_tol_deg=davenport_angle_tol,
         scoring_tol_deg=vector_tolerance,
         d_min=d_min
@@ -1215,7 +1261,7 @@ def zone_axis_search(
         kf_ki_dir=q_lab_all,
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
-        cell_params=[a, b, c, alpha, beta, gamma],
+        cell_params=[a_val, b_val, c_val, alpha_val, beta_val, gamma_val],
         static_R=R_stack,
         peak_run_indices=bank_indices_all 
     )
@@ -1236,17 +1282,17 @@ def zone_axis_search(
         f.create_dataset("sample/U", data=U_matrix)
         f.create_dataset("sample/B", data=B_mat)
 
-        f.create_dataset("sample/a", data=a)
-        f.create_dataset("sample/b", data=b)
-        f.create_dataset("sample/c", data=c)
-        f.create_dataset("sample/alpha", data=alpha)
-        f.create_dataset("sample/beta", data=beta)
-        f.create_dataset("sample/gamma", data=gamma)
+        f.create_dataset("sample/a", data=a_val)
+        f.create_dataset("sample/b", data=b_val)
+        f.create_dataset("sample/c", data=c_val)
+        f.create_dataset("sample/alpha", data=alpha_val)
+        f.create_dataset("sample/beta", data=beta_val)
+        f.create_dataset("sample/gamma", data=gamma_val)
 
         f.create_dataset("sample/offset", data=np.zeros(3))
         f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
         f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
-        f.create_dataset("sample/space_group", data=space_group.encode('utf-8'))
+        f.create_dataset("sample/space_group", data=sg_val.encode('utf-8'))
         f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
 
     print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
@@ -1366,9 +1412,13 @@ def index_images(
     merged_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
-    a: float, b: float, c: float,
-    alpha: float, beta: float, gamma: float,
-    space_group: str,
+    a: float = typer.Option(None, help="Override unit cell parameter a"), 
+    b: float = typer.Option(None, help="Override unit cell parameter b"), 
+    c: float = typer.Option(None, help="Override unit cell parameter c"),
+    alpha: float = typer.Option(None, help="Override unit cell parameter alpha"), 
+    beta: float = typer.Option(None, help="Override unit cell parameter beta"), 
+    gamma: float = typer.Option(None, help="Override unit cell parameter gamma"), 
+    space_group: str = typer.Option(None, help="Override Space group (e.g. 'P 1')"),
     bootstrap: str = typer.Option(None, help="Seed with initial U matrix."),
     d_min: float = 1.0,
     sigma: float = 5.0,
@@ -1407,6 +1457,31 @@ def index_images(
         for offs, f in zip(offsets_excl, file_names_in):
             file_names += [f] * (offs - old_offs)
             old_offs = offs
+            
+        file_a = f_in["sample/a"][()] if "sample/a" in f_in else None
+        a_val = a if a is not None else file_a
+        
+        file_b = f_in["sample/b"][()] if "sample/b" in f_in else None
+        b_val = b if b is not None else file_b
+        
+        file_c = f_in["sample/c"][()] if "sample/c" in f_in else None
+        c_val = c if c is not None else file_c
+        
+        file_alpha = f_in["sample/alpha"][()] if "sample/alpha" in f_in else None
+        alpha_val = alpha if alpha is not None else file_alpha
+        
+        file_beta = f_in["sample/beta"][()] if "sample/beta" in f_in else None
+        beta_val = beta if beta is not None else file_beta
+        
+        file_gamma = f_in["sample/gamma"][()] if "sample/gamma" in f_in else None
+        gamma_val = gamma if gamma is not None else file_gamma
+        
+        file_sg = f_in["sample/space_group"][()] if "sample/space_group" in f_in else None
+        if file_sg is not None and isinstance(file_sg, bytes): file_sg = file_sg.decode('utf-8')
+        sg_val = space_group if space_group is not None else file_sg
+        
+        if None in (a_val, b_val, c_val, alpha_val, beta_val, gamma_val, sg_val):
+            raise ValueError("Unit cell parameters and Space Group must be present in the merged.h5 file or provided via CLI.")
 
         settings = reduction_settings[instrument]
         wavelength_min, wavelength_max = settings.get("Wavelength")
@@ -1437,16 +1512,16 @@ def index_images(
 
     print("Generating theoretical HKL pool...")
     from subhkl.core.crystallography import generate_reflections
-    h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    h, k_idx, l = generate_reflections(a_val, b_val, c_val, alpha_val, beta_val, gamma_val, sg_val, d_min)
     hkl_pool = np.vstack([h, k_idx, l])
 
     ub_helper = FindUB()
-    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
-    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    ub_helper.a, ub_helper.b, ub_helper.c = a_val, b_val, c_val
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha_val, beta_val, gamma_val
     B_mat = ub_helper.reciprocal_lattice_B()
 
     det_centers, uhats, vhats = [], [], []
-    widths, heights, ms, ns = [], [], []
+    widths, heights, ms, ns = [], [], [], []
 
     for i, phys_bank in enumerate(file_bank_ids):
         from subhkl.instrument.detector import Detector
@@ -1578,9 +1653,9 @@ def index_images(
         f["sample/U"] = np.array(opt_U)
         f["sample/B"] = B_mat
 
-        f["sample/a"], f["sample/b"], f["sample/c"] = a, b, c
-        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = alpha, beta, gamma
-        f["sample/space_group"] = space_group.encode('utf-8')
+        f["sample/a"], f["sample/b"], f["sample/c"] = a_val, b_val, c_val
+        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = alpha_val, beta_val, gamma_val
+        f["sample/space_group"] = sg_val.encode('utf-8')
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
         f["goniometer/R"] = R_stack
