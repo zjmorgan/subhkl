@@ -306,7 +306,7 @@ class VectorizedObjective:
         self.wl_max_val = wavelength[1]
         self.num_candidates = 64
 
-        # --- JOINT DETECTOR REFINEMENT SETUP ---
+        # --- JOINT DETECTOR REFINEMENT PIPELINE ---
         self.refine_detector = refine_detector
         if self.refine_detector:
             self.det_centers = jnp.array(detector_params['centers'])
@@ -320,13 +320,32 @@ class VectorizedObjective:
             self.peak_rows = jnp.array(peak_pixel_coords['rows'])
             self.peak_cols = jnp.array(peak_pixel_coords['cols'])
             self.peak_det_idx = jnp.array(peak_pixel_coords['bank_indices'], dtype=jnp.int32)
-            
             self.num_banks = self.det_centers.shape[0]
-            self.det_trans_bound = detector_trans_bound_meters
-            self.det_rot_bound_rad = jnp.deg2rad(detector_rot_bound_deg)
+
+            # Dynamic Metrology Parameter Allocation
+            self.det_modes = detector_params.get('modes', ['independent'])
+            self.det_param_slices = {}
+            self.num_det_params = 0
+            
+            self.bounds = {
+                "radial": detector_params.get("radial_bound", 0.05),
+                "global_rot": jnp.deg2rad(detector_params.get("global_rot_bound_deg", 2.0)),
+                "global_trans": detector_params.get("global_trans_bound_meters", 0.01),
+                "independent_trans": detector_trans_bound_meters,
+                "independent_rot": jnp.deg2rad(detector_rot_bound_deg)
+            }
+
+            for mode in self.det_modes:
+                if mode == "radial": size = 1
+                elif mode == "global_rot": size = 3
+                elif mode == "global_trans": size = 3
+                elif mode == "independent": size = self.num_banks * 6
+                else: raise ValueError(f"Unknown detector refinement mode: {mode}")
+                
+                self.det_param_slices[mode] = slice(self.num_det_params, self.num_det_params + size)
+                self.num_det_params += size
 
     def orientation_U_jax(self, param):
-        """Vectorized U matrix calculation from Rodrigues vectors"""
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
         return U
 
@@ -441,22 +460,59 @@ class VectorizedObjective:
             offsets_total = None
             R = None
 
-        # --- DYNAMIC DETECTOR CALIBRATION ---
+        # --- DYNAMIC DETECTOR CALIBRATION (TRANSFORMATION PIPELINE) ---
         if self.refine_detector:
-            n_det_params = self.num_banks * 6
-            det_params = x[:, idx : idx + n_det_params]
-            idx += n_det_params
+            det_params = x[:, idx : idx + self.num_det_params]
+            idx += self.num_det_params
             
-            det_trans_norm = det_params[:, :self.num_banks * 3].reshape(-1, self.num_banks, 3)
-            det_trans = _forward_map_param(det_trans_norm, self.det_trans_bound)
-            dyn_centers = self.det_centers[None, :, :] + det_trans
-            
-            det_rot_norm = det_params[:, self.num_banks * 3:].reshape(-1, self.num_banks, 3)
-            det_rot_vecs = _forward_map_param(det_rot_norm, self.det_rot_bound_rad)
-            det_R = jax.vmap(jax.vmap(rotation_matrix_from_rodrigues_jax))(det_rot_vecs)
-            
-            dyn_uhats = jnp.einsum("sbij,bj->sbi", det_R, self.det_uhats)
-            dyn_vhats = jnp.einsum("sbij,bj->sbi", det_R, self.det_vhats)
+            S = x.shape[0]
+            # Initialize with nominal spatial vectors
+            c = self.det_centers[None, :, :].repeat(S, axis=0)
+            u = self.det_uhats[None, :, :].repeat(S, axis=0)
+            v = self.det_vhats[None, :, :].repeat(S, axis=0)
+
+            # Mode 1: Breathing (Radial Scaling)
+            if "radial" in self.det_modes:
+                slc = self.det_param_slices["radial"]
+                scale_norm = det_params[:, slc]
+                scale = _forward_map_param(scale_norm, self.bounds["radial"])
+                c = c * (1.0 + scale[:, :, None])
+
+            # Mode 2: Global Roll/Pitch/Yaw
+            if "global_rot" in self.det_modes:
+                slc = self.det_param_slices["global_rot"]
+                rot_norm = det_params[:, slc]
+                rot_vec = _forward_map_param(rot_norm, self.bounds["global_rot"])
+                R_global = jax.vmap(rotation_matrix_from_rodrigues_jax)(rot_vec)
+                
+                c = jnp.einsum("sij,snj->sni", R_global, c)
+                u = jnp.einsum("sij,snj->sni", R_global, u)
+                v = jnp.einsum("sij,snj->sni", R_global, v)
+
+            # Mode 3: Global Translation
+            if "global_trans" in self.det_modes:
+                slc = self.det_param_slices["global_trans"]
+                trans_norm = det_params[:, slc]
+                trans_vec = _forward_map_param(trans_norm, self.bounds["global_trans"])
+                c = c + trans_vec[:, None, :]
+
+            # Mode 4: Independent Panel Metrology
+            if "independent" in self.det_modes:
+                slc = self.det_param_slices["independent"]
+                indep_params = det_params[:, slc]
+                
+                t_norm = indep_params[:, :self.num_banks * 3].reshape(-1, self.num_banks, 3)
+                t_vec = _forward_map_param(t_norm, self.bounds["independent_trans"])
+                c = c + t_vec
+                
+                r_norm = indep_params[:, self.num_banks * 3:].reshape(-1, self.num_banks, 3)
+                r_vec = _forward_map_param(r_norm, self.bounds["independent_rot"])
+                R_local = jax.vmap(jax.vmap(rotation_matrix_from_rodrigues_jax))(r_vec)
+                
+                u = jnp.einsum("snij,snj->sni", R_local, u)
+                v = jnp.einsum("snij,snj->sni", R_local, v)
+
+            dyn_centers, dyn_uhats, dyn_vhats = c, u, v
         else:
             dyn_centers, dyn_uhats, dyn_vhats = None, None, None
 
@@ -530,7 +586,6 @@ class VectorizedObjective:
         else:
             R_per_peak = None
 
-        # Determine Sample Origin Offset per peak
         if R_per_peak is not None:
             if R_per_peak.ndim == 4:
                 s_lab = jnp.matmul(R_per_peak, sample_total[:, None, :, None]).squeeze(-1)
@@ -544,7 +599,6 @@ class VectorizedObjective:
         else:
             s = sample_total[:, :, None]
 
-        # Calculate dynamic XYZ from panels if refining
         if self.refine_detector:
             c = dyn_centers[:, self.peak_det_idx, :]
             u_vec = dyn_uhats[:, self.peak_det_idx, :]
@@ -563,7 +617,6 @@ class VectorizedObjective:
         else:
             p = self.peak_xyz[None, :, :] if self.peak_xyz is not None else None
 
-        # Construct Ray
         if p is not None:
             v = p - s
             dist = jnp.sqrt(jnp.sum(v**2, axis=1, keepdims=True))
@@ -577,7 +630,6 @@ class VectorizedObjective:
             q_lab = kf - ki
             k_sq_dyn = jnp.sum(q_lab**2, axis=1)
 
-        # Rotate to Crystal Frame
         if R_per_peak is not None:
             q_lab_vec = q_lab.transpose(0, 2, 1)[..., None]
             if R_per_peak.ndim == 4:
@@ -887,7 +939,7 @@ class FindUB:
         if refine_sample and self.peak_xyz is not None: num_dims += 3
         if refine_beam and self.peak_xyz is not None: num_dims += 2
         if refine_goniometer: num_dims += np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
-        if refine_detector: num_dims += len(detector_params['centers']) * 6
+        if refine_detector: num_dims += objective.num_det_params
 
         start_sol_processed = None
         if init_params is not None:
