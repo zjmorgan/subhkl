@@ -182,7 +182,6 @@ class VectorizedObjective:
         kf_ki_dir,
         peak_xyz_lab,
         wavelength,
-        tolerance_deg=0.1,
         cell_params=None,
         refine_lattice=False,
         lattice_bound_frac=0.05,
@@ -217,7 +216,6 @@ class VectorizedObjective:
 
         self.k_sq_init = jnp.sum(self.kf_ki_dir_init**2, axis=0)
         num_peaks = self.kf_ki_dir_init.shape[1]
-        self.tolerance_rad = jnp.deg2rad(tolerance_deg)
         self.freeze_orientation = freeze_orientation
         self.fixed_rot_params = jnp.array(fixed_rot_params) if fixed_rot_params is not None else jnp.zeros(3)
 
@@ -925,6 +923,7 @@ class FindUB:
             refine_goniometer=refine_goniometer,
             goniometer_refine_mask=goniometer_refine_mask,
             goniometer_nominal_offsets=self.base_gonio_offset,
+            goniometer_bound_deg=goniometer_bound_deg,
             refine_sample=refine_sample,
             sample_bound_meters=sample_bound_meters,
             sample_nominal=self.base_sample_offset,
