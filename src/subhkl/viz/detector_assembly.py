@@ -197,7 +197,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             v_ell = r_center + a * cos_t * np.sin(phi) + b * sin_t * np.cos(phi)
 
             ell_xyz = det.pixel_to_lab(v_ell, u_ell)
-            ell_xyz v = lab_xyz - s_lab
+            ell_xyz = ell_xyz - s_lab
             e_X, e_Y, e_Z = ell_xyz[..., 0], ell_xyz[..., 1], ell_xyz[..., 2]
             e_roty = np.rad2deg(np.arctan2(e_X, e_Z))
 
