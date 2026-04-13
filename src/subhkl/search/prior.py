@@ -470,7 +470,7 @@ class HoughPrior:
                 print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
 
         best_loss = physics_losses_np[physics_sort_idx[0]]
-        z_score = (best_loss - r_mean) / (r_std + 1e-9)
+        z_score = (r_mean - best_loss) / (r_std + 1e-9)
 
         print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.2f} | Z-Score: {z_score:.1f} sigma")
         print(f"  -> Top 5 Prior Scores: {physics_losses_np[physics_sort_idx[:5]]}")
