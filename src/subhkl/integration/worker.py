@@ -294,6 +294,7 @@ def process_single_image(
 
 
 def predict_single_bank(
+    img_key,
     bank_id,
     det_config,
     unit_cell_params,
@@ -349,7 +350,7 @@ def predict_single_bank(
     )
     if len(row) > 0:
         return bank_id, [row, col, h_f, k_f, l_f, wl_f]
-    return bank_id, None
+    return img_key, None
 
 
 def integrate_single_bank(
