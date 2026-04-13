@@ -1404,6 +1404,7 @@ class RunPeaks:
     var_u: list
     var_v: list
     cov_uv: list
+    ki_vec: np.ndarray
 
 def _render_run_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
@@ -1496,7 +1497,7 @@ def _render_and_save_rbf_plot(args):
 def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                             alpha: float, gamma: float, max_peaks: int, show_progress: bool,
                             all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            nominal_sigma: float = 2.0, anisotropic: bool = False,
+                            ki_vec: np.ndarray = None, nominal_sigma: float = 2.0, anisotropic: bool = False,
                             fit_mosaicity: bool = False,
                             border_width: int = 0, chunk_size: int = 1024,
                             create_visualizations: bool = False, max_workers: int = None):
@@ -1523,6 +1524,8 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
     res = RBFResult()
     if sample_offset is None:
         sample_offset = np.zeros(3)
+    if ki_vec is None:
+        ki_vec = np.array([0,0,1.0])
 
     total_images = len(peaks_obj.image.ims)
     def get_R_for_img(img_key_str):
@@ -1839,6 +1842,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 var_u=[res.var_u[i] for i in mask],
                 var_v=[res.var_v[i] for i in mask],
                 cov_uv=[res.cov_uv[i] for i in mask]
+                ki_vec=ki_vec,
             )
 
             run_tasks.append((image_label, run_peaks, data['images'], data['detectors'], peaks_obj.instrument))
