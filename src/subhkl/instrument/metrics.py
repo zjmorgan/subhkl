@@ -48,28 +48,74 @@ def extract_xyz_from_file(file_path, instrument=None):
     with h5py.File(file_path, "r") as f:
         run_idx = resolve_indices(f)
         
+        # Determine the physical bank array for mapping
+        bank_array = None
+        if "bank" in f: bank_array = f["bank"][()]
+        elif "peaks/bank" in f: bank_array = f["peaks/bank"][()]
+        elif "bank_ids" in f and run_idx is not None:
+            # Map run/image index to physical bank ID
+            b_ids = f["bank_ids"][()]
+            bank_array = np.array([b_ids[int(r)] for r in run_idx])
+        else:
+            bank_array = run_idx
+            
+        # --- Load Calibration if available ---
+        calibration_dict = {}
+        if "detector_calibration" in f:
+            calib_grp = f["detector_calibration"]
+            for b_key in calib_grp.keys():
+                calibration_dict[b_key] = {
+                    "center": calib_grp[b_key]["center"][()],
+                    "uhat": calib_grp[b_key]["uhat"][()],
+                    "vhat": calib_grp[b_key]["vhat"][()]
+                }
+
         # 1. Directly stored XYZ (Finder or Integrator)
         if "peaks/xyz" in f:
             xyz = f["peaks/xyz"][()]
             if run_idx is None: run_idx = np.zeros(len(xyz))
+            if bank_array is None: bank_array = run_idx
+            
+            # --- DYNAMICALLY APPLY CALIBRATION TO RAW XYZ ---
+            if calibration_dict and instrument is not None:
+                new_xyz = np.copy(xyz)
+                has_pixels = "peaks/pixel_r" in f and "peaks/pixel_c" in f
+                if has_pixels:
+                    pixel_r, pixel_c = f["peaks/pixel_r"][()], f["peaks/pixel_c"][()]
+
+                for phys_bank in np.unique(bank_array):
+                    bank_str = f"bank_{int(phys_bank)}"
+                    if bank_str not in calibration_dict: continue
+                        
+                    mask = bank_array == phys_bank
+                    if not np.any(mask): continue
+                        
+                    try:
+                        det_config = beamlines[instrument][str(int(phys_bank))]
+                        det_nom = Detector(det_config)
+                        
+                        det_calib = Detector(det_config)
+                        det_calib.center = calibration_dict[bank_str]["center"]
+                        det_calib.uhat = calibration_dict[bank_str]["uhat"]
+                        det_calib.vhat = calibration_dict[bank_str]["vhat"]
+                        
+                        if has_pixels:
+                            r_b, c_b = pixel_r[mask], pixel_c[mask]
+                        else:
+                            # Reverse project uncalibrated XYZ to pixels
+                            r_b, c_b = det_nom.lab_to_pixel(xyz[mask, 0], xyz[mask, 1], xyz[mask, 2], clip=False)
+                            
+                        # Forward project pixels to calibrated XYZ
+                        new_xyz[mask] = det_calib.pixel_to_lab(r_b, c_b)
+                    except KeyError:
+                        pass
+                return new_xyz, run_idx
             return xyz, run_idx
             
         # 2. Bank/Pixel format (Predictor output)
         if "banks" in f:
-            xyz_list = []
-            run_list = []
+            xyz_list, run_list = [], []
             bank_ids = f["bank_ids"][()] if "bank_ids" in f else None
-            
-            # --- Load Calibration if available ---
-            calibration_dict = {}
-            if "detector_calibration" in f:
-                calib_grp = f["detector_calibration"]
-                for b_key in calib_grp.keys():
-                    calibration_dict[b_key] = {
-                        "center": calib_grp[b_key]["center"][()],
-                        "uhat": calib_grp[b_key]["uhat"][()],
-                        "vhat": calib_grp[b_key]["vhat"][()]
-                    }
             
             for img_key_str in f["banks"].keys():
                 img_idx = int(img_key_str)
@@ -78,11 +124,9 @@ def extract_xyz_from_file(file_path, instrument=None):
                 
                 phys_bank = bank_ids[img_idx] if bank_ids is not None else img_idx
                 try:
-                    # Construct nominal detector
                     det_config = beamlines[instrument][str(phys_bank)]
                     det = Detector(det_config)
                     
-                    # Overwrite with calibrated metadata if present
                     bank_str = f"bank_{phys_bank}"
                     if bank_str in calibration_dict:
                         det.center = calibration_dict[bank_str]["center"]
@@ -97,8 +141,7 @@ def extract_xyz_from_file(file_path, instrument=None):
                 except KeyError:
                     continue
                     
-            if xyz_list:
-                return np.vstack(xyz_list), np.array(run_list)
+            if xyz_list: return np.vstack(xyz_list), np.array(run_list)
                 
         # 3. Two-Theta / Azimuthal fallback
         if "peaks/two_theta" in f and "peaks/azimuthal" in f:
