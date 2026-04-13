@@ -213,7 +213,7 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
-    # 4. Plot the Integrated Peaks (FIXED: Re-calculate XYZ from Pixels)
+    # 4. Plot the Integrated Peaks
     if getattr(peaks, 'peak_rows', None) is not None and getattr(peaks, 'peak_cols', None) is not None:
         p_rotys = []
         p_Ys = []
@@ -223,16 +223,15 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             det = detectors.get(img_key)
             if det is None: continue
             
-            # --- FIX: Apply s_lab to integrated peak projection ---
             s_lab = get_s_lab_for_image(img_key)
             
             r_center = peaks.peak_rows[i]
             c_center = peaks.peak_cols[i]
             
-            # Pass s_lab here!
-            p_xyz = det.pixel_to_lab(r_center, c_center, sample_offset=s_lab)
+            lab_xyz = det.pixel_to_lab(r_center, c_center)
+            v = lab_xyz - s_lab
             
-            p_X, p_Y, p_Z = p_xyz[0], p_xyz[1], p_xyz[2]
+            p_X, p_Y, p_Z = v[0], v[1], v[2]
             p_roty = np.rad2deg(np.arctan2(p_X, p_Z))
             
             if img_key in wrapped_panels and p_roty < 0:
