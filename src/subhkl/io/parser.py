@@ -1247,7 +1247,6 @@ def zone_axis_search(
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
         cell_params=[a, b, c, alpha, beta, gamma],
-        d_min=d_min,
         # 4. The Magic Link:
         # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
         # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
