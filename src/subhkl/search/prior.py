@@ -423,7 +423,7 @@ class HoughPrior:
             batch = rand_rots[i:i+batch_size]
             losses = np.array(-objective_function(batch))
             rand_losses.append(losses)
-        rand_scores = np.concatenate(rand_scores)
+        rand_losses = np.concatenate(rand_losses)
 
         r_mean = np.mean(rand_losses)
         r_std = np.std(rand_losses)
