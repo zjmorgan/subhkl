@@ -499,12 +499,14 @@ class VectorizedObjective:
             # Mode 2b: Global Rotation around a Fixed Axis (Constrained 1D)
             if "global_rot_axis" in self.det_modes:
                 slc = self.det_param_slices["global_rot_axis"]
-                # Extract the 1D angle and squeeze to shape (S,) for broadcasting
-                angle_norm = det_params[:, slc, 0] 
+                # Extract the 1D angle and reshape to (S,) for broadcasting
+                angle_norm = det_params[:, slc].reshape(-1) 
                 angle_rad = _forward_map_param(angle_norm, self.bounds["global_rot_axis"])
                 
                 # JAX broadcasts angle_rad (S,) perfectly into (S, 3, 3) rotation matrices
-                R_global = rotation_matrix_from_axis_angle_jax(self.det_global_rot_axis, angle_rad)
+                R_global = jax.vmap(rotation_matrix_from_axis_angle_jax, in_axes=(None, 0))(
+                    self.det_global_rot_axis, angle_rad
+                )
                 
                 c = jnp.einsum("sij,snj->sni", R_global, c)
                 u = jnp.einsum("sij,snj->sni", R_global, u)
