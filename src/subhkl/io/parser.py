@@ -1307,6 +1307,10 @@ def rbf_integrator(
     chunk_size: int = 256,
     max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
 ):
+    import h5py
+    from subhkl.integration import Peaks
+    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
+
     apply_detector_calibration(integration_peaks_filename, instrument)
 
     sigma_list = [float(k.strip()) for k in sigmas.split(",")]
