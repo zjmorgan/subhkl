@@ -421,7 +421,7 @@ class HoughPrior:
         rand_losses = []
         for i in tqdm.tqdm(range(0, len(rand_rots), batch_size), desc="Forward Model Filter (random)"):
             batch = rand_rots[i:i+batch_size]
-            losses = np.array(-objective_function(batch))
+            losses = np.array(objective_function(batch))
             rand_losses.append(losses)
         rand_losses = np.concatenate(rand_losses)
 
@@ -470,16 +470,16 @@ class HoughPrior:
                 print(f"  -> Target Overlap in Top {N}: {overlap}/{N} ({overlap/N*100:.1f}%)")
 
         best_loss = physics_losses_np[physics_sort_idx[0]]
-        z_loss = (best_loss - r_mean) / (r_std + 1e-9)
+        z_score = (best_loss - r_mean) / (r_std + 1e-9)
 
-        print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.2f} | Z-Score: {z_loss:.1f} sigma")
+        print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.2f} | Z-Score: {z_score:.1f} sigma")
         print(f"  -> Top 5 Prior Scores: {physics_losses_np[physics_sort_idx[:5]]}")
 
-        if z_loss >= z_loss_threshold:
-            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_loss:.1f} sigma). Proceeding to GA...")
+        if z_score >= z_score_threshold:
+            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
             return prior_rots[physics_sort_idx]
         else:
-            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_loss:.1f} < {z_loss_threshold}). Falling back to Uniform GA...")
+            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.1f} < {z_score_threshold}). Falling back to Uniform GA...")
             return None
 
 @jax.jit
