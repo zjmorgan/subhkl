@@ -18,6 +18,7 @@ from subhkl.core.spacegroup import get_space_group_object
 app = typer.Typer()
 
 
+
 @app.command()
 def indexer(
     peaks_h5_filename: str, 
@@ -31,6 +32,7 @@ def indexer(
     space_group: str = typer.Option(None, help="Space group (e.g. 'P 1')"),
     wavelength_min: float | None = typer.Option(None, "--wavelength-min"), 
     wavelength_max: float | None = typer.Option(None, "--wavelength-max"),
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector (e.g., '0,0,1' or '0,0,-1')"),
     original_nexus_filename: str | None = typer.Option(None, "--nexus", help="Original nexus file for instrument definitions"),
     instrument_name: str | None = typer.Option(None, "--instrument"), 
     strategy_name: str = typer.Option("DE", "--strategy"),
@@ -131,6 +133,9 @@ def indexer(
     input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha_val, beta_val, gamma_val
     input_data["sample/space_group"] = sg_val
     input_data["instrument/wavelength"] = [float(w_min_val), float(w_max_val)]
+
+    if _val(ki_vec) is not None:
+        input_data["beam/ki_vec"] = np.array([float(x.strip()) for x in _val(ki_vec).split(",")])
 
     opt = FindUB(data=input_data)
     opt.wavelength = [float(w_min_val), float(w_max_val)]
@@ -534,20 +539,17 @@ def metrics(
         "--per-run",
         help="Calculate and display metrics for each run/image.",
     ),
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector (e.g. '0,0,1')"),
 ):
     """
     CLI command to compute and display indexing quality metrics.
-
     Calls compute_metrics from subhkl.instrument.metrics and formats output for display.
     """
-    if hasattr(found_peaks_file, "default"):
-        found_peaks_file = found_peaks_file.default
-    if hasattr(instrument, "default"):
-        instrument = instrument.default
-    if hasattr(d_min, "default"):
-        d_min = d_min.default
-    if hasattr(per_run, "default"):
-        per_run = per_run.default
+    if hasattr(found_peaks_file, "default"): found_peaks_file = found_peaks_file.default
+    if hasattr(instrument, "default"): instrument = instrument.default
+    if hasattr(d_min, "default"): d_min = d_min.default
+    if hasattr(per_run, "default"): per_run = per_run.default
+    if hasattr(ki_vec, "default"): ki_vec = ki_vec.default
 
     result = compute_metrics(
         filename=filename,
@@ -589,6 +591,7 @@ def peak_predictor(
     space_group: str | None = None,
     wavel_min: float | None = None,
     wavel_max: float | None = None,
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     max_workers: int = 16,
 ):
     with h5py.File(indexed_hdf5_filename, "r") as f_idx:
@@ -622,10 +625,12 @@ def peak_predictor(
         else:
             sample_offset = np.zeros(3)
 
-        if "beam/ki_vec" in f_idx:
-            ki_vec = f_idx["beam/ki_vec"][()]
+        if ki_vec is not None:
+            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
+        elif "beam/ki_vec" in f_idx:
+            ki_vec_val = f_idx["beam/ki_vec"][()]
         else:
-            ki_vec = np.array([0.0, 0.0, 1.0])
+            ki_vec_val = np.array([0.0, 0.0, 1.0])
 
     peaks = Peaks(
         filename,
@@ -663,7 +668,7 @@ def peak_predictor(
     results_map = peaks.predict_peaks(
         a, b, c, alpha, beta, gamma, d_min,
         RUB=RUB, space_group=space_group, sample_offset=sample_offset,
-        ki_vec=ki_vec, max_workers=max_workers, R_all=all_R,
+        ki_vec=ki_vec_val, max_workers=max_workers, R_all=all_R,
     )
 
     print(f"Saving predictions to {integration_peaks_filename}")
@@ -700,7 +705,7 @@ def peak_predictor(
             )
 
         f["sample/offset"] = sample_offset
-        f["beam/ki_vec"] = ki_vec
+        f["beam/ki_vec"] = ki_vec_val
 
         for img_key, (i, j, h, k, l, wl) in results_map.items():  # noqa: E741
             grp = f.create_group(f"banks/{img_key}")
@@ -730,6 +735,7 @@ def integrator(
     peak_minimum_pixels: int = 10,
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     create_visualizations: bool = False,
     show_progress: bool = True,
     found_peaks_file: str = None,
@@ -754,10 +760,13 @@ def integrator(
             sample_offset = f["sample/offset"][()]
         else:
             sample_offset = np.zeros(3)
-        if "beam/ki_vec" in f:
-            ki_vec = f["beam/ki_vec"][()]
+
+        if ki_vec is not None:
+            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
+        elif "beam/ki_vec" in f:
+            ki_vec_val = f["beam/ki_vec"][()]
         else:
-            ki_vec = np.array([0.0, 0.0, 1.0])
+            ki_vec_val = np.array([0.0, 0.0, 1.0])
 
         for key in f["banks"].keys():
             img_idx = int(key)
@@ -807,7 +816,7 @@ def integrator(
         R_stack=all_R,
         angles_stack=angles_stack,
         sample_offset=sample_offset,
-        ki_vec=ki_vec,
+        ki_vec=ki_vec_val,
         create_visualizations=create_visualizations,
         show_progress=show_progress,
         integration_method=integration_method,
@@ -1002,6 +1011,7 @@ def zone_axis_search(
     beta: float = typer.Option(None, help="Override unit cell parameter beta"), 
     gamma: float = typer.Option(None, help="Override unit cell parameter gamma"), 
     space_group: str = typer.Option(None, help="Override Space group (e.g. 'P 1')"),
+    ki_vec: str = typer.Option("0,0,1", "--ki-vec", help="Incident beam vector"),
     d_min: float = 1.0,
     sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
     vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
@@ -1083,8 +1093,17 @@ def zone_axis_search(
     ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha_val, beta_val, gamma_val
     B_mat = ub_helper.reciprocal_lattice_B()
 
+    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
+        ki_vec_override = None if ki_vec == "0,0,1" else np.array([float(x.strip()) for x in ki_vec.split(",")])
+        if ki_vec_override is not None:
+            ki_vec_val = ki_vec_override
+        elif "beam/ki_vec" in f_peaks:
+            ki_vec_val = f_peaks["beam/ki_vec"][()]
+        else:
+            ki_vec_val = np.array([0.0, 0.0, 1.0])
+
     print("\n--- HOUGH PRIOR GENERATION ---")
-    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
+    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=ki_vec_val)
 
     print(f"Loading empirical rays from {peaks_h5_filename}...")
     
@@ -1096,11 +1115,6 @@ def zone_axis_search(
             group_indices = f_peaks["peaks/image_index"][()]
         else:
             group_indices = f_peaks["peaks/run_index"][()]
-
-        if "beam/ki_vec" in f_peaks:
-            ki_vec = f_peaks["beam/ki_vec"][()]
-        else:
-            ki_vec = np.array([0.0, 0.0, 1.0])
 
         R_peaks_override = f_peaks.get("goniometer/R")
         if R_peaks_override is not None:
@@ -1139,7 +1153,7 @@ def zone_axis_search(
         grp_intensity_top = grp_intensity[top_k_idx]
 
         kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
-        q_lab = kf - ki_vec[None, :]
+        q_lab = kf - ki_vec_val[None, :]
         q_sample = np.dot(q_lab, R_gonio)
 
         q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
@@ -1199,7 +1213,8 @@ def zone_axis_search(
         wavelength=[wavelength_min, wavelength_max],
         cell_params=[a_val, b_val, c_val, alpha_val, beta_val, gamma_val],
         static_R=R_stack,
-        peak_run_indices=bank_indices_all 
+        peak_run_indices=bank_indices_all,
+        beam_nominal=ki_vec_val
     )
 
     prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
@@ -1226,7 +1241,7 @@ def zone_axis_search(
         f.create_dataset("sample/gamma", data=gamma_val)
 
         f.create_dataset("sample/offset", data=np.zeros(3))
-        f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
+        f.create_dataset("beam/ki_vec", data=ki_vec_val)
         f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
         f.create_dataset("sample/space_group", data=sg_val.encode('utf-8'))
         f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
@@ -1247,6 +1262,7 @@ def rbf_integrator(
     fit_mosaicity: bool = typer.Option(False, help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries."),
     max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
     rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     show_progress: bool = typer.Option(True, "--show-progress"),
     create_visualizations: bool = False,
     chunk_size: int = 256,
@@ -1277,6 +1293,13 @@ def rbf_integrator(
         else:
             sample_offset = np.zeros(3)
             
+        if ki_vec is not None:
+            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
+        elif "beam/ki_vec" in f:
+            ki_vec_val = f["beam/ki_vec"][()]
+        else:
+            ki_vec_val = np.array([0.0, 0.0, 1.0])
+
         for key in f["banks"].keys():
             img_idx = int(key)
             grp = f[f"banks/{key}"]
@@ -1306,6 +1329,7 @@ def rbf_integrator(
         show_progress=show_progress,
         all_R=all_R,                 
         sample_offset=sample_offset,
+        ki_vec=ki_vec_val,
         anisotropic=anisotropic,
         fit_mosaicity=fit_mosaicity,
         border_width=border_width,
@@ -1355,6 +1379,7 @@ def index_images(
     beta: float = typer.Option(None, help="Override unit cell parameter beta"), 
     gamma: float = typer.Option(None, help="Override unit cell parameter gamma"), 
     space_group: str = typer.Option(None, help="Override Space group (e.g. 'P 1')"),
+    ki_vec: str = typer.Option("0,0,1", "--ki-vec", help="Incident beam vector"),
     bootstrap: str = typer.Option(None, help="Seed with initial U matrix."),
     d_min: float = 1.0,
     sigma: float = 5.0,
@@ -1369,6 +1394,7 @@ def index_images(
     border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
 ):
     from subhkl.config import beamlines, reduction_settings
+    ki_vec_arr = np.array([float(x.strip()) for x in ki_vec.split(",")])
 
     with h5py.File(merged_h5_filename, 'r') as f_in:
         U_initial = f_in["sample/U"][()] if "sample/U" in f_in else None
@@ -1484,7 +1510,7 @@ def index_images(
         'det_centers': np.array(det_centers), 'uhats': np.array(uhats),
         'vhats': np.array(vhats), 'widths': np.array(widths), 'heights': np.array(heights),
         'ms': np.array(ms), 'ns': np.array(ns),
-        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3),
+        'ki_vec': ki_vec_arr, 'sample_offset': np.zeros(3),
         'border_frac': border_frac,
     }
 
@@ -1599,7 +1625,7 @@ def index_images(
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
         f["goniometer/R"] = R_stack
-        f["beam/ki_vec"] = np.array([0.0, 0.0, 1.0])
+        f["beam/ki_vec"] = ki_vec_arr
         f["sample/offset"] = np.zeros(3)
 
         f["optimization/best_params"] = np.array(opt_params)
