@@ -518,16 +518,16 @@ def finder(
 
 @app.command()
 def metrics(
-    filename: str,
-    found_peaks_file: str | None = typer.Option(
+    file1: str = typer.Argument(..., help="Primary file (e.g., indexer.h5 or predictor.h5)"),
+    file2: str | None = typer.Option(
         None,
-        "--found-peaks",
-        help="Optional file with found peaks to compare against (e.g. finder.h5).",
+        "--file2",
+        help="Optional secondary file to match against (e.g., finder.h5).",
     ),
     instrument: str | None = typer.Option(
         None,
         "--instrument",
-        help="Instrument name (required if matching peaks).",
+        help="Instrument name (required if using file2 or predictor outputs).",
     ),
     d_min: float = typer.Option(
         None,
@@ -539,24 +539,29 @@ def metrics(
         "--per-run",
         help="Calculate and display metrics for each run/image.",
     ),
-    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector (e.g. '0,0,1')"),
+    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector (e.g. '0,0,-1')"),
 ):
     """
     CLI command to compute and display indexing quality metrics.
-    Calls compute_metrics from subhkl.instrument.metrics and formats output for display.
+    Compares HKL accuracy internally (file1), or spatial matching between file1 (predicted) and file2 (observed).
     """
-    if hasattr(found_peaks_file, "default"): found_peaks_file = found_peaks_file.default
+    if hasattr(file2, "default"): file2 = file2.default
     if hasattr(instrument, "default"): instrument = instrument.default
     if hasattr(d_min, "default"): d_min = d_min.default
     if hasattr(per_run, "default"): per_run = per_run.default
     if hasattr(ki_vec, "default"): ki_vec = ki_vec.default
 
+    ki_vec_arr = None
+    if ki_vec is not None:
+        ki_vec_arr = np.array([float(x.strip()) for x in ki_vec.split(",")])
+
     result = compute_metrics(
-        filename=filename,
-        found_peaks_file=found_peaks_file,
+        file1=file1,
+        file2=file2,
         instrument=instrument,
         d_min=d_min,
         per_run=per_run,
+        ki_vec_override=ki_vec_arr
     )
 
     if "error_message" in result:
@@ -578,7 +583,6 @@ def metrics(
         for r, err, count in result["per_run_errors"]:
             status = "BAD" if err > 1.0 else "OK"
             print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
-
 
 @app.command()
 def peak_predictor(
