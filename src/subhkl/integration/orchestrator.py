@@ -207,50 +207,54 @@ def prepare_predict_tasks(
     ki_vec: Optional[np.ndarray] = None,
     R_all: Optional[np.ndarray] = None,
 ) -> List[Tuple[Any, ...]]:
-    """Packages data for predict_single_bank workers."""
     ims = image_data.ims
     bank_mapping = image_data.bank_mapping
     tasks = []
 
-    # Package scalar params to send to workers
     unit_cell_params = (a, b, c, alpha, beta, gamma, space_group, d_min)
 
     sorted_keys = sorted(image_data.ims.keys())
-    use_stack = RUB.ndim == 3 and RUB.shape[0] > 1
+    if not sorted_keys:
+        return []
 
-    print(f"Predicting peaks for {len(ims)} banks...")
+    total_images = len(sorted_keys)
+
+    def _resolve(stack, seq_idx, name):
+        if stack is None: 
+            return None
+            
+        is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
+        if not is_batch:
+            return stack
+        
+        n_items = stack.shape[0]
+        if n_items == 1:
+            return stack[0]
+            
+        if n_items == total_images:
+            return stack[seq_idx]
+            
+        raise ValueError(
+            f"CRITICAL: Array dimension mismatch for '{name}'. "
+            f"The stack contains {n_items} matrices, but the dataset has {total_images} images. "
+            f"Run index fallback is strictly disabled to prevent misalignment. "
+            f"Ensure the geometry stack is uncompressed and maps 1:1."
+        )
+
+    print(f"Predicting peaks for {total_images} banks...")
 
     for _i, bank in enumerate(sorted_keys):
         det_config = beamlines[instrument][str(bank_mapping.get(bank, bank))]
-        run_id = image_data.get_run_id(bank)
 
-        if use_stack:
-            # Use image index if stack matches image count, otherwise use run index
-            idx = bank if RUB.shape[0] == len(ims) else run_id
-            if idx >= RUB.shape[0]:
-                idx = -1
-            rub_val = RUB[idx]
-        else:
-            rub_val = RUB if RUB.ndim == 2 else RUB[0]
-
-        # Resolve current R for this bank (used for sample offset rotation)
-        current_R_val = None
-        if R_all is not None:
-            if R_all.ndim == 3:
-                idx_r = bank if R_all.shape[0] == len(ims) else run_id
-                if idx_r < R_all.shape[0]:
-                    current_R_val = R_all[idx_r]
-                else:
-                    current_R_val = R_all[0]
-            else:
-                current_R_val = R_all
+        current_rub = _resolve(RUB, _i, "RUB")
+        current_R_val = _resolve(R_all, _i, "R_all")
 
         tasks.append(
             (
                 bank,
                 det_config,
                 unit_cell_params,
-                rub_val,
+                current_rub,
                 wavelength_min,
                 wavelength_max,
                 sample_offset,
@@ -259,7 +263,6 @@ def prepare_predict_tasks(
             )
         )
     return tasks
-
 
 def prepare_integrate_tasks(
     image: ImageData,
@@ -278,6 +281,7 @@ def prepare_integrate_tasks(
     file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
+
     found_peaks_xyz = None
     found_peaks_bank = None
     found_peaks_run = None
@@ -360,41 +364,47 @@ def prepare_integrate_tasks(
     tasks = []
     os.path.basename(filename)
 
-    for bank, peaks in peak_dict.items():
+    sorted_keys = sorted(peak_dict.keys())
+    if not sorted_keys:
+        return []
+
+    total_images = len(sorted_keys)
+
+    def _resolve(stack, seq_idx, name):
+        if stack is None:
+            return None
+
+        is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
+        if not is_batch:
+            return stack
+
+        n_items = stack.shape[0]
+        if n_items == 1:
+            return stack[0]
+
+        if n_items == total_images:
+            return stack[seq_idx]
+
+        raise ValueError(
+            f"CRITICAL: Array dimension mismatch for '{name}'. "
+            f"The stack contains {n_items} matrices, but there are {total_images} images scheduled. "
+            f"Run index fallback is strictly disabled."
+        )
+
+    for _i, bank in enumerate(sorted_keys):
+        peaks = peak_dict[bank]
         physical_bank = image.bank_mapping.get(bank, bank)
         det_config = beamlines[instrument][str(physical_bank)]
-        run_id = image.get_run_id(bank)
 
-        # UPDATED: Generate nice labels for visualization
         img_label = image.get_label(bank)
         viz_label = f"{img_label}_bank{physical_bank}"
 
-        # Handle RUB being a stack (N, 3, 3) or a single matrix (3, 3)
-        if RUB.ndim == 3 and RUB.shape[0] > 1:
-            # Use image index if stack matches image count, otherwise use run index
-            idx = bank if RUB.shape[0] == len(image.ims) else run_id
-            if idx >= RUB.shape[0]:
-                idx = -1
-            current_rub = RUB[idx]
-        else:
-            current_rub = RUB if RUB.ndim == 2 else RUB[0]
+        current_rub = _resolve(RUB, _i, "RUB")
+        current_R_val = _resolve(R_stack, _i, "R_stack")
+        current_angles_val = _resolve(angles_stack, _i, "angles_stack")
 
-        # Resolve R and angles for this image
-        current_R_val = None
-        if R_stack is not None:
-            idx_r = bank if R_stack.shape[0] == len(image.ims) else run_id
-            if idx_r < R_stack.shape[0]:
-                current_R_val = R_stack[idx_r]
-            else:
-                current_R_val = R_stack[0]
-
-        current_angles_val = None
-        if angles_stack is not None:
-            idx_a = bank if angles_stack.shape[0] == len(image.ims) else run_id
-            if idx_a < angles_stack.shape[0]:
-                current_angles_val = angles_stack[idx_a]
-            else:
-                current_angles_val = angles_stack[0]
+        # The physical run_id can still be safely fetched for metadata logging
+        run_id = image.get_run_id(bank)
 
         metrics_info = (
             found_peaks_xyz,
@@ -407,7 +417,6 @@ def prepare_integrate_tasks(
             sample_offset,
             ki_vec,
         )
-        # Pass viz_label instead of fname_clean
         viz_info = (create_visualizations, file_prefix, viz_label)
 
         tasks.append(
@@ -424,6 +433,3 @@ def prepare_integrate_tasks(
             )
         )
     return tasks
-
-
-# NOTE(vivek): handle multiprocessing orchestration
