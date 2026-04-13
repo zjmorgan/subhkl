@@ -13,7 +13,7 @@ from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExpor
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
-from subhkl.core.crystallography.space_group import get_space_group_object
+from subhkl.core.spacegroup import get_space_group_object
 
 app = typer.Typer()
 
