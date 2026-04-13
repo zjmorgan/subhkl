@@ -1599,7 +1599,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
         batch_rs = np.array([i_arr[d['rep_idx']] for d in keep_data])
         batch_cs = np.array([j_arr[d['rep_idx']] for d in keep_data])
 
-        bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
+        bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab, ki_vec=ki_vec)
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
