@@ -1242,16 +1242,12 @@ def zone_axis_search(
 
     print(f"Filtering Prior through Exact Physics Forward-Model (Method: {loss_method})...")
 
-    t = np.linspace(0, np.pi, 1024)
-    cdf = (t - np.sin(t)) / np.pi
-
     centering = get_centering(space_group)
     ray_objective = VectorizedObjective(
         B=B_mat,
         kf_ki_dir=q_lab_all,
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
-        angle_cdf=cdf,
         angle_t=t,
         weights=weights_all,
         tolerance_deg=vector_tolerance, 
@@ -1260,7 +1256,6 @@ def zone_axis_search(
         loss_method=loss_method,
         cell_params=[a, b, c, alpha, beta, gamma],
         d_min=d_min,
-        
         # 4. The Magic Link:
         # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
         # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
