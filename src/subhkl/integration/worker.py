@@ -346,7 +346,7 @@ def integrate_single_bank(
     s_lab = (
         current_R_val @ sample_offset if current_R_val is not None else sample_offset
     )
-    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
+    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab, ki_vec=ki_vec)
 
     # Correctly handle lab coordinate shape (N, 3)
     lab_coords = det.pixel_to_lab(bank_i, bank_j)
@@ -493,7 +493,8 @@ def integrate_single_bank(
     kept_centers = refined_centers[keep]
     # Re-calculate angles and lab coordinates
     bank_tt, bank_az = det.pixel_to_angles(
-        kept_centers[:, 0], kept_centers[:, 1], sample_offset=s_lab
+        kept_centers[:, 0], kept_centers[:, 1], sample_offset=s_lab,
+        ki_vec=ki_vec,
     )
     lab_coords = det.pixel_to_lab(kept_centers[:, 0], kept_centers[:, 1])
     if lab_coords.ndim == 1:
