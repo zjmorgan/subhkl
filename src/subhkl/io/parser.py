@@ -13,10 +13,37 @@ from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExpor
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
-from subhkl.core.spacegroup import get_space_group_object
+from subhkl.core.crystallography.space_group import get_space_group_object
 
 app = typer.Typer()
 
+
+def apply_detector_calibration(hdf5_filename: str, instrument: str):
+    """
+    Reads refined detector metrology from an indexer/prediction file (if present)
+    and overrides the in-memory beamlines configuration so downstream
+    tasks natively use the calibrated geometry.
+    """
+    from subhkl.config import beamlines
+
+    if not os.path.exists(hdf5_filename):
+        return
+
+    with h5py.File(hdf5_filename, "r") as f:
+        if "detector_calibration" in f:
+            print(f"Loading calibrated detector geometry from {hdf5_filename}...")
+            calib_grp = f["detector_calibration"]
+            count = 0
+            for bank_key in calib_grp.keys():
+                bank_id = bank_key.replace("bank_", "")
+                if instrument in beamlines and bank_id in beamlines[instrument]:
+                    # Temporarily override the nominal config in memory
+                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key]["center"][()].tolist()
+                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key]["uhat"][()].tolist()
+                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key]["vhat"][()].tolist()
+                    count += 1
+            if count > 0:
+                print(f"Successfully applied calibration to {count} detector panels.")
 
 
 @app.command()
@@ -66,10 +93,6 @@ def indexer(
     d_min: float | None = typer.Option(None, "--d-min"),
     d_max: float | None = typer.Option(None, "--d-max"),
 ) -> None:
-    """
-    Unified entry point for indexing peaks and refining global instrument metrology.
-    Can operate on raw finder.h5 files, or perform secondary refinement on indexer.h5 files.
-    """
     input_data = {}
     def _val(x): return x.default if hasattr(x, "default") else x
 
@@ -555,6 +578,8 @@ def metrics(
     if ki_vec is not None:
         ki_vec_arr = np.array([float(x.strip()) for x in ki_vec.split(",")])
 
+    # No need to call apply_detector_calibration here because metrics.py
+    # dynamically shifts coordinates using the detector_calibration group.
     result = compute_metrics(
         file1=file1,
         file2=file2,
@@ -584,6 +609,7 @@ def metrics(
             status = "BAD" if err > 1.0 else "OK"
             print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
 
+
 @app.command()
 def peak_predictor(
     filename: str,
@@ -598,6 +624,8 @@ def peak_predictor(
     ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     max_workers: int = 16,
 ):
+    apply_detector_calibration(indexed_hdf5_filename, instrument)
+
     with h5py.File(indexed_hdf5_filename, "r") as f_idx:
         a = float(f_idx["sample/a"][()])
         b = float(f_idx["sample/b"][()])
@@ -720,6 +748,11 @@ def peak_predictor(
             grp.create_dataset("l", data=l)
             grp.create_dataset("wavelength", data=wl)
 
+        # Forward the calibration group to the prediction file
+        with h5py.File(indexed_hdf5_filename, "r") as f_in:
+            if "detector_calibration" in f_in:
+                f_in.copy("detector_calibration", f)
+
 
 @app.command()
 def integrator(
@@ -745,6 +778,8 @@ def integrator(
     found_peaks_file: str = None,
     max_workers: int = 16,
 ):
+    apply_detector_calibration(integration_peaks_filename, instrument)
+
     peak_dict = {}
     angles_stack = None
     all_R = None
@@ -869,7 +904,7 @@ def integrator(
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
 
-            for k in ["goniometer/axes", "goniometer/names"]:
+            for k in ["goniometer/axes", "goniometer/names", "detector_calibration"]:
                 if k in f_in:
                     f_in.copy(f_in[k], f, k)
 
@@ -1272,9 +1307,7 @@ def rbf_integrator(
     chunk_size: int = 256,
     max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
 ):
-    import h5py
-    from subhkl.integration import Peaks
-    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
+    apply_detector_calibration(integration_peaks_filename, instrument)
 
     sigma_list = [float(k.strip()) for k in sigmas.split(",")]
     print(f"Starting Dense Sparse RBF Integration on {filename}")
@@ -1367,7 +1400,7 @@ def rbf_integrator(
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
                     
-            for k in ["goniometer/axes", "goniometer/names"]:
+            for k in ["goniometer/axes", "goniometer/names", "detector_calibration"]:
                 if k in f_in:
                     f_in.copy(f_in[k], f, k)
 

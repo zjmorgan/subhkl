@@ -44,7 +44,7 @@ def resolve_indices(f_handle):
 
 
 def extract_xyz_from_file(file_path, instrument=None):
-    """Safely extracts physical XYZ lab coordinates from a file."""
+    """Safely extracts physical XYZ lab coordinates from a file, applying calibrations if present."""
     with h5py.File(file_path, "r") as f:
         run_idx = resolve_indices(f)
         
@@ -60,6 +60,17 @@ def extract_xyz_from_file(file_path, instrument=None):
             run_list = []
             bank_ids = f["bank_ids"][()] if "bank_ids" in f else None
             
+            # --- Load Calibration if available ---
+            calibration_dict = {}
+            if "detector_calibration" in f:
+                calib_grp = f["detector_calibration"]
+                for b_key in calib_grp.keys():
+                    calibration_dict[b_key] = {
+                        "center": calib_grp[b_key]["center"][()],
+                        "uhat": calib_grp[b_key]["uhat"][()],
+                        "vhat": calib_grp[b_key]["vhat"][()]
+                    }
+            
             for img_key_str in f["banks"].keys():
                 img_idx = int(img_key_str)
                 grp = f[f"banks/{img_key_str}"]
@@ -67,10 +78,17 @@ def extract_xyz_from_file(file_path, instrument=None):
                 
                 phys_bank = bank_ids[img_idx] if bank_ids is not None else img_idx
                 try:
+                    # Construct nominal detector
                     det_config = beamlines[instrument][str(phys_bank)]
                     det = Detector(det_config)
                     
-                    # NOTE: Prediction files don't store offset, so we assume nominal
+                    # Overwrite with calibrated metadata if present
+                    bank_str = f"bank_{phys_bank}"
+                    if bank_str in calibration_dict:
+                        det.center = calibration_dict[bank_str]["center"]
+                        det.uhat = calibration_dict[bank_str]["uhat"]
+                        det.vhat = calibration_dict[bank_str]["vhat"]
+                    
                     xyz = det.pixel_to_lab(i_p, j_p)
                     if xyz.ndim == 1: xyz = xyz[np.newaxis, :]
                     
@@ -86,7 +104,6 @@ def extract_xyz_from_file(file_path, instrument=None):
         if "peaks/two_theta" in f and "peaks/azimuthal" in f:
             tt = np.deg2rad(f["peaks/two_theta"][()])
             az = np.deg2rad(f["peaks/azimuthal"][()])
-            # Assume nominal radius of 1.0 for direction
             kx, ky, kz = np.sin(tt) * np.cos(az), np.sin(tt) * np.sin(az), np.cos(tt)
             xyz = np.stack([kx, ky, kz], axis=1)
             if run_idx is None: run_idx = np.zeros(len(xyz))
@@ -104,7 +121,6 @@ def compute_metrics(
     ki_vec_override: np.ndarray | None = None,
 ) -> dict:
     try:
-        # We assume file1 is the "master" file with the physics (e.g., indexer.h5 or predictor.h5)
         with h5py.File(file1, "r") as f:
             ub_helper = FindUB()
             ub_helper.a = f["sample/a"][()]
@@ -130,23 +146,20 @@ def compute_metrics(
         matched_h, matched_k, matched_l, matched_lam, matched_xyz, matched_R, matched_run = [], [], [], [], [], [], []
 
         # ==========================================
-        # TWO FILE COMPARISON (e.g., Predictor vs Finder)
+        # TWO FILE COMPARISON
         # ==========================================
         if file2 is not None:
             if instrument is None:
                 return {"error_message": "ERROR: --instrument required for matching when not found in file attributes."}
 
-            # 1. Load XYZ coordinates from BOTH files
             xyz_1, run_1 = extract_xyz_from_file(file1, instrument)
             xyz_2, run_2 = extract_xyz_from_file(file2, instrument)
             
             if xyz_1 is None or xyz_2 is None:
                 return {"error_message": "ERROR: Could not extract physical XYZ coordinates from one or both files."}
 
-            # 2. Extract HKLs from file1 (the predicted/indexed source)
             with h5py.File(file1, "r") as f1:
                 if "banks" in f1:
-                    # Predictor format (HKLs are stored per-bank)
                     for img_key_str in f1["banks"].keys():
                         img_idx = int(img_key_str)
                         grp = f1[f"banks/{img_key_str}"]
@@ -169,12 +182,10 @@ def compute_metrics(
                             matched_k.extend(k_p[idxs[valid]])
                             matched_l.extend(l_p[idxs[valid]])
                             matched_lam.extend(lam_p[idxs[valid]])
-                            # We score against the observed XYZ (file2)
                             matched_xyz.extend(xyz_2_run[valid])
                             matched_run.extend([img_idx] * num_valid)
                             matched_R.extend(_get_safe_R_stack(R_file, [img_idx] * num_valid, num_valid))
                 else:
-                    # Indexer format (flat arrays)
                     h_p = f1["peaks/h"][()]
                     k_p = f1["peaks/k"][()]
                     l_p = f1["peaks/l"][()]
@@ -204,7 +215,7 @@ def compute_metrics(
                             matched_R.extend(_get_safe_R_stack(R_file, [r] * num_valid, num_valid))
 
         # ==========================================
-        # SINGLE FILE METRICS (e.g., Indexer self-consistency)
+        # SINGLE FILE METRICS
         # ==========================================
         else:
             with h5py.File(file1, "r") as f:
@@ -302,4 +313,4 @@ def compute_metrics(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {"error_message": f"Exception during metrics computation: {e!s}"}
+        return {"error_message": f"Exception during metrics computation: {e!s}"
