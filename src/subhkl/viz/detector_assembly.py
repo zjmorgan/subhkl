@@ -119,12 +119,11 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         det = detectors.get(img_key)
         if det is None: continue
 
-        # --- FIX: Apply s_lab to background image projection ---
         s_lab = get_s_lab_for_image(img_key)
 
         cols, rows = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
-        # Pass s_lab here!
-        lab_xyz = det.pixel_to_lab(rows, cols, sample_offset=s_lab)
+        lab_xyz = det.pixel_to_lab(rows, cols)
+        lab_xyz = lab_xyz - s_lab
         X, Y, Z = lab_xyz[..., 0], lab_xyz[..., 1], lab_xyz[..., 2]
 
         roty = np.rad2deg(np.arctan2(X, Z))
@@ -144,14 +143,13 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             det = detectors.get(img_key)
             if det is None: continue
 
-            # --- FIX: Apply s_lab to finder peaks ---
             s_lab = get_s_lab_for_image(img_key)
 
             coords = np.atleast_2d(coords)
             f_rows, f_cols = coords[:, 1], coords[:, 2]
 
-            # Pass s_lab here!
-            f_xyz = det.pixel_to_lab(f_rows, f_cols, sample_offset=s_lab)
+            f_xyz = det.pixel_to_lab(f_rows, f_cols)
+            f_xyz = f_xyz - s_lab
             if f_xyz.ndim == 1: f_xyz = f_xyz[np.newaxis, :]
 
             f_X, f_Y, f_Z = f_xyz[:, 0], f_xyz[:, 1], f_xyz[:, 2]
@@ -180,7 +178,6 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             det = detectors.get(img_key)
             if det is None: continue
             
-            # --- FIX: Apply s_lab to ellipse projection ---
             s_lab = get_s_lab_for_image(img_key)
 
             r_center, c_center = peaks.peak_rows[i], peaks.peak_cols[i]
@@ -199,8 +196,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             u_ell = c_center + a * cos_t * np.cos(phi) - b * sin_t * np.sin(phi)
             v_ell = r_center + a * cos_t * np.sin(phi) + b * sin_t * np.cos(phi)
 
-            # Pass s_lab here!
-            ell_xyz = det.pixel_to_lab(v_ell, u_ell, sample_offset=s_lab)
+            ell_xyz = det.pixel_to_lab(v_ell, u_ell)
+            ell_xyz v = lab_xyz - s_lab
             e_X, e_Y, e_Z = ell_xyz[..., 0], ell_xyz[..., 1], ell_xyz[..., 2]
             e_roty = np.rad2deg(np.arctan2(e_X, e_Z))
 
