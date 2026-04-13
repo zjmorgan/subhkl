@@ -1329,7 +1329,6 @@ def rbf_integrator(
         show_progress=show_progress,
         all_R=all_R,                 
         sample_offset=sample_offset,
-        ki_vec=ki_vec_val,
         anisotropic=anisotropic,
         fit_mosaicity=fit_mosaicity,
         border_width=border_width,
