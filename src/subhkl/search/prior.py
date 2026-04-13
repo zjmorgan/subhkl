@@ -472,14 +472,14 @@ class HoughPrior:
         best_loss = physics_losses_np[physics_sort_idx[0]]
         z_score = (r_mean - best_loss) / (r_std + 1e-9)
 
-        print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.2f} | Z-Score: {z_score:.1f} sigma")
+        print(f"\n  -> RANSAC Top Score:       | Score: {best_loss:.3f} | Z-Score: {z_score:.3f} sigma")
         print(f"  -> Top 5 Prior Scores: {physics_losses_np[physics_sort_idx[:5]]}")
 
         if z_score >= z_score_threshold:
-            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.1f} sigma). Proceeding to GA...")
+            print(f"[Prior Validation] SUCCESS: Prior is statistically significant (+{z_score:.3f} sigma). Proceeding to GA...")
             return prior_rots[physics_sort_idx]
         else:
-            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.1f} < {z_score_threshold}). Falling back to Uniform GA...")
+            print(f"[Prior Validation] FAILED: Prior hallucinated (Z-Score {z_score:.3f} < {z_score_threshold}). Falling back to Uniform GA...")
             return None
 
 @jax.jit
