@@ -50,8 +50,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
         s_lab = get_s_lab_for_image(img_key)
         
         c, r = np.meshgrid(np.arange(det.m + 1) - 0.5, np.arange(det.n + 1) - 0.5)
-        # Pass s_lab here!
-        xyz = det.pixel_to_lab(r, c, sample_offset=s_lab) 
+        xyz = det.pixel_to_lab(r, c)
+        xyz = xyz - s_lab
         
         X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
         roty = np.rad2deg(np.arctan2(X, Z))
