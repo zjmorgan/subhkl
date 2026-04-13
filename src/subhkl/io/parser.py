@@ -13,7 +13,7 @@ from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExpor
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
-from subhkl.core.crystallography.space_group import get_space_group_object
+from subhkl.core.spacegroup import get_space_group_object
 
 app = typer.Typer()
 
@@ -70,7 +70,6 @@ def indexer(
     input_data = {}
     def _val(x): return x.default if hasattr(x, "default") else x
 
-    # Extract all options to avoid Typer OptionInfo leaks
     a_val, b_val, c_val = _val(a), _val(b), _val(c)
     alpha_val, beta_val, gamma_val = _val(alpha), _val(beta), _val(gamma)
     sg_val = _val(space_group)
@@ -80,14 +79,12 @@ def indexer(
     tol_val = _val(tolerance_deg)
     sigma_val = _val(sigma_init)
     
-    # Parse comma separated strings
     gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
     det_banks_list = [int(x.strip()) for x in _val(refine_detector_banks).split(",")] if _val(refine_detector_banks) else None
     det_modes_list = [x.strip().lower() for x in _val(detector_modes).split(",")] if _val(detector_modes) else ["independent"]
 
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
-        # 1. Resolve Global Physics (Use CLI args first, then fallback to file)
         if a_val is None: a_val = f["sample/a"][()] if "sample/a" in f else None
         if b_val is None: b_val = f["sample/b"][()] if "sample/b" in f else None
         if c_val is None: c_val = f["sample/c"][()] if "sample/c" in f else None
@@ -164,7 +161,6 @@ def indexer(
             print("WARNING: refine_goniometer requested but goniometer data not found. Skipping.")
             refine_gonio_flag = False
 
-    # --- DETECTOR METROLOGY SETUP ---
     detector_params = None
     peak_pixel_coords = None
     refine_det_flag = _val(refine_detector)
@@ -352,7 +348,6 @@ def indexer(
         f["peaks/lambda"] = lamda
         f["optimization/best_params"] = opt.x
         
-        # --- Save Refined Detector Metadata ---
         if refine_det_flag and hasattr(opt, 'calibrated_centers'):
             for b_idx, b_id in enumerate(target_banks):
                 grp_name = f"detector_calibration/bank_{b_id}"
@@ -491,6 +486,22 @@ def finder(
         detector_peaks=detector_peaks,
         instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
     )
+
+    try:
+        copy_keys = [
+            "sample/a", "sample/b", "sample/c", 
+            "sample/alpha", "sample/beta", "sample/gamma", 
+            "sample/space_group"
+        ]
+        with h5py.File(output_filename, "a") as f_out:
+            with h5py.File(filename, "r") as f_in:
+                for key in copy_keys:
+                    if key in f_in:
+                        if key in f_out:
+                            del f_out[key]
+                        f_in.copy(f_in[key], f_out, key)
+    except Exception as e:
+        print(f"Warning: Could not forward embedded unit cell metadata: {e}")
 
 
 @app.command()
