@@ -1841,7 +1841,7 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 peak_cols=[res.peak_cols[i] for i in mask],
                 var_u=[res.var_u[i] for i in mask],
                 var_v=[res.var_v[i] for i in mask],
-                cov_uv=[res.cov_uv[i] for i in mask]
+                cov_uv=[res.cov_uv[i] for i in mask],
                 ki_vec=ki_vec,
             )
 
