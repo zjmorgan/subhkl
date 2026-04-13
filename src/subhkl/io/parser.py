@@ -205,7 +205,14 @@ def indexer(
             print(f"Joint Metrology Refinement active. Pipeline: {' -> '.join(det_modes_list)}")
             try:
                 peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
-                
+               
+                if "bank" in input_data:
+                    bank_array = input_data["bank"]
+                elif "peaks/bank" in input_data:
+                    bank_array = input_data["peaks/bank"]
+                else:
+                    bank_array = opt.run_indices
+
                 from subhkl.config import beamlines
                 all_physical_banks = [int(k) for k in beamlines[_val(instrument_name)].keys()]
                 target_banks = det_banks_list if det_banks_list else sorted(all_physical_banks)
