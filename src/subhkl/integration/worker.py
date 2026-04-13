@@ -4,15 +4,43 @@ import PIL.Image
 import scipy
 import skimage.feature
 
+from dataclasses import dataclass
+
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.instrument.detector import Detector
-from subhkl.peakfinder.threshold import ThresholdingPeakFinder
+from subhkl.search.threshold import ThresholdingPeakFinder
 from subhkl.instrument.physics import (
     calculate_angular_error,
     predict_reflections_on_panel,
 )
 from subhkl.core.crystallography import generate_reflections
 
+
+@dataclass
+class _RunPeaksFinder:
+    """Lightweight mock of DetectorPeaks for the unrolled plotter."""
+    xyz: list
+    image_index: list
+    peak_rows: list
+    peak_cols: list
+    intensity: list = None
+    var_u: list = None
+    var_v: list = None
+    cov_uv: list = None
+
+def _render_finder_unrolled_plot(args):
+    """Standalone plotting function for generating unrolled plots per run."""
+    run_id, peaks, images, detectors, finder_peaks, instrument = args
+
+    import matplotlib.pyplot as plt
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    out_name = f"{run_id}_finder.png"
+    plot_unrolled_detector(peaks, images, detectors, finder_peaks=finder_peaks, out_name=out_name, instrument=instrument)
 
 def _run_harvest_local_max(
     im,
@@ -100,15 +128,34 @@ def process_single_image(
 
     # 2. Setup Mask
     if mask_file is not None:
-        mask_im = np.array(PIL.Image.open(mask_file))
-        if erosion:
-            radius = max(1, int(min(mask_im.shape) * erosion))
-            kernel = np.ones((radius, radius), dtype=np.uint8)
-            mask = cv2.erode(mask_im, kernel).astype(bool)
-        else:
-            mask = mask_im.astype(bool)
+        mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
+
+    if erosion:
+        radius = max(1, int(min(mask.shape) * erosion))
+        kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
+        mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
+                borderValue=0).astype(bool)
+
+    # ==========================================
+    # 2.5 STRICTLY ENFORCE MASK ON CANDIDATES
+    # ==========================================
+    valid_indices = []
+    for idx, (r, c) in enumerate(centers):
+        r_int, c_int = int(r), int(c)
+        # Only keep centers that fall inside the image bounds AND the true mask
+        if (
+            0 <= r_int < mask.shape[0]
+            and 0 <= c_int < mask.shape[1]
+            and mask[r_int, c_int]
+        ):
+            valid_indices.append(idx)
+
+    # Slice the arrays to drop forbidden peaks
+    centers = centers[valid_indices]
+    i = i[valid_indices]
+    j = j[valid_indices]
 
     # 3. Integration Setup (Sigma Override)
     # Rebuild integrator from params to avoid sharing state
@@ -135,10 +182,6 @@ def process_single_image(
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
 
-    # 5. Refine centers (DEPRECATED: Keep predicted centers for finder)
-    # i, j = refined_centers[keep, 0], refined_centers[keep, 1]
-    i, j = i[keep], j[keep]
-
     # 6. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
@@ -149,17 +192,18 @@ def process_single_image(
             plt.switch_backend("Agg")
         try:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+            im0 = axes[0].imshow(image, cmap='viridis', origin='lower')
             axes[0].scatter(j, i, marker="1", c="blue")
             axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+            im1 = axes[1].imshow(image, cmap='viridis', origin='lower')
+
             forbidden = ~mask
             if np.any(forbidden):
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]
                 axes[1].imshow(overlay, origin="lower")
-            for _, hull, _, _ in hulls:
-                if hull is not None:
+            for valid, (_, hull, _, _) in zip(keep, hulls):
+                if valid:
                     for simplex in hull.simplices:
                         axes[1].plot(
                             hull.points[simplex, 1],
@@ -170,10 +214,15 @@ def process_single_image(
             fname = f"{img_label}_bank{physical_bank}.png"
             if viz_prefix is not None:
                 fname = f"{viz_prefix}_{fname}"
+            fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+            fig.tight_layout()
             fig.savefig(fname)
             plt.close(fig)
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
+
+    # Keep integrated centers centers for finder
+    i, j = i[keep], j[keep]
 
     # 6. Gather Results
     if sum(keep) > 0:
@@ -231,6 +280,8 @@ def process_single_image(
             "image_indices": [img_key] * num,
             "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
             "count": num,
+            "i": i,
+            "j": j,
         }
         log_msg = (
             f"Integrated {len(i)}/{len(centers)} peaks for {img_label} "
@@ -402,15 +453,18 @@ def integrate_single_bank(
     # --- INTEGRATION ---
     mask_file, mask_erosion = (
         integration_params.get("integration_mask_file"),
-        integration_params.get("integration_mask_rel_erosion_radius", 0.05),
+        integration_params.get("integration_mask_rel_erosion_radius", None),
     )
     if mask_file is not None:
-        mask_im = np.array(PIL.Image.open(mask_file))
-        radius = max(1, int(min(mask_im.shape) * mask_erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
-        mask = cv2.erode(mask_im, kernel).astype(bool)
+        mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
+
+    if mask_erosion:
+        radius = max(1, int(min(mask.shape) * mask_erosion))
+        kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
+        mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
+            borderValue=0).astype(bool)
 
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
     if integration_params.get("region_growth_minimum_sigma") is not None:
@@ -470,7 +524,6 @@ def integrate_single_bank(
         lab_coords = lab_coords[np.newaxis, :]
 
     # --- VISUALIZATION ---
-    # UPDATED: Use viz_label for filename
     do_viz, viz_prefix, viz_label = viz_info
     if do_viz:
         import matplotlib.pyplot as plt
@@ -479,8 +532,27 @@ def integrate_single_bank(
             plt.switch_backend("Agg")
         plt.rc("font", size=8)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+
+        # --- Dynamic Colorscale Compression ---
+        # Extract valid pixels using the mask to calculate robust statistics
+        valid_pixels = image[mask.astype(bool)] if mask is not None else image
+
+        median_bg = np.median(valid_pixels)
+        std_bg = np.std(valid_pixels)
+
+        # Compress lower edge: pin vmin just above the noise floor (e.g., +2 sigma)
+        vmin = max(1.0, 1.0 + median_bg + 2.0 * std_bg) 
+
+        # Compress upper edge: pin vmax to the brightest signal
+        vmax = np.percentile(1.0 + valid_pixels, 99.8)
+
+        # Safety fallback for flat/empty images
+        if vmax <= vmin:
+            vmax = vmin + 10.0
+
+        im0 = axes[0].imshow(image, cmap='viridis', origin='lower')
         axes[0].set_title(f"{viz_label}")
+        fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
@@ -496,7 +568,7 @@ def integrate_single_bank(
         axes[0].legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.15),
-            fancybox=True,
+            frameon=False,
             shadow=False,
             ncol=1,
         )
@@ -519,7 +591,8 @@ def integrate_single_bank(
                     clip_on=True,
                 )
 
-        axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+        im1 = axes[1].imshow(image, cmap='viridis', origin='lower')
+
         forbidden = ~mask
         overlay = np.zeros((*forbidden.shape, 4))
         overlay[forbidden] = [0, 1, 1, 0.3]
@@ -540,6 +613,7 @@ def integrate_single_bank(
         out_name = f"{viz_label}_int.png"
         if viz_prefix:
             out_name = f"{viz_prefix}_{out_name}"
+        fig.tight_layout()
         fig.savefig(out_name, bbox_inches="tight")
         plt.close(fig)
 

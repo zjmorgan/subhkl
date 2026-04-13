@@ -316,13 +316,14 @@ def finder(
     show_progress: bool = True,
     create_visualizations: bool = False,
     show_steps: bool = False,
+    show_candidates: bool = False,
     peak_local_max_min_pixel_distance: int = -1,
     peak_local_max_min_relative_intensity: float = -1,
     peak_local_max_normalization: bool = False,
+    mask_file: str | None = None,
+    mask_rel_erosion_radius: float = None,
     thresholding_noise_cutoff_quantile: float = 0.8,
     thresholding_min_peak_dist_pixels: float = 8.0,
-    thresholding_mask_file: str | None = None,
-    thresholding_mask_rel_erosion_radius: float = 0.05,
     thresholding_blur_kernel_sigma: int = 5,
     thresholding_open_kernel_size_pixels: int = 3,
     wavelength_min: float | None = None,
@@ -336,14 +337,17 @@ def finder(
     peak_minimum_pixels: int = 30,
     peak_minimum_signal_to_noise: float = 1.0,
     peak_pixel_outlier_threshold: float = 2.0,
-    sparse_rbf_alpha: float = 0.1,  
-    sparse_rbf_gamma: float = 2.0,  
-    sparse_rbf_min_sigma: float = 0.5,  
-    sparse_rbf_max_sigma: float = 10.0, 
-    sparse_rbf_max_peaks: int = 500,  
-    sparse_rbf_chunk_size: int = 4096,  
-    sparse_rbf_tile_rows: int = 2,  
-    sparse_rbf_tile_cols: int = 2,  
+    sparse_rbf_alpha: float = 0.1,  # Regularization (Higher = fewer, stronger peaks)
+    sparse_rbf_gamma: float = 1.0,  # Besov space coefficient (shape prior)
+    sparse_rbf_min_sigma: float = 1.5,  # Min spot size (pixels)
+    sparse_rbf_max_sigma: float = 10.0,  # Max spot size (pixels)
+    sparse_rbf_max_peaks: int = 500,  # Max peaks per bank
+    sparse_rbf_chunk_size: int = 512,  # reduce if OOM
+    sparse_rbf_tile_rows: int = 2,  # NEW: Number of row divisions for tiling
+    sparse_rbf_tile_cols: int = 2,  # NEW: Number of col divisions for tiling
+    sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
+    sparse_rbf_auto_tune_alpha: bool = typer.Option(False, help="Auto-tune SNR threshold."),
+    sparse_rbf_candidate_alphas: str = typer.Option("3.0,5.0,10.0,15.0,20.0,25.0,30", help="Candidate SNR thresholds alpha for auto-tuning"),
     max_workers: int = 16,
 ):
     print(f"Creating peaks from {filename} for instrument {instrument}")
@@ -368,8 +372,6 @@ def finder(
             {
                 "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
                 "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-                "mask_file": thresholding_mask_file,
-                "mask_rel_erosion_radius": thresholding_mask_rel_erosion_radius,
                 "blur_kernel_sigma": thresholding_blur_kernel_sigma,
                 "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
                 "show_steps": show_steps,
@@ -377,6 +379,8 @@ def finder(
             }
         )
     elif finder_algorithm == "sparse_rbf":
+        alpha_list = [float(k.strip()) for k in sparse_rbf_candidate_alphas.split(",")]
+
         peak_kwargs.update(
             {
                 "alpha": sparse_rbf_alpha,
@@ -388,10 +392,21 @@ def finder(
                 "show_steps": show_steps,
                 "show_scale": "linear",
                 "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
+                "loss": sparse_rbf_loss,
+                "auto_tune_alpha": sparse_rbf_auto_tune_alpha,
+                "candidate_alphas": alpha_list,
             }
         )
     else:
         raise ValueError("Invalid finder algorithm")
+
+    peak_kwargs.update(
+        {
+            "mask_file": mask_file,
+            "mask_rel_erosion_radius": mask_rel_erosion_radius,
+            "show_candidates": show_candidates
+        }
+    )
 
     integration_params = {
         "region_growth_distance_threshold": region_growth_distance_threshold,
@@ -787,7 +802,7 @@ def integrator(
     output_filename: str,
     integration_method: str = "free_fit",
     integration_mask_file: str | None = None,
-    integration_mask_rel_erosion_radius: float | None = 0.05,
+    integration_mask_rel_erosion_radius: float | None = None,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 50.0,  
     region_growth_minimum_sigma: float | None = None,
@@ -1023,6 +1038,606 @@ def merge_images(
 
     print(f"Successfully created {output_filename}")
 
+@app.command()
+def zone_axis_search(
+    merged_h5_filename: str,
+    peaks_h5_filename: str,
+    instrument: str,
+    output_h5_filename: str,
+    a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float,
+    space_group: str,
+    d_min: float = 1.0,
+    sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
+    vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
+    border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
+    min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
+    hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
+    n_hough: int = typer.Option(15, help="Maximum number of empirical zone axes."),
+    davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
+    top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
+    max_uvw: int = typer.Option(25, help="Maximum uvw index for zone axis search"),
+    L_max: float = typer.Option(250.0, help="Maximum real-space vector length for theoretical zone axes (Angstroms)."),
+    top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
+    num_runs: int = typer.Option(0, help="Number of goniometer runs to use. Set to 0 to use all."),
+    output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
+    batch_size: int = typer.Option(1024, help="Batch size for validation loop"),
+):
+    """
+    Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
+    Outputs an HDF5 file that can be passed directly to 'indexer --bootstrap'.
+    """
+    import h5py
+    import numpy as np
+    import jax.numpy as jnp
+    from subhkl.config import beamlines, reduction_settings
+    from subhkl.optimization import FindUB, VectorizedObjective
+    from subhkl.search.prior import HoughPrior
+    from subhkl.core.crystallography import generate_reflections
+    from subhkl.core.spacegroup import get_centering
+
+
+    print(f"Loading data from {merged_h5_filename}...")
+    with h5py.File(merged_h5_filename, 'r') as f_in:
+        file_bank_ids = list(int(bid) for bid in f_in["bank_ids"])
+        ax = f_in["goniometer/axes"][()]
+        goniometer_angles = np.array(f_in["goniometer/angles"][()])
+
+        from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
+        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
+        file_offsets = f_in["file_offsets"][()]
+
+    # Dynamically slice the arrays based on the requested number of runs
+    if num_runs > 0:
+        if len(file_offsets) > num_runs:
+            end_idx = file_offsets[num_runs]
+        else:
+            end_idx = len(file_bank_ids)
+            num_runs = len(file_offsets)
+
+        print(f"Limiting search to the first {num_runs} run(s) (Images 0 to {end_idx-1})...")
+        file_bank_ids = file_bank_ids[:end_idx]
+        R_stack = R_stack[:end_idx]
+    else:
+        end_idx = len(file_bank_ids)
+        print(f"Using all {len(file_offsets)} available runs for the search...")
+
+    settings = reduction_settings[instrument]
+    wavelength_min, wavelength_max = settings.get("Wavelength")
+
+    ub_helper = FindUB()
+    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    B_mat = ub_helper.reciprocal_lattice_B()
+
+    print("\n--- HOUGH PRIOR GENERATION ---")
+    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
+
+    print(f"Loading empirical rays from {peaks_h5_filename}...")
+    
+    # 1. Use the Peaks API to handle instrument geometry mapping
+    from subhkl.integration.api import Peaks
+    peaks_api = Peaks(merged_h5_filename, instrument)
+
+    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
+        peaks_xyz = f_peaks["peaks/xyz"][()]
+        peaks_intensity = f_peaks["peaks/intensity"][()]
+
+        # CRITICAL: image_index maps 1:1 to the N_banks dimension of R_stack in merged.h5
+        if "peaks/image_index" in f_peaks:
+            group_indices = f_peaks["peaks/image_index"][()]
+        else:
+            group_indices = f_peaks["peaks/run_index"][()]
+
+        if "beam/ki_vec" in f_peaks:
+            ki_vec = f_peaks["beam/ki_vec"][()]
+        else:
+            ki_vec = np.array([0.0, 0.0, 1.0])
+
+        # If Peaks file overrides the goniometer entirely, use it. Otherwise rely on Peaks API/merged.h5
+        R_peaks_override = f_peaks.get("goniometer/R")
+        if R_peaks_override is not None:
+            R_peaks_override = R_peaks_override[()]
+
+    q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = [], [], [], [], []
+
+    unique_groups = np.unique(group_indices)
+    for g_idx in unique_groups:
+        if g_idx >= end_idx:
+            continue
+
+        mask = group_indices == g_idx
+        grp_xyz = peaks_xyz[mask]
+        grp_intensity = peaks_intensity[mask]
+
+        # 2. Safely grab the rotation matrix using the flat bank index (g_idx)
+        if R_peaks_override is not None:
+            if R_peaks_override.ndim == 3 and R_peaks_override.shape[0] == len(peaks_xyz):
+                R_gonio = R_peaks_override[mask][0]
+            elif R_peaks_override.ndim == 3 and R_peaks_override.shape[0] > g_idx:
+                R_gonio = R_peaks_override[g_idx]
+            else:
+                R_gonio = R_peaks_override
+        else:
+            # Let the flat R_stack (N_banks, 3, 3) map directly to the image/bank index
+            R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
+
+        intensity_mask = grp_intensity >= min_intensity
+        if not np.any(intensity_mask): 
+            continue
+            
+        grp_xyz = grp_xyz[intensity_mask]
+        grp_intensity = grp_intensity[intensity_mask]
+
+        top_k_idx = np.argsort(grp_intensity)[::-1][:min(top_k_rays, len(grp_intensity))]
+        grp_xyz_top = grp_xyz[top_k_idx]
+        grp_intensity_top = grp_intensity[top_k_idx]
+
+        kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
+        q_lab = kf - ki_vec[None, :]
+        q_sample = np.dot(q_lab, R_gonio)
+
+        q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
+        q_hat_grp = q_sample / q_norms
+        
+        q_hat_list.append(q_hat_grp)
+        q_lab_list.append(q_lab)
+        peaks_xyz_list.append(grp_xyz_top)
+        intensities_list.append(grp_intensity_top)
+        
+        # 3. Map the VectorizedObjective strictly to the flat bank index
+        mapped_bank_indices.append(np.full(len(grp_xyz_top), g_idx))
+
+    if not q_hat_list:
+        print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
+        return
+
+    q_hat = np.vstack(q_hat_list)
+    q_lab_all = np.vstack(q_lab_list).T  
+    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
+    intensities_all = np.concatenate(intensities_list)
+    
+    # This array now contains the exact bank index (0 to N_banks-1) for every single ray
+    bank_indices_all = np.concatenate(mapped_bank_indices)
+
+    median_intensity = np.median(intensities_all)
+    weights_all = intensities_all / (median_intensity + 1e-6)
+    weights_all = np.clip(weights_all, 0.0, 10.0)
+
+    print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
+    n_obs, weights_obs = prior_engine.compute_hough_accumulator(
+        q_hat, grid_resolution=hough_grid_resolution, n_hough=n_hough,
+        plot_filename=output_hough, border_frac=border_frac
+    )
+
+    if len(n_obs) == 0:
+        return
+
+    n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
+    print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
+
+    quats, _ = prior_engine.solve_permutations(
+        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat,
+        space_group=space_group,
+        angle_tol_deg=davenport_angle_tol,
+        scoring_tol_deg=vector_tolerance,
+        d_min=d_min
+    )
+
+    if quats is None or len(quats) == 0:
+        return
+
+    print(f"Filtering Prior through Exact Physics Forward-Model...")
+
+    ray_objective = VectorizedObjective(
+        B=B_mat,
+        kf_ki_dir=q_lab_all,
+        peak_xyz_lab=peaks_xyz_all,
+        wavelength=[wavelength_min, wavelength_max],
+        cell_params=[a, b, c, alpha, beta, gamma],
+        # 4. The Magic Link:
+        # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
+        # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
+        static_R=R_stack,
+        peak_run_indices=bank_indices_all 
+    )
+
+    prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
+
+    if prior_rots is None or len(prior_rots) == 0:
+        print("Exact physical model rejected all seeds. Exiting.")
+        return
+
+    print(f"Success! Saving optimal seed to {output_h5_filename}...")
+    with h5py.File(output_h5_filename, "w") as f:
+        best_rot = np.array(prior_rots[0])
+        f.create_dataset("optimization/best_params", data=best_rot)
+
+        from subhkl.optimization import rotation_matrix_from_rodrigues_jax
+        U_matrix = np.array(rotation_matrix_from_rodrigues_jax(best_rot))
+        f.create_dataset("sample/U", data=U_matrix)
+        f.create_dataset("sample/B", data=B_mat)
+
+        f.create_dataset("sample/a", data=a)
+        f.create_dataset("sample/b", data=b)
+        f.create_dataset("sample/c", data=c)
+        f.create_dataset("sample/alpha", data=alpha)
+        f.create_dataset("sample/beta", data=beta)
+        f.create_dataset("sample/gamma", data=gamma)
+
+        f.create_dataset("sample/offset", data=np.zeros(3))
+        f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
+        f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
+        f.create_dataset("sample/space_group", data=space_group.encode('utf-8'))
+        f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
+
+    print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
+
+@app.command()
+def rbf_integrator(
+    filename: str = typer.Argument(..., help="Merged HDF5 image stack"),
+    instrument: str = typer.Argument(..., help="Instrument name"),
+    integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
+    output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
+    alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
+    gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
+    sigmas: str = typer.Option("1.0,2.0,4.0", help="Unstretched peak radii"),
+    nominal_sigma: float = typer.Option(1.0, help="The typical peak radius, used as a fallback for weak reflections"),
+    anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
+    fit_mosaicity: bool = typer.Option(False, help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. "
+                                                   "Only use in non-spherical detector geometries."),
+    max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
+    rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
+    show_progress: bool = typer.Option(True, "--show-progress"),
+    create_visualizations: bool = False,
+    chunk_size: int = 256,
+    max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
+):
+    """
+    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
+    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
+    """
+    import h5py
+    from subhkl.integration import Peaks
+    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
+
+    sigma_list = [float(k.strip()) for k in sigmas.split(",")]
+    print(f"Starting Dense Sparse RBF Integration on {filename}")
+    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}")
+
+    peak_dict = {}
+
+    with h5py.File(integration_peaks_filename, "r") as f:
+        if "sample/U" in f:
+            U = f["sample/U"][()]
+        if "sample/B" in f:
+            B = f["sample/B"][()]
+        if "goniometer/R" in f:
+            all_R = f["goniometer/R"][()]
+        if "goniometer/angles" in f:
+            angles_stack = f["goniometer/angles"][()]
+            
+        if "sample/offset" in f:
+            sample_offset = f["sample/offset"][()]
+        else:
+            sample_offset = np.zeros(3)
+            
+        for key in f["banks"].keys():
+            img_idx = int(key)
+            grp = f[f"banks/{key}"]
+            peak_dict[img_idx] = [
+                grp["i"][()], grp["j"][()], grp["h"][()],
+                grp["k"][()], grp["l"][()], grp["wavelength"][()]
+            ]
+
+    peaks = Peaks(filename, instrument)
+
+    if all_R is None:
+        all_R = peaks.goniometer.rotation
+    if angles_stack is None:
+        angles_stack = peaks.goniometer.angles_raw
+
+    one_image = next(iter(peaks.image.ims.values()))
+    border_width = int(rel_border_width * min(one_image.shape[0], one_image.shape[1]))
+
+    result = integrate_peaks_rbf_ssn(
+        peak_dict=peak_dict,
+        peaks_obj=peaks,             # Pass the full Peaks object
+        alpha=alpha,
+        sigmas=sigma_list,
+        gamma=gamma,
+        nominal_sigma=nominal_sigma,
+        max_peaks=max_peaks,
+        show_progress=show_progress,
+        all_R=all_R,                 # Pass rotation and offset downstream
+        sample_offset=sample_offset,
+        anisotropic=anisotropic,
+        fit_mosaicity=fit_mosaicity,
+        border_width=border_width,
+        chunk_size=chunk_size,
+        create_visualizations=create_visualizations,
+        max_workers=max_workers,
+    )
+
+    print(f"Saving RBF integrated peaks to {output_filename}")
+    with h5py.File(output_filename, "w") as f:
+        f["peaks/h"] = result.h
+        f["peaks/k"] = result.k
+        f["peaks/l"] = result.l
+        f["peaks/lambda"] = result.wavelength
+        f["peaks/intensity"] = result.intensity
+        f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
+        f["peaks/two_theta"] = result.tt
+        f["peaks/azimuthal"] = result.az
+        f["peaks/bank"] = result.bank
+        f["peaks/run_index"] = result.run_id
+        
+        # Copy full metadata context from predictor output
+        copy_keys = [
+            "sample/a", "sample/b", "sample/c", 
+            "sample/alpha", "sample/beta", "sample/gamma",
+            "sample/space_group", "sample/U", "sample/B", 
+            "sample/offset", "beam/ki_vec", "instrument/wavelength"
+        ]
+        
+        with h5py.File(integration_peaks_filename, "r") as f_in:
+            for key in copy_keys:
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
+                    
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in:
+                    f_in.copy(f_in[k], f, k)
+
+@app.command()
+def index_images(
+    merged_h5_filename: str,
+    instrument: str,
+    output_h5_filename: str,
+    a: float, b: float, c: float,
+    alpha: float, beta: float, gamma: float,
+    space_group: str,
+    bootstrap: str = typer.Option(None, help="Seed with initial U matrix."),
+    d_min: float = 1.0,
+    sigma: float = 5.0,
+    min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude (photon counts)."),
+    population_size: int = 1000,
+    gens: int = 400,
+    n_runs: int = 1,
+    batch_size: int = typer.Option(None, help="Number of runs to execute in parallel on GPU."),
+    seed: int = 0,
+    create_visualizations: bool = typer.Option(False, "--create-visualizations", help="Output PNG overlays of predicted vs extracted peaks."),
+    border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
+):
+    from subhkl.config import beamlines, reduction_settings
+
+    with h5py.File(merged_h5_filename, 'r') as f_in:
+        U_initial = f_in["sample/U"][()] if "sample/U" in f_in else None
+
+        if U_initial is None and gens == 0:
+            U_initial = np.eye(3)
+
+        file_bank_ids = f_in["bank_ids"][()]
+        ax = f_in["goniometer/axes"][()]
+        goniometer_angles = np.array(f_in["goniometer/angles"][()])
+
+        from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
+        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
+
+        file_offsets = f_in["file_offsets"][()]
+        file_names_in = list(f_in["files"].asstr())
+
+        file_names = []
+        if file_offsets[0] != 0:
+            raise ValueError
+        offsets_excl = np.concatenate([file_offsets[1:], [len(file_bank_ids)]])
+        old_offs = 0
+        for offs, f in zip(offsets_excl, file_names_in):
+            file_names += [f] * (offs - old_offs)
+            old_offs = offs
+
+        settings = reduction_settings[instrument]
+        wavelength_min, wavelength_max = settings.get("Wavelength")
+
+        images_raw = np.stack(f_in["images"][()])
+
+    if bootstrap is not None:
+        with h5py.File(bootstrap, 'r') as f_in:
+            U_initial = f_in["sample/U"][()]
+
+    from subhkl.optimization import FindUB
+
+    medians = np.median(images_raw, axis=(1, 2), keepdims=True)
+    images_bg = np.maximum(images_raw - medians, 0)
+
+    import scipy.ndimage
+    images_max = scipy.ndimage.maximum_filter(images_bg, size=3)
+
+    images_landscape = np.zeros_like(images_bg, dtype=np.float32)
+    for i in range(len(images_bg)):
+        smoothed = scipy.ndimage.gaussian_filter(images_bg[i], sigma=1.0)
+        local_max = scipy.ndimage.maximum_filter(smoothed, size=3) == smoothed
+        mask = local_max & (smoothed > (min_intensity * 0.5))
+        if not np.any(mask):
+            continue
+        dist = scipy.ndimage.distance_transform_edt(~mask)
+        images_landscape[i] = np.exp(-dist / sigma)
+
+    print("Generating theoretical HKL pool...")
+    from subhkl.core.crystallography import generate_reflections
+    h, k_idx, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+    hkl_pool = np.vstack([h, k_idx, l])
+
+    ub_helper = FindUB()
+    ub_helper.a, ub_helper.b, ub_helper.c = a, b, c
+    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha, beta, gamma
+    B_mat = ub_helper.reciprocal_lattice_B()
+
+    det_centers, uhats, vhats = [], [], []
+    widths, heights, ms, ns = [], [], [], []
+
+    for i, phys_bank in enumerate(file_bank_ids):
+        from subhkl.instrument.detector import Detector
+        det_config = beamlines[instrument][str(phys_bank)]
+        det = Detector(det_config)
+
+        det_centers.append(det.center)
+        if det.panel_type.value == "flat":
+            uhats.append(det.uhat)
+            vhats.append(det.vhat)
+        else:
+            raise NotImplementedError("Curved panels not yet supported in JAX sparse_laue.")
+
+        widths.append(det.width)
+        heights.append(det.height)
+        ms.append(det.m)
+        ns.append(det.n)
+
+    data_dict = {
+        'images_landscape': images_landscape,
+        'hkl_pool': hkl_pool, 'B_mat': B_mat, 'R_stack': np.array(R_stack),
+        'wl_min': wavelength_min, 'wl_max': wavelength_max,
+        'det_centers': np.array(det_centers), 'uhats': np.array(uhats),
+        'vhats': np.array(vhats), 'widths': np.array(widths), 'heights': np.array(heights),
+        'ms': np.array(ms), 'ns': np.array(ns),
+        'ki_vec': np.array([0., 0., 1.]), 'sample_offset': np.zeros(3),
+        'border_frac': border_frac,
+    }
+
+    from subhkl.optimization import ImageBasedFindUB
+    indexer = ImageBasedFindUB(data_dict)
+
+    # -------------------------------------------------------------------------
+    # GLOBAL SEARCH EXECUTION
+    # -------------------------------------------------------------------------
+
+    injected_rots = None
+    if U_initial is not None:
+        # 1. Convert the 3x3 U_initial matrix to a Rodrigues rotation vector
+        print(f"Starting from provided U matrix...")
+
+        from scipy.spatial.transform import Rotation as R
+        u_rot = R.from_matrix(U_initial)
+        rodrigues_vec = u_rot.as_rotvec()
+
+        # 2. Format it into an array of shape (N, 3).
+        # You can optionally perturb this vector to seed multiple near-guesses,
+        # but injecting just the exact vector as a 2D array works perfectly.
+        injected_rots = np.array([rodrigues_vec])
+
+    if gens > 0:
+        print(f"Starting Unified Sparse Laue Optimization over SO(3)...")
+        print(f"  Images: {len(images_bg)} | Target HKLs: {hkl_pool.shape[1]}")
+        opt_U, opt_params = indexer.minimize_evosax(
+            "DE", population_size=population_size, num_generations=gens,
+            seed=seed, batch_size=batch_size, n_runs=n_runs,
+            injected_rotations=injected_rots
+        )
+    else:
+        print(f"Skipping SO(3) search. Integrating using provided U matrix...")
+        opt_U = U_initial
+        opt_params = np.zeros(3)
+
+    print("Extracting physical intensities from optimal orientation...")
+    c_stars, rows, cols, lams, valids = indexer.get_reflections(np.array(opt_U), images_max)
+    c_stars, valids = np.array(c_stars), np.array(valids)
+
+    mask = (c_stars >= min_intensity) & valids
+    batch_idx, hkl_idx = np.where(mask)
+
+    final_volumes = c_stars[batch_idx, hkl_idx]
+    final_rows = np.array(rows)[batch_idx, hkl_idx]
+    final_cols = np.array(cols)[batch_idx, hkl_idx]
+    final_lams = np.array(lams)[batch_idx, hkl_idx]
+    final_hkls = hkl_pool[:, hkl_idx]
+    final_banks = [file_bank_ids[b] for b in batch_idx]
+    final_filenames = [file_names[b] for b in batch_idx]
+
+    if create_visualizations:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+
+        print("Generating diagnostic visualizations...")
+        for f in range(len(images_raw)):
+            valid_mask = valids[f]
+            if not np.any(valid_mask):
+                continue
+
+            pred_r = np.array(rows)[f, valid_mask]
+            pred_c = np.array(cols)[f, valid_mask]
+
+            ext_mask = (c_stars[f] >= min_intensity) & valid_mask
+            ext_r = np.array(rows)[f, ext_mask]
+            ext_c = np.array(cols)[f, ext_mask]
+
+            phys_bank = file_bank_ids[f]
+            fn_in = file_names[f]
+
+            import os
+            fn_in = os.path.basename(fn_in)
+
+            img_plot = np.maximum(images_bg[f], 1.0)
+            fig, ax = plt.subplots(figsize=(10, 10))
+            vmax = max(10.0, img_plot.max())
+            ax.imshow(img_plot, norm=mcolors.LogNorm(vmin=1.0, vmax=vmax), cmap='binary', origin='lower')
+
+            ax.scatter(pred_c, pred_r, marker='x', color='blue', s=30, alpha=0.5, label='Predicted HKLs')
+            ax.scatter(ext_c, ext_r, facecolors='none', edgecolors='red', marker='o', s=150, linewidths=1.5, label=f'Extracted (>{min_intensity} counts)')
+
+            ax.set_title(f"Sparse Laue - Run {fn_in}, Bank {phys_bank}")
+            ax.legend(loc='upper right')
+
+            fname = f"sparse_laue_run_{fn_in}_bank_{phys_bank}.png"
+            fig.savefig(fname, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+    xyz_out = []
+    for f, (row_idx, col_idx) in enumerate(zip(rows, cols)):
+        from subhkl.instrument.detector import Detector
+        phys_bank = file_bank_ids[f]
+        det_config = beamlines[instrument][str(phys_bank)]
+        det = Detector(det_config)
+        valid_mask = valids[f]
+        if not np.any(valid_mask):
+            continue
+
+        xyz_out.append(det.pixel_to_lab(np.array(row_idx)[valid_mask],
+                                        np.array(col_idx)[valid_mask]))
+
+    xyz_det = np.concatenate(xyz_out)
+
+    print(f"Integration complete. Extracted {len(final_volumes)} valid reflections.")
+
+    print(f"Saving to {output_h5_filename}...")
+    with h5py.File(output_h5_filename, "w") as f:
+        f["sample/U"] = np.array(opt_U)
+        f["sample/B"] = B_mat
+
+        f["sample/a"], f["sample/b"], f["sample/c"] = a, b, c
+        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = alpha, beta, gamma
+        f["sample/space_group"] = space_group.encode('utf-8')
+        f["instrument/wavelength"] = [wavelength_min, wavelength_max]
+
+        f["goniometer/R"] = R_stack
+        f["beam/ki_vec"] = np.array([0.0, 0.0, 1.0])
+        f["sample/offset"] = np.zeros(3)
+
+        f["optimization/best_params"] = np.array(opt_params)
+
+        if len(final_volumes) > 0:
+            f["peaks/h"], f["peaks/k"], f["peaks/l"] = final_hkls[0], final_hkls[1], final_hkls[2]
+            f["peaks/lambda"] = final_lams
+            f["peaks/intensity"] = final_volumes
+            f["peaks/sigma"] = np.full_like(final_volumes, sigma)
+            f["peaks/xyz"] = xyz_det
+            f["bank"] = final_banks
+            f["filename"] = final_filenames
+            f["peaks/pixel_r"] = final_rows
+            f["peaks/pixel_c"] = final_cols
+
+    print("Done.")
 
 if __name__ == "__main__":
     app()
