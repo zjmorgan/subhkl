@@ -415,31 +415,35 @@ class VectorizedObjective:
     def indexer_dynamic_soft_jax(self, ub_mat, kf_ki_sample, k_sq_override=None):
         ub_inv = jnp.linalg.inv(ub_mat)
         v = jnp.matmul(ub_inv, kf_ki_sample)
-        abs_v = jnp.abs(v)
-        max_v_val = jnp.max(abs_v, axis=1)
-        n_start = max_v_val / self.wl_max_val
-        start_int = jnp.ceil(n_start)
+
         k_sq = k_sq_override if k_sq_override is not None else self.k_sq_init[None, :]
 
+        lam_grid = jnp.logspace(
+            jnp.log10(self.wl_min_val), 
+            jnp.log10(self.wl_max_val), 
+            self.num_candidates
+        )
+
+        S, _, N = v.shape
         initial_carry = (
-            jnp.inf * jnp.ones(max_v_val.shape),
-            jnp.zeros((v.shape[0], 3, v.shape[2]), dtype=jnp.int32),
-            jnp.zeros(max_v_val.shape),
+            jnp.inf * jnp.ones((S, N)), 
+            jnp.zeros((S, 3, N), dtype=jnp.int32),
+            jnp.zeros((S, N)),
         )
 
         def scan_body(carry, i):
             curr_min, curr_best_hkl, curr_best_lamb = carry
-            n = start_int + i
-            n_safe = jnp.where(n == 0, 1e-9, n)
-            lamda_cand = max_v_val / n_safe
-            hkl_float = v / lamda_cand[:, None, :]
+
+            lamda_cand = lam_grid[i]
+            hkl_float = v / lamda_cand
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            
+
             q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
-            lambda_opt = k_sq / safe_dot
-            
+
+            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+
             delta_hkl = jnp.sin(jnp.pi * hkl_float) / jnp.pi
             dist = jnp.linalg.norm(delta_hkl, axis=1)
 
@@ -447,10 +451,12 @@ class VectorizedObjective:
             new_min = jnp.where(update_mask, dist, curr_min)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
+
             return (new_min, new_best_hkl, new_best_lamb), None
 
         final_carry, _ = lax.scan(scan_body, initial_carry, jnp.arange(self.num_candidates))
         dist_min, best_hkl, best_lamb = final_carry
+
         loss = jnp.mean(dist_min, axis=1)
         return loss, dist_min, best_hkl.transpose((0, 2, 1)), best_lamb
 
