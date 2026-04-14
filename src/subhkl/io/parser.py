@@ -303,19 +303,42 @@ def indexer(
     refine_gonio_flag = _val(refine_goniometer)
     if refine_gonio_flag:
         if _val(original_nexus_filename) and _val(instrument_name):
-            print(f"Refining goniometer angles from Nexus with {_val(goniometer_bound_deg)} deg bounds.")
-            axes, angles, names = get_rotation_data_from_nexus(_val(original_nexus_filename), _val(instrument_name))
+            print(f"Refining goniometer angles from geometry file with {_val(goniometer_bound_deg)} deg bounds.")
+            
+            # --- FIX: Handle both Raw NeXus and Reduced merged.h5 ---
+            is_merged = False
+            with h5py.File(_val(original_nexus_filename), 'r') as f_check:
+                if "images" in f_check and "goniometer/axes" in f_check:
+                    is_merged = True
+                    axes = f_check["goniometer/axes"][()]
+                    angles = f_check["goniometer/angles"][()]
+                    names = [n.decode('utf-8') for n in f_check["goniometer/names"][()]] if "goniometer/names" in f_check else None
+            
+            if not is_merged:
+                axes, angles, names = get_rotation_data_from_nexus(_val(original_nexus_filename), _val(instrument_name))
+                
+            if len(axes) == 0:
+                raise ValueError("ERROR: Could not extract goniometer axes from the provided nexus file.")
+                
             opt.goniometer_axes = np.array(axes)
 
             if opt.run_indices is not None:
                 num_runs = np.max(opt.run_indices) + 1
-                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_runs, axis=1)
+                
+                # Check if angles is already run-resolved from merged.h5
+                if angles.ndim == 2 and angles.shape[0] == num_runs:
+                    opt.goniometer_angles = angles.T # Shape to (num_axes, num_runs)
+                else:
+                    opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_runs, axis=1)
             else:
-                num_peaks = len(opt.two_theta)
+                num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_peaks, axis=1)
+                
             goniometer_names = names
+            
         elif opt.goniometer_axes is not None:
             print(f"Refining goniometer angles from HDF5 file with {_val(goniometer_bound_deg)} deg bounds.")
+            goniometer_names = opt.goniometer_names
         else:
             print("WARNING: refine_goniometer requested but goniometer data not found. Skipping.")
             refine_gonio_flag = False
