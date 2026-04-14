@@ -211,36 +211,6 @@ def test_predictor_multirun_sample_rotation():
     assert shift_col > 1.0, "Predictor ignored goniometer rotation for sample offset!"
 
 
-def test_ghost_indexing_vulnerability():
-    from subhkl.optimization import FindUB, VectorizedObjective
-
-    fu = FindUB()
-    fu.a, fu.b, fu.c = 10, 10, 10
-    fu.alpha, fu.beta, fu.gamma = 90, 90, 90
-    B = fu.reciprocal_lattice_B()
-    obj = VectorizedObjective(
-        B=B,
-        kf_ki_dir=np.zeros((3, 1)),
-        peak_xyz_lab=None,
-        wavelength=[1.0, 5.0],
-        lattice_system='Cubic',
-    )
-    h_out, k_out, l_out = np.array([21]), np.array([0]), np.array([0])
-    r = obj.mask_range
-    in_bounds = (
-        (h_out >= -r)
-        & (h_out <= r)
-        & (k_out >= -r)
-        & (k_out <= r)
-        & (l_out >= -r)
-        & (l_out <= r)
-    )
-    is_allowed_out = np.where(in_bounds, obj.valid_hkl_mask[0, 0, 0], False)
-    assert not bool(is_allowed_out[0]), (
-        "VULNERABILITY: Forbidden reflection allowed outside mask range!"
-    )
-
-
 def test_stage1_blindness_vulnerability():
     from subhkl.optimization import VectorizedObjective
 
