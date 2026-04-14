@@ -304,7 +304,7 @@ class Peaks:
     def write_hdf5(self, output_filename, detector_peaks, instrument_wavelength):
         """
         Directly writes finder peaks to HDF5. 
-        NOTE: 'xyz' is intentionally excluded to force downstream tools 
+        NOTE: 'xyz', 'two_theta', and 'azimuthal' are intentionally excluded to force downstream tools 
         to rebuild physical coordinates dynamically using the detector config.
         """
         with h5py.File(output_filename, "w") as f:
@@ -328,19 +328,13 @@ class Peaks:
             f["peaks/sigma"] = detector_peaks.sigma
             f["peaks/radius"] = detector_peaks.radii
             
-            # Use pixel coordinates instead of XYZ
+            # Use pixel coordinates exclusively
             f["peaks/pixel_r"] = detector_peaks.peak_rows
             f["peaks/pixel_c"] = detector_peaks.peak_cols
-            
-            # Legacy angular output (optional, but keep for older downstream tools if needed)
-            if detector_peaks.two_theta:
-                f["peaks/two_theta"] = detector_peaks.two_theta
-                f["peaks/azimuthal"] = detector_peaks.az_phi
                 
             f["bank"] = detector_peaks.bank
             f["peaks/image_index"] = detector_peaks.image_index
             f["peaks/run_index"] = detector_peaks.run_id
-
 
     def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False,
                                  max_workers=None, instrument_label=None):

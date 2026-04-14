@@ -146,14 +146,19 @@ def indexer(
             "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names", 
             "files", "file_offsets", "peaks/run_index", "peaks/image_index", 
             "bank", "bank_ids", "sample/offset", "beam/ki_vec",
-            "peaks/pixel_r", "peaks/pixel_c" # <--- Must load pixels to rebuild XYZ dynamically
+            "peaks/pixel_r", "peaks/pixel_c" 
         ]
         for k in keys_to_load:
             if k in f: input_data[k] = f[k][()]
 
-        # --- DYNAMICALLY RECONSTRUCT XYZ FROM PIXELS FOR THE OPTIMIZER ---
+        if _val(ki_vec) is not None:
+            ki_vec_val = np.array([float(x.strip()) for x in _val(ki_vec).split(",")])
+        else:
+            ki_vec_val = f["beam/ki_vec"][()] if "beam/ki_vec" in f else np.array([0.0, 0.0, 1.0])
+
+        # --- DYNAMICALLY RECONSTRUCT XYZ & ANGLES FROM PIXELS FOR THE OPTIMIZER ---
         if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
-            print("Reconstructing physical XYZ coordinates from pixels for physics optimization...")
+            print("Reconstructing physical XYZ and angular coordinates from pixels for physics optimization...")
             if not _val(instrument_name): raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument to rebuild geometry.")
             if not _val(original_nexus_filename): raise ValueError("ERROR: Finder file contains pixels. You must provide --nexus to rebuild geometry.")
                 
@@ -183,6 +188,9 @@ def indexer(
                     }
                     
             xyz_out = np.zeros((len(pixel_r), 3))
+            tt_out = np.zeros(len(pixel_r))
+            az_out = np.zeros(len(pixel_r))
+            
             from subhkl.config import beamlines
             from subhkl.instrument.detector import Detector
             
@@ -201,14 +209,18 @@ def indexer(
                         det.vhat = calibration_dict[bank_str]["vhat"]
                         
                     xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                    tt_out[mask], az_out[mask] = det.pixel_to_angles(
+                        pixel_r[mask], pixel_c[mask], ki_vec=ki_vec_val
+                    )
                 except KeyError as e:
                     print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
                     
-            # Inject xyz into input_data purely so FindUB can use it internally for the math.
-            # We will NOT copy it to the output file.
+            # Inject xyz and angles into input_data purely so FindUB can use it internally for the math.
             input_data["peaks/xyz"] = xyz_out
-        else:
-            raise ValueError("ERROR: Input file does not contain peaks/pixel_r and peaks/pixel_c. Cannot perform physically sound indexing.")
+            input_data["peaks/two_theta"] = tt_out
+            input_data["peaks/azimuthal"] = az_out
+        elif "peaks/two_theta" not in f:
+            raise ValueError("ERROR: Input file does not contain pixels or angles. Cannot perform physically sound indexing.")
 
     if "peaks/image_index" in input_data:
         input_data["peaks/run_index"] = input_data["peaks/image_index"]
@@ -1207,7 +1219,6 @@ def zone_axis_search(
     print(f"Loading empirical rays from {peaks_h5_filename}...")
     
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
-        peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
 
         if "peaks/image_index" in f_peaks:
@@ -1218,6 +1229,57 @@ def zone_axis_search(
         R_peaks_override = f_peaks.get("goniometer/R")
         if R_peaks_override is not None:
             R_peaks_override = R_peaks_override[()]
+
+        if "peaks/xyz" in f_peaks:
+            peaks_xyz = f_peaks["peaks/xyz"][()]
+        elif "peaks/pixel_r" in f_peaks and "peaks/pixel_c" in f_peaks:
+            pixel_r = f_peaks["peaks/pixel_r"][()]
+            pixel_c = f_peaks["peaks/pixel_c"][()]
+            
+            bank_array = None
+            if "bank" in f_peaks: bank_array = f_peaks["bank"][()]
+            elif "peaks/bank" in f_peaks: bank_array = f_peaks["peaks/bank"][()]
+            elif "bank_ids" in f_peaks and "peaks/image_index" in f_peaks:
+                b_ids = f_peaks["bank_ids"][()]
+                img_idx = f_peaks["peaks/image_index"][()]
+                bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
+            else:
+                bank_array = group_indices
+                
+            peaks_xyz = np.zeros((len(pixel_r), 3))
+            
+            calibration_dict = {}
+            if "detector_calibration" in f_peaks:
+                calib_grp = f_peaks["detector_calibration"]
+                for b_key in calib_grp.keys():
+                    calibration_dict[b_key] = {
+                        "center": calib_grp[b_key]["center"][()],
+                        "uhat": calib_grp[b_key]["uhat"][()],
+                        "vhat": calib_grp[b_key]["vhat"][()]
+                    }
+                    
+            from subhkl.config import beamlines
+            from subhkl.instrument.detector import Detector
+            
+            for phys_bank in np.unique(bank_array):
+                mask = bank_array == phys_bank
+                if not np.any(mask): continue
+                    
+                try:
+                    det_config = beamlines[instrument][str(int(phys_bank))]
+                    det = Detector(det_config)
+                    
+                    bank_str = f"bank_{int(phys_bank)}"
+                    if bank_str in calibration_dict:
+                        det.center = calibration_dict[bank_str]["center"]
+                        det.uhat = calibration_dict[bank_str]["uhat"]
+                        det.vhat = calibration_dict[bank_str]["vhat"]
+                        
+                    peaks_xyz[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                except KeyError as e:
+                    print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
+        else:
+            raise ValueError("peaks_h5_filename must contain either xyz or pixel_r/pixel_c to reconstruct geometry.")
 
     q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = [], [], [], [], []
 
