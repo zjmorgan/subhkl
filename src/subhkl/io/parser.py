@@ -163,6 +163,67 @@ def indexer(
     if _val(ki_vec) is not None:
         input_data["beam/ki_vec"] = np.array([float(x.strip()) for x in _val(ki_vec).split(",")])
 
+    # dynamically reconstruct xyz from pixels
+    if "peaks/xyz" not in input_data and "peaks/pixel_r" in f and "peaks/pixel_c" in f:
+        print("Reconstructing physical XYZ coordinates from pixels using detector metrology...")
+        if not _val(instrument_name):
+            raise ValueError("ERROR: Finder file contains pixels, not XYZ. You must provide --instrument to rebuild geometry.")
+        if not _val(original_nexus_filename):
+            raise ValueError("ERROR: Finder file contains pixels, not XYZ. You must provide --nexus to rebuild geometry.")
+            
+        pixel_r = f["peaks/pixel_r"][()]
+        pixel_c = f["peaks/pixel_c"][()]
+        
+        bank_array = None
+        if "bank" in f: bank_array = f["bank"][()]
+        elif "peaks/bank" in f: bank_array = f["peaks/bank"][()]
+        elif "bank_ids" in f and "peaks/image_index" in f:
+            b_ids = f["bank_ids"][()]
+            img_idx = f["peaks/image_index"][()]
+            bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
+        else:
+            bank_array = f["peaks/image_index"][()] # Fallback assumption
+            
+        peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
+        
+        # Load Calibration if available in the input file
+        calibration_dict = {}
+        if "detector_calibration" in f:
+            calib_grp = f["detector_calibration"]
+            for b_key in calib_grp.keys():
+                calibration_dict[b_key] = {
+                    "center": calib_grp[b_key]["center"][()],
+                    "uhat": calib_grp[b_key]["uhat"][()],
+                    "vhat": calib_grp[b_key]["vhat"][()]
+                }
+                
+        xyz_out = np.zeros((len(pixel_r), 3))
+        from subhkl.config import beamlines
+        from subhkl.instrument.detector import Detector
+        
+        for phys_bank in np.unique(bank_array):
+            mask = bank_array == phys_bank
+            if not np.any(mask): continue
+                
+            try:
+                det_config = beamlines[_val(instrument_name)][str(int(phys_bank))]
+                det = Detector(det_config)
+                
+                bank_str = f"bank_{int(phys_bank)}"
+                if bank_str in calibration_dict:
+                    det.center = calibration_dict[bank_str]["center"]
+                    det.uhat = calibration_dict[bank_str]["uhat"]
+                    det.vhat = calibration_dict[bank_str]["vhat"]
+                    
+                xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+            except KeyError as e:
+                print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
+                
+        input_data["peaks/xyz"] = xyz_out
+
+    if "peaks/image_index" in input_data:
+        input_data["peaks/run_index"] = input_data["peaks/image_index"]
+
     opt = FindUB(data=input_data)
     opt.wavelength = [float(w_min_val), float(w_max_val)]
 
