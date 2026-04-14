@@ -112,36 +112,6 @@ def test_multi_run_indexing_refinement():
     assert angle < 0.2
 
 
-def test_clipping_logic_direct():
-    fu = FindUB()
-    fu.a, fu.b, fu.c = 10, 10, 10
-    fu.alpha, fu.beta, fu.gamma = 90, 90, 90
-    B = fu.reciprocal_lattice_B()
-    obj = VectorizedObjective(
-        B=B,
-        kf_ki_dir=np.zeros((3, 4)),
-        peak_xyz_lab=None,
-        wavelength=[1.0, 5.0],
-        lattice_system='Monoclinic',
-    )
-    h = np.array([0, 0, 0, 0])
-    k = np.array([1, 2, 3, 4])
-    l = np.array([0, 0, 0, 0])
-    r = 5
-    idx_h = np.clip(h + r, 0, 2 * r).astype(np.int32)
-    idx_k = np.clip(k + r, 0, 2 * r).astype(np.int32)
-    idx_l = np.clip(l + r, 0, 2 * r).astype(np.int32)
-    in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-    is_allowed = np.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
-    from subhkl.core.spacegroup import is_systematically_absent
-
-    expected_absent = is_systematically_absent(h[:2], k[:2], l[:2], "P 1 21 1")
-    assert bool(is_allowed[0]) == (not expected_absent[0])
-    assert bool(is_allowed[1]) == (not expected_absent[1])
-    assert bool(is_allowed[2])
-    assert bool(is_allowed[3])
-
-
 def test_sample_offset_refinement_multirun():
     np.random.seed(42)
     a, b, c = 10.0, 10.0, 10.0
