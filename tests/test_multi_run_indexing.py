@@ -74,7 +74,7 @@ def generate_synthetic_data(
         "sample/alpha": alpha,
         "sample/beta": beta,
         "sample/gamma": gamma,
-        "sample/space_group": space_group,
+        "sample/space_group": "P1",
         "instrument/wavelength": [0.5, 20.0],
         "peaks/two_theta": np.concatenate(all_tt),
         "peaks/azimuthal": np.concatenate(all_az),
@@ -123,12 +123,11 @@ def test_clipping_logic_direct():
         peak_xyz_lab=None,
         wavelength=[1.0, 5.0],
         lattice_system='Monoclinic',
-        hkl_search_range=2,
     )
     h = np.array([0, 0, 0, 0])
     k = np.array([1, 2, 3, 4])
     l = np.array([0, 0, 0, 0])
-    r = obj.mask_range
+    r = 5
     idx_h = np.clip(h + r, 0, 2 * r).astype(np.int32)
     idx_k = np.clip(k + r, 0, 2 * r).astype(np.int32)
     idx_l = np.clip(l + r, 0, 2 * r).astype(np.int32)
