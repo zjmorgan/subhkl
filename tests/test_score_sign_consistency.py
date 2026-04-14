@@ -15,8 +15,6 @@ def test_score_sign_consistency():
     kf_ki_dir = np.array([[1.0, 0.0, 0.0]])
     peak_xyz = np.array([[1.0, 0.0, 0.0]])
     wavelength = np.array([2.0, 4.0])
-    angle_cdf = np.array([0.0, 1.0])
-    angle_t = np.array([0.0, 1.0])
 
     # 1. Test Gaussian Loss
     obj_gauss = VectorizedObjective(
@@ -24,9 +22,6 @@ def test_score_sign_consistency():
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=peak_xyz,
         wavelength=wavelength,
-        angle_cdf=angle_cdf,
-        angle_t=angle_t,
-        loss_method="gaussian",
     )
 
     # 2. Test Cosine Loss
@@ -35,9 +30,6 @@ def test_score_sign_consistency():
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=peak_xyz,
         wavelength=wavelength,
-        angle_cdf=angle_cdf,
-        angle_t=angle_t,
-        loss_method="cosine",
     )
 
     # Simple identity orientation

@@ -67,8 +67,6 @@ def test_missing_xyz_rotation_regression(tmp_path):
         population_size=100,
         gens=50,
         n_runs=1,
-        tolerance_deg=0.1,
-        loss_method="gaussian",
     )
 
     metrics = compute_metrics(str(output_h5))

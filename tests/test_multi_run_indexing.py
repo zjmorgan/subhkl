@@ -122,8 +122,6 @@ def test_clipping_logic_direct():
         kf_ki_dir=np.zeros((3, 4)),
         peak_xyz_lab=None,
         wavelength=[1.0, 5.0],
-        angle_cdf=np.zeros(4),
-        angle_t=np.zeros(4),
         space_group="P 1 21 1",
         hkl_search_range=2,
     )
@@ -226,10 +224,7 @@ def test_ghost_indexing_vulnerability():
         kf_ki_dir=np.zeros((3, 1)),
         peak_xyz_lab=None,
         wavelength=[1.0, 5.0],
-        angle_cdf=np.zeros(10),
-        angle_t=np.zeros(10),
         space_group="I 2 2 2",
-        hkl_search_range=2,
     )
     h_out, k_out, l_out = np.array([21]), np.array([0]), np.array([0])
     r = obj.mask_range
@@ -258,8 +253,6 @@ def test_stage1_blindness_vulnerability():
         kf_ki_dir=np.array([[0, 0, 1]]).T,
         peak_xyz_lab=xyz_lab,
         wavelength=[1, 2],
-        angle_cdf=np.zeros(10),
-        angle_t=np.zeros(10),
         refine_sample=False,
         sample_nominal=s_nom,
     )
@@ -288,8 +281,6 @@ def test_multirun_peaks_per_image_vulnerability():
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=None,
         wavelength=[1.0, 2.0],
-        angle_cdf=np.zeros(10),
-        angle_t=np.zeros(10),
         static_R=R_stack,
     )
     x = np.zeros((1, 3))
