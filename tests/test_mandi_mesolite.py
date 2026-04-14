@@ -61,7 +61,6 @@ INDEXER_DEFAULTS = {
     "gens": 500,
     "seed": 12345,
     "sigma_init": None,
-    "tolerance_deg": 0.5,
     "refine_lattice": False,
     "lattice_bound_frac": 0.05,
     "refine_goniometer": False,
@@ -73,16 +72,7 @@ INDEXER_DEFAULTS = {
     "beam_bound_deg": 1.0,
     "bootstrap_filename": None,
     "loss_method": "gaussian",
-    "d_min": None,
-    "d_max": None,
-    "hkl_search_range": 20,
-    "search_window_size": 256,
     "batch_size": None,
-    "window_batch_size": 32,
-    "chunk_size": 256,
-    "num_iters": 20,
-    "top_k": 32,
-    "B_sharpen": None,
 }
 
 
