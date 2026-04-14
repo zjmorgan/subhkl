@@ -111,7 +111,6 @@ def indexer(
     det_modes_list = [x.strip().lower() for x in _val(detector_modes).split(",")] if _val(detector_modes) else ["independent"]
     det_rot_axis = np.array([float(x.strip()) for x in _val(detector_global_rot_axis).split(",")])
 
-    # --- INJECT BOOTSTRAP CALIBRATION BEFORE REBUILDING XYZ ---
     if _val(bootstrap_filename):
         apply_detector_calibration(_val(bootstrap_filename), _val(instrument_name))
 
@@ -145,6 +144,7 @@ def indexer(
             else:
                 raise ValueError("Wavelength min/max not provided and not found in input file.")
 
+        # --- IMPORTANT: STRICTLY NO XYZ OR ANGLES ---
         keys_to_load = [
             "peaks/intensity", "peaks/sigma", "peaks/radius",
             "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names", 
@@ -166,7 +166,7 @@ def indexer(
         target_banks = None
 
         if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
-            print("Reconstructing physical XYZ and angular coordinates from pixels for physics optimization...")
+            print("Reconstructing physical geometry from pixels for physics optimization...")
             if not _val(instrument_name) or not _val(original_nexus_filename): 
                 raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument and --nexus to rebuild geometry.")
                 
@@ -219,10 +219,13 @@ def indexer(
                     'global_trans_bound_meters': _val(detector_global_trans_bound_meters)
                 }
             
-            # 2. Rebuild physical XYZ and Arrays
+            # 2. Rebuild internal XYZ for the generic physics engine
             xyz_out = np.zeros((len(pixel_r), 3))
             tt_out = np.zeros(len(pixel_r))
             az_out = np.zeros(len(pixel_r))
+            
+            u_offsets = np.zeros(len(pixel_r))
+            v_offsets = np.zeros(len(pixel_r))
             bank_indices = np.zeros(len(pixel_r), dtype=np.int32)
             
             for phys_bank in np.unique(bank_array):
@@ -233,25 +236,32 @@ def indexer(
                     det_config = beamlines[_val(instrument_name)][str(int(phys_bank))]
                     det = Detector(det_config)
                     
-                    xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                    xyz_p = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                    xyz_out[mask] = xyz_p
+                    
                     tt_out[mask], az_out[mask] = det.pixel_to_angles(
                         pixel_r[mask], pixel_c[mask], ki_vec=ki_vec_val
                     )
                     
                     if refine_det_flag and int(phys_bank) in bank_to_idx:
                         bank_indices[mask] = bank_to_idx[int(phys_bank)]
+                        # Directly compute physical metric distance from the pixel hit to the panel center
+                        # Bypassing pixel logic ensures absolute zero discrepancy at the nominal start state!
+                        u_offsets[mask] = np.dot(xyz_p - det.center, det.uhat)
+                        v_offsets[mask] = np.dot(xyz_p - det.center, det.vhat)
                         
                 except KeyError as e:
-                    print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
+                    print(f"Warning: Could not rebuild geometry for bank {phys_bank}: {e}")
                     
+            # Inject generic lab coordinates for JAX evaluation
             input_data["peaks/xyz"] = xyz_out
             input_data["peaks/two_theta"] = tt_out
             input_data["peaks/azimuthal"] = az_out
             
             if refine_det_flag:
                 peak_pixel_coords = {
-                    'rows': pixel_r.tolist(),
-                    'cols': pixel_c.tolist(),
+                    'u_offsets': u_offsets.tolist(),
+                    'v_offsets': v_offsets.tolist(),
                     'bank_indices': bank_indices.tolist()
                 }
         else:
@@ -349,6 +359,7 @@ def indexer(
 
     opt.reciprocal_lattice_B()
 
+    # STRICTLY PREVENT OUTPUTTING ANY STATIC SPATIAL COORDINATES
     copy_keys = [
         "sample/space_group", "instrument/wavelength", "peaks/intensity",
         "peaks/sigma", "peaks/radius", "goniometer/R", "goniometer/axes", 
@@ -409,7 +420,6 @@ def indexer(
         if opt.x is not None and opt.x.size > 0:
             f["optimization/best_params"] = opt.x
             
-        # Write optimization flags for state tracking
         flags = {
             "refine_lattice": _val(refine_lattice),
             "refine_goniometer": refine_gonio_flag,
