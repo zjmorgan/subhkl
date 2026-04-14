@@ -313,22 +313,18 @@ class VectorizedObjective:
             self.det_centers = jnp.array(detector_params['centers'])
             self.det_uhats = jnp.array(detector_params['uhats'])
             self.det_vhats = jnp.array(detector_params['vhats'])
-            self.det_m = jnp.array(detector_params['m'])
-            self.det_n = jnp.array(detector_params['n'])
-            self.det_pw = jnp.array(detector_params['pw'])
-            self.det_ph = jnp.array(detector_params['ph'])
             
-            self.peak_rows = jnp.array(peak_pixel_coords['rows'])
-            self.peak_cols = jnp.array(peak_pixel_coords['cols'])
+            # Exact physical offsets in meters bypass pixel logic completely
+            self.peak_u_offsets = jnp.array(peak_pixel_coords['u_offsets'])
+            self.peak_v_offsets = jnp.array(peak_pixel_coords['v_offsets'])
             self.peak_det_idx = jnp.array(peak_pixel_coords['bank_indices'], dtype=jnp.int32)
+            
             self.num_banks = self.det_centers.shape[0]
 
-            # Dynamic Metrology Parameter Allocation
             self.det_modes = detector_params.get('modes', ['independent'])
             self.det_param_slices = {}
             self.num_det_params = 0
             
-            # Extract and normalize the custom rotation axis
             rot_axis = jnp.array(detector_params.get("global_rot_axis", [0.0, 1.0, 0.0]))
             self.det_global_rot_axis = rot_axis / (jnp.linalg.norm(rot_axis) + 1e-9)
             
@@ -344,7 +340,7 @@ class VectorizedObjective:
             for mode in self.det_modes:
                 if mode == "radial": size = 1
                 elif mode == "global_rot": size = 3
-                elif mode == "global_rot_axis": size = 1  # <--- NEW: 1D parameter
+                elif mode == "global_rot_axis": size = 1
                 elif mode == "global_trans": size = 3
                 elif mode == "independent": size = self.num_banks * 6
                 else: raise ValueError(f"Unknown detector refinement mode: {mode}")
@@ -625,13 +621,9 @@ class VectorizedObjective:
             u_vec = dyn_uhats[:, self.peak_det_idx, :]
             v_vec = dyn_vhats[:, self.peak_det_idx, :]
             
-            m = self.det_m[self.peak_det_idx]
-            n = self.det_n[self.peak_det_idx]
-            pw = self.det_pw[self.peak_det_idx]
-            ph = self.det_ph[self.peak_det_idx]
-            
-            u_offset = (self.peak_cols - m / 2.0) * pw
-            v_offset = (self.peak_rows - n / 2.0) * ph
+            # Perfect mathematical projection using metric offsets
+            u_offset = self.peak_u_offsets
+            v_offset = self.peak_v_offsets
             
             dynamic_xyz = c + u_offset[None, :, None] * u_vec + v_offset[None, :, None] * v_vec
             p = dynamic_xyz.transpose(0, 2, 1)
