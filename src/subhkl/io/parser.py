@@ -305,7 +305,6 @@ def indexer(
         if _val(original_nexus_filename) and _val(instrument_name):
             print(f"Refining goniometer angles from geometry file with {_val(goniometer_bound_deg)} deg bounds.")
             
-            # --- FIX: Handle both Raw NeXus and Reduced merged.h5 ---
             is_merged = False
             with h5py.File(_val(original_nexus_filename), 'r') as f_check:
                 if "images" in f_check and "goniometer/axes" in f_check:
@@ -322,17 +321,28 @@ def indexer(
                 
             opt.goniometer_axes = np.array(axes)
 
+            # --- FIX: Secure Mapping of Angles to Peaks ---
             if opt.run_indices is not None:
-                num_runs = np.max(opt.run_indices) + 1
+                max_run_id = int(np.max(opt.run_indices))
                 
-                # Check if angles is already run-resolved from merged.h5
-                if angles.ndim == 2 and angles.shape[0] == num_runs:
-                    opt.goniometer_angles = angles.T # Shape to (num_axes, num_runs)
+                # Check if the file provided exactly enough angles for the max run ID
+                if angles.ndim == 2 and angles.shape[0] > max_run_id:
+                    # The file has a 1:1 mapping of image_index -> angle. Just transpose it for JAX.
+                    opt.goniometer_angles = angles.T
+                elif angles.ndim == 2 and angles.shape[0] == 1:
+                    # The file only has 1 angle (e.g. a single snapshot). Broadcast it.
+                    opt.goniometer_angles = np.tile(angles.T, (1, max_run_id + 1))
                 else:
-                    opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_runs, axis=1)
+                    # If we hit here, something is critically mismatched in the file format
+                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
-                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(num_peaks, axis=1)
+                if angles.ndim == 2 and angles.shape[0] == 1:
+                    opt.goniometer_angles = np.tile(angles.T, (1, num_peaks))
+                elif angles.ndim == 2 and angles.shape[0] == num_peaks:
+                    opt.goniometer_angles = angles.T
+                else:
+                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
                 
             goniometer_names = names
             
