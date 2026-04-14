@@ -1,5 +1,6 @@
 import glob
 import os
+import json
 
 import h5py
 import numpy as np
@@ -16,7 +17,6 @@ from subhkl.optimization import FindUB
 from subhkl.core.spacegroup import get_space_group_object
 
 app = typer.Typer()
-
 
 def apply_detector_calibration(hdf5_filename: str, instrument: str):
     """
@@ -37,13 +37,13 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
             for bank_key in calib_grp.keys():
                 bank_id = bank_key.replace("bank_", "")
                 if instrument in beamlines and bank_id in beamlines[instrument]:
-                    # Temporarily override the nominal config in memory
                     beamlines[instrument][bank_id]["center"] = calib_grp[bank_key]["center"][()].tolist()
                     beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key]["uhat"][()].tolist()
                     beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key]["vhat"][()].tolist()
                     count += 1
             if count > 0:
                 print(f"Successfully applied calibration to {count} detector panels.")
+
 
 @app.command()
 def indexer(
@@ -111,6 +111,10 @@ def indexer(
     det_modes_list = [x.strip().lower() for x in _val(detector_modes).split(",")] if _val(detector_modes) else ["independent"]
     det_rot_axis = np.array([float(x.strip()) for x in _val(detector_global_rot_axis).split(",")])
 
+    # --- INJECT BOOTSTRAP CALIBRATION BEFORE REBUILDING XYZ ---
+    if _val(bootstrap_filename):
+        apply_detector_calibration(_val(bootstrap_filename), _val(instrument_name))
+
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
         if a_val is None: a_val = f["sample/a"][()] if "sample/a" in f else None
@@ -156,11 +160,15 @@ def indexer(
         else:
             ki_vec_val = f["beam/ki_vec"][()] if "beam/ki_vec" in f else np.array([0.0, 0.0, 1.0])
 
-        # --- DYNAMICALLY RECONSTRUCT XYZ & ANGLES FROM PIXELS FOR THE OPTIMIZER ---
+        detector_params = None
+        peak_pixel_coords = None
+        refine_det_flag = _val(refine_detector)
+        target_banks = None
+
         if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
             print("Reconstructing physical XYZ and angular coordinates from pixels for physics optimization...")
-            if not _val(instrument_name): raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument to rebuild geometry.")
-            if not _val(original_nexus_filename): raise ValueError("ERROR: Finder file contains pixels. You must provide --nexus to rebuild geometry.")
+            if not _val(instrument_name) or not _val(original_nexus_filename): 
+                raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument and --nexus to rebuild geometry.")
                 
             pixel_r = f["peaks/pixel_r"][()]
             pixel_c = f["peaks/pixel_c"][()]
@@ -176,23 +184,46 @@ def indexer(
                 bank_array = f["peaks/image_index"][()] 
                 
             peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
+            from subhkl.config import beamlines
+            from subhkl.instrument.detector import Detector
             
-            calibration_dict = {}
-            if "detector_calibration" in f:
-                calib_grp = f["detector_calibration"]
-                for b_key in calib_grp.keys():
-                    calibration_dict[b_key] = {
-                        "center": calib_grp[b_key]["center"][()],
-                        "uhat": calib_grp[b_key]["uhat"][()],
-                        "vhat": calib_grp[b_key]["vhat"][()]
-                    }
-                    
+            # 1. Setup Detector Metrology Bounds
+            if refine_det_flag:
+                all_physical_banks = [int(k) for k in beamlines[_val(instrument_name)].keys()]
+                target_banks = det_banks_list if det_banks_list else sorted(all_physical_banks)
+
+                centers, uhats, vhats, m, n, pw, ph = [], [], [], [], [], [], []
+                bank_to_idx = {}
+                
+                for idx, b_id in enumerate(target_banks):
+                    try:
+                        det = peaks_obj.get_detector(b_id)
+                        centers.append(det.center)
+                        uhats.append(det.uhat)
+                        vhats.append(det.vhat)
+                        m.append(det.m)
+                        n.append(det.n)
+                        pw.append(det.width / det.m)
+                        ph.append(det.height / det.n)
+                        bank_to_idx[b_id] = idx
+                    except Exception as e:
+                        print(f"WARNING: Could not load geometry for bank {b_id}: {e}")
+
+                detector_params = {
+                    'centers': centers, 'uhats': uhats, 'vhats': vhats,
+                    'm': m, 'n': n, 'pw': pw, 'ph': ph,
+                    'modes': det_modes_list,
+                    'radial_bound': _val(detector_radial_bound_frac),
+                    'global_rot_bound_deg': _val(detector_global_rot_bound_deg),
+                    'global_rot_axis': det_rot_axis,
+                    'global_trans_bound_meters': _val(detector_global_trans_bound_meters)
+                }
+            
+            # 2. Rebuild physical XYZ and Arrays
             xyz_out = np.zeros((len(pixel_r), 3))
             tt_out = np.zeros(len(pixel_r))
             az_out = np.zeros(len(pixel_r))
-            
-            from subhkl.config import beamlines
-            from subhkl.instrument.detector import Detector
+            bank_indices = np.zeros(len(pixel_r), dtype=np.int32)
             
             for phys_bank in np.unique(bank_array):
                 mask = bank_array == phys_bank
@@ -202,25 +233,29 @@ def indexer(
                     det_config = beamlines[_val(instrument_name)][str(int(phys_bank))]
                     det = Detector(det_config)
                     
-                    bank_str = f"bank_{int(phys_bank)}"
-                    if bank_str in calibration_dict:
-                        det.center = calibration_dict[bank_str]["center"]
-                        det.uhat = calibration_dict[bank_str]["uhat"]
-                        det.vhat = calibration_dict[bank_str]["vhat"]
-                        
                     xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
                     tt_out[mask], az_out[mask] = det.pixel_to_angles(
                         pixel_r[mask], pixel_c[mask], ki_vec=ki_vec_val
                     )
+                    
+                    if refine_det_flag and int(phys_bank) in bank_to_idx:
+                        bank_indices[mask] = bank_to_idx[int(phys_bank)]
+                        
                 except KeyError as e:
                     print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
                     
-            # Inject xyz and angles into input_data purely so FindUB can use it internally for the math.
             input_data["peaks/xyz"] = xyz_out
             input_data["peaks/two_theta"] = tt_out
             input_data["peaks/azimuthal"] = az_out
-        elif "peaks/two_theta" not in f:
-            raise ValueError("ERROR: Input file does not contain pixels or angles. Cannot perform physically sound indexing.")
+            
+            if refine_det_flag:
+                peak_pixel_coords = {
+                    'rows': pixel_r.tolist(),
+                    'cols': pixel_c.tolist(),
+                    'bank_indices': bank_indices.tolist()
+                }
+        else:
+            raise ValueError("ERROR: Input file does not contain peaks/pixel_r and peaks/pixel_c. Cannot perform physically sound indexing.")
 
     if "peaks/image_index" in input_data:
         input_data["peaks/run_index"] = input_data["peaks/image_index"]
@@ -229,9 +264,7 @@ def indexer(
     input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha_val, beta_val, gamma_val
     input_data["sample/space_group"] = sg_val
     input_data["instrument/wavelength"] = [float(w_min_val), float(w_max_val)]
-
-    if _val(ki_vec) is not None:
-        input_data["beam/ki_vec"] = np.array([float(x.strip()) for x in _val(ki_vec).split(",")])
+    input_data["beam/ki_vec"] = ki_vec_val
 
     opt = FindUB(data=input_data)
     opt.wavelength = [float(w_min_val), float(w_max_val)]
@@ -264,85 +297,6 @@ def indexer(
         else:
             print("WARNING: refine_goniometer requested but goniometer data not found. Skipping.")
             refine_gonio_flag = False
-
-    detector_params = None
-    peak_pixel_coords = None
-    refine_det_flag = _val(refine_detector)
-    target_banks = None
-
-    if refine_det_flag:
-        if not _val(original_nexus_filename) or not _val(instrument_name):
-            print("WARNING: refine_detector requires nexus_filename and instrument_name to build geometry. Disabling.")
-            refine_det_flag = False
-        else:
-            print(f"Joint Metrology Refinement active. Pipeline: {' -> '.join(det_modes_list)}")
-            try:
-                peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
-                
-                from subhkl.config import beamlines
-                all_physical_banks = [int(k) for k in beamlines[_val(instrument_name)].keys()]
-                target_banks = det_banks_list if det_banks_list else sorted(all_physical_banks)
-
-                centers, uhats, vhats, m, n, pw, ph = [], [], [], [], [], [], []
-                bank_to_idx = {}
-                
-                for idx, b_id in enumerate(target_banks):
-                    try:
-                        det = peaks_obj.get_detector(b_id)
-                        centers.append(det.center)
-                        uhats.append(det.uhat)
-                        vhats.append(det.vhat)
-                        m.append(det.m)
-                        n.append(det.n)
-                        pw.append(det.width / det.m)
-                        ph.append(det.height / det.n)
-                        bank_to_idx[b_id] = idx
-                    except Exception as e:
-                        print(f"WARNING: Could not load geometry for bank {b_id}: {e}")
-
-                detector_params = {
-                    'centers': centers, 'uhats': uhats, 'vhats': vhats,
-                    'm': m, 'n': n, 'pw': pw, 'ph': ph,
-                    'modes': det_modes_list,
-                    'radial_bound': _val(detector_radial_bound_frac),
-                    'global_rot_bound_deg': _val(detector_global_rot_bound_deg),
-                    'global_rot_axis': det_rot_axis,
-                    'global_trans_bound_meters': _val(detector_global_trans_bound_meters)
-                }
-                
-                if "peaks/xyz" in input_data:
-                    xyz = input_data["peaks/xyz"]
-                    rows, cols, bank_indices = [], [], []
-                    
-                    if "bank" in input_data: bank_array = input_data["bank"]
-                    elif "peaks/bank" in input_data: bank_array = input_data["peaks/bank"]
-                    else: bank_array = opt.run_indices
-                        
-                    for i_p in range(len(xyz)):
-                        b_id = int(bank_array[i_p])
-                        if b_id in bank_to_idx:
-                            det = peaks_obj.get_detector(b_id)
-                            r, c = det.lab_to_pixel(xyz[i_p, 0], xyz[i_p, 1], xyz[i_p, 2], clip=False)
-                            rows.append(r)
-                            cols.append(c)
-                            bank_indices.append(bank_to_idx[b_id])
-                        else:
-                            rows.append(0.0)
-                            cols.append(0.0)
-                            bank_indices.append(0)
-
-                    peak_pixel_coords = {
-                        'rows': rows,
-                        'cols': cols,
-                        'bank_indices': bank_indices
-                    }
-                else:
-                    print("WARNING: No peaks/xyz found in file. Disabling refine_detector.")
-                    refine_det_flag = False
-
-            except Exception as e:
-                print(f"WARNING: Failed to initialize joint detector refinement geometry: {e}")
-                refine_det_flag = False
 
     init_params = None
     if _val(bootstrap_filename):
@@ -395,7 +349,6 @@ def indexer(
 
     opt.reciprocal_lattice_B()
 
-    # Strip physical coordinates from the copy operation
     copy_keys = [
         "sample/space_group", "instrument/wavelength", "peaks/intensity",
         "peaks/sigma", "peaks/radius", "goniometer/R", "goniometer/axes", 
@@ -455,6 +408,17 @@ def indexer(
         
         if opt.x is not None and opt.x.size > 0:
             f["optimization/best_params"] = opt.x
+            
+        # Write optimization flags for state tracking
+        flags = {
+            "refine_lattice": _val(refine_lattice),
+            "refine_goniometer": refine_gonio_flag,
+            "refine_sample": _val(refine_sample),
+            "refine_beam": _val(refine_beam),
+            "refine_detector": refine_det_flag,
+            "freeze_orientation": freeze_val,
+        }
+        f.create_dataset("optimization/flags", data=json.dumps(flags).encode('utf-8'))
         
         if refine_det_flag and hasattr(opt, 'calibrated_centers'):
             for b_idx, b_id in enumerate(target_banks):
