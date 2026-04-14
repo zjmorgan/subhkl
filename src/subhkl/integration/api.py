@@ -178,7 +178,7 @@ class Peaks:
             visualize=visualize, 
             max_workers=max_workers,
             instrument_label=self.instrument,
-            file_prefix=file_prefix, # <--- Pass the output directory prefix here!
+            file_prefix=file_prefix,
         )
 
     def predict_peaks(
@@ -423,9 +423,6 @@ class Peaks:
 
             run_tasks = []
             base_dir = os.path.dirname(file_prefix) if file_prefix else ""
-            base_name = os.path.basename(file_prefix) if file_prefix else "finder"
-            # Strip extension if passed
-            if base_name.endswith('.h5'): base_name = base_name[:-3]
 
             for r_id, data in runs_plot_data.items():
                 mask = [i for i, run in enumerate(peaks.run_id) if run == r_id]
@@ -437,7 +434,7 @@ class Peaks:
                     peak_cols=[peaks.peak_cols[i] for i in mask] if peaks.peak_cols else [],
                 )
 
-                out_name = os.path.join(base_dir, f"{base_name}_unrolled_{data['label']}.png")
+                out_name = os.path.join(base_dir, f"{data['label']}-found.png")
 
                 run_tasks.append((
                     run_peaks, 

@@ -1498,6 +1498,7 @@ def rbf_integrator(
         border_width=border_width,
         chunk_size=chunk_size,
         create_visualizations=create_visualizations,
+        file_prefix=filename,
         max_workers=max_workers,
     )
 
