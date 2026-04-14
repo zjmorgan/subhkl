@@ -182,7 +182,6 @@ def test_predictor_multirun_sample_rotation():
 
 
 def test_stage1_blindness_vulnerability():
-
     B = np.eye(3)
     xyz_lab = np.array([[0.0, 0.0, 0.4]])
     s_nom = np.array([0.01, 0.0, 0.0])

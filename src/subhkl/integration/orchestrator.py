@@ -268,7 +268,6 @@ def prepare_integrate_tasks(
     file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
-
     found_peaks_xyz = None
     found_peaks_bank = None
     found_peaks_run = None
