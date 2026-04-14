@@ -16,7 +16,7 @@ def generate_synthetic_data(
     rotations,
     gonio_axes,
     sample_offset_true=None,
-    lattice_system='Triclinic',
+    lattice_system="Triclinic",
     hkl_range_k=None,
 ):
     fu_helper = FindUB()
@@ -182,7 +182,6 @@ def test_predictor_multirun_sample_rotation():
 
 
 def test_stage1_blindness_vulnerability():
-    from subhkl.optimization import VectorizedObjective
 
     B = np.eye(3)
     xyz_lab = np.array([[0.0, 0.0, 0.4]])
@@ -204,8 +203,6 @@ def test_stage1_blindness_vulnerability():
 def test_multirun_peaks_per_image_vulnerability():
     """Verify if Indexer crashes or miscalculates when multiple peaks belong to the same run."""
     import numpy as np
-
-    from subhkl.optimization import VectorizedObjective
 
     num_runs = 2
     peaks_per_run = 5

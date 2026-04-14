@@ -27,8 +27,6 @@ def test_multi_run_rotation_assignment():
     B = np.eye(3)
     kf_ki_dir = np.random.randn(3, num_peaks)
     wavelength = [1.0, 2.0]
-    angle_cdf = np.linspace(0, 1, 100)
-    angle_t = np.linspace(0, np.pi, 100)
 
     # Initialize objective with peak_run_indices
     obj = VectorizedObjective(

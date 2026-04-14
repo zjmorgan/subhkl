@@ -391,16 +391,29 @@ def finder_merger(
         f["sample/space_group"] = space_group
         f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
+
 @app.command()
 def indexer(
-    peaks_h5_filename: str, output_peaks_filename: str, a: float, b: float, c: float,
-    alpha: float, beta: float, gamma: float, space_group: str,
-    wavelength_min: float | None = None, wavelength_max: float | None = None,
-    goniometer_csv_filename: str | None = None, original_nexus_filename: str | None = None,
-    instrument_name: str | None = None, strategy_name: str = typer.Option("DE", "--strategy"),
-    sigma_init: float = typer.Option(None, "--sigma-init"), n_runs: int = typer.Option(1, "--n-runs", "-n"),
+    peaks_h5_filename: str,
+    output_peaks_filename: str,
+    a: float,
+    b: float,
+    c: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    space_group: str,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+    goniometer_csv_filename: str | None = None,
+    original_nexus_filename: str | None = None,
+    instrument_name: str | None = None,
+    strategy_name: str = typer.Option("DE", "--strategy"),
+    sigma_init: float = typer.Option(None, "--sigma-init"),
+    n_runs: int = typer.Option(1, "--n-runs", "-n"),
     population_size: int = typer.Option(1000, "--population-size", "--popsize"),
-    gens: int = typer.Option(100, "--gens"), seed: int = typer.Option(0, "--seed"),
+    gens: int = typer.Option(100, "--gens"),
+    seed: int = typer.Option(0, "--seed"),
     refine_lattice: bool = typer.Option(False, "--refine-lattice"),
     lattice_bound_frac: float = typer.Option(0.05, "--lattice-bound-frac"),
     refine_goniometer: bool = typer.Option(False, "--refine-goniometer"),
@@ -416,6 +429,7 @@ def indexer(
     sg_to_use = "P 1"
     if space_group:
         from subhkl.core.spacegroup import get_space_group_object
+
         try:
             get_space_group_object(space_group)
             sg_to_use = space_group
@@ -426,51 +440,93 @@ def indexer(
     print(f"Loading peaks from: {peaks_h5_filename}")
     input_data = {}
 
-    def _val(x): return x.default if hasattr(x, "default") else x
+    def _val(x):
+        return x.default if hasattr(x, "default") else x
 
     with h5py.File(peaks_h5_filename, "r") as f:
         w_min_val, w_max_val = _val(wavelength_min), _val(wavelength_max)
         if w_min_val is None or w_max_val is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
-                if w_min_val is None: wavelength_min = float(wl[0])
-                if w_max_val is None: wavelength_max = float(wl[1])
+                if w_min_val is None:
+                    wavelength_min = float(wl[0])
+                if w_max_val is None:
+                    wavelength_max = float(wl[1])
             else:
                 raise ValueError("Wavelength not provided and not found in input file.")
 
         keys_to_load = [
-            "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma",
-            "peaks/radius", "peaks/xyz", "goniometer/R", "goniometer/axes",
-            "goniometer/angles", "goniometer/names", "files", "file_offsets",
-            "peaks/run_index", "peaks/image_index", "bank", "bank_ids", "sample/offset", "beam/ki_vec",
+            "peaks/two_theta",
+            "peaks/azimuthal",
+            "peaks/intensity",
+            "peaks/sigma",
+            "peaks/radius",
+            "peaks/xyz",
+            "goniometer/R",
+            "goniometer/axes",
+            "goniometer/angles",
+            "goniometer/names",
+            "files",
+            "file_offsets",
+            "peaks/run_index",
+            "peaks/image_index",
+            "bank",
+            "bank_ids",
+            "sample/offset",
+            "beam/ki_vec",
         ]
         for k in keys_to_load:
-            if k in f: input_data[k] = f[k][()]
+            if k in f:
+                input_data[k] = f[k][()]
 
     # ToF Geometry mapping constraint
     if "peaks/image_index" in input_data:
         input_data["peaks/run_index"] = input_data["peaks/image_index"]
 
     input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
-    input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha, beta, gamma
+    (
+        input_data["sample/alpha"],
+        input_data["sample/beta"],
+        input_data["sample/gamma"],
+    ) = alpha, beta, gamma
     input_data["sample/space_group"] = sg_to_use
-    input_data["instrument/wavelength"] = [float(_val(wavelength_min)), float(_val(wavelength_max))]
+    input_data["instrument/wavelength"] = [
+        float(_val(wavelength_min)),
+        float(_val(wavelength_max)),
+    ]
 
-    gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
+    gonio_axes_list = (
+        [x.strip() for x in _val(refine_goniometer_axes).split(",")]
+        if _val(refine_goniometer_axes)
+        else None
+    )
 
     index(
-        input_data=input_data, output_peaks_filename=output_peaks_filename,
-        strategy_name=_val(strategy_name), population_size=_val(population_size),
-        gens=_val(gens), sigma_init=_val(sigma_init), n_runs=_val(n_runs), seed=_val(seed),
-        refine_lattice=_val(refine_lattice), lattice_bound_frac=_val(lattice_bound_frac), 
-        bootstrap_filename=_val(bootstrap_filename), refine_goniometer=_val(refine_goniometer), 
-        refine_goniometer_axes=gonio_axes_list, goniometer_bound_deg=_val(goniometer_bound_deg), 
-        refine_sample=_val(refine_sample), sample_bound_meters=_val(sample_bound_meters), 
-        refine_beam=_val(refine_beam), beam_bound_deg=_val(beam_bound_deg), 
-        nexus_filename=original_nexus_filename, instrument_name=instrument_name, 
+        input_data=input_data,
+        output_peaks_filename=output_peaks_filename,
+        strategy_name=_val(strategy_name),
+        population_size=_val(population_size),
+        gens=_val(gens),
+        sigma_init=_val(sigma_init),
+        n_runs=_val(n_runs),
+        seed=_val(seed),
+        refine_lattice=_val(refine_lattice),
+        lattice_bound_frac=_val(lattice_bound_frac),
+        bootstrap_filename=_val(bootstrap_filename),
+        refine_goniometer=_val(refine_goniometer),
+        refine_goniometer_axes=gonio_axes_list,
+        goniometer_bound_deg=_val(goniometer_bound_deg),
+        refine_sample=_val(refine_sample),
+        sample_bound_meters=_val(sample_bound_meters),
+        refine_beam=_val(refine_beam),
+        beam_bound_deg=_val(beam_bound_deg),
+        nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name,
         batch_size=_val(batch_size),
-        wavelength_min=input_data["instrument/wavelength"][0], wavelength_max=input_data["instrument/wavelength"][1],
+        wavelength_min=input_data["instrument/wavelength"][0],
+        wavelength_max=input_data["instrument/wavelength"][1],
     )
+
 
 @app.command()
 def indexer_using_file(
@@ -653,12 +709,17 @@ def peak_predictor(
 
     if offsets is not None:
         print(f"Applying refined goniometer offsets from indexer: {offsets}")
-        if peaks.goniometer.angles_raw is not None and peaks.goniometer.axes_raw is not None:
+        if (
+            peaks.goniometer.angles_raw is not None
+            and peaks.goniometer.axes_raw is not None
+        ):
             angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
-            all_R = np.stack([
-                calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
-                for ang in angles_refined
-            ])
+            all_R = np.stack(
+                [
+                    calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
+                    for ang in angles_refined
+                ]
+            )
         else:
             print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
     else:

@@ -194,7 +194,6 @@ def prepare_predict_tasks(
     ki_vec: Optional[np.ndarray] = None,
     R_all: Optional[np.ndarray] = None,
 ) -> List[Tuple[Any, ...]]:
-    ims = image_data.ims
     bank_mapping = image_data.bank_mapping
     tasks = []
 
@@ -207,20 +206,20 @@ def prepare_predict_tasks(
     total_images = len(sorted_keys)
 
     def _resolve(stack, seq_idx, name):
-        if stack is None: 
+        if stack is None:
             return None
-            
+
         is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
         if not is_batch:
             return stack
-        
+
         n_items = stack.shape[0]
         if n_items == 1:
             return stack[0]
-            
+
         if n_items == total_images:
             return stack[seq_idx]
-            
+
         raise ValueError(
             f"CRITICAL: Array dimension mismatch for '{name}'. "
             f"The stack contains {n_items} matrices, but the dataset has {total_images} images. "
@@ -250,6 +249,7 @@ def prepare_predict_tasks(
             )
         )
     return tasks
+
 
 def prepare_integrate_tasks(
     image: ImageData,

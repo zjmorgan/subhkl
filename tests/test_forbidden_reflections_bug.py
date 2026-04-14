@@ -21,7 +21,7 @@ def test_forbidden_reflections_allowed_if_out_of_bounds():
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=None,
         wavelength=wavelength,
-        lattice_system='Cubic',
+        lattice_system="Cubic",
     )
 
     # HKL (1, 0, 0) is outside range 0.
