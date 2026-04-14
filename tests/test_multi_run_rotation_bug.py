@@ -36,8 +36,6 @@ def test_multi_run_rotation_assignment():
         kf_ki_dir=kf_ki_dir,
         peak_xyz_lab=None,
         wavelength=wavelength,
-        angle_cdf=angle_cdf,
-        angle_t=angle_t,
         static_R=static_R,
         peak_run_indices=run_indices,
     )
