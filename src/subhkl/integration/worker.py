@@ -28,6 +28,20 @@ class _RunPeaksFinder:
     var_v: list = None
     cov_uv: list = None
 
+# --- Helper to bypass any hidden worker.py logic and guarantee execution ---
+def _safe_plot_wrapper(args):
+    run_peaks, images, detectors, finder_peaks, out_name, instrument_label = args
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+    plot_unrolled_detector(
+        run_peaks,
+        images,
+        detectors,
+        finder_peaks,
+        out_name=out_name,
+        instrument=instrument_label
+    )
+    return out_name
+
 def _render_finder_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
     run_id, peaks, images, detectors, finder_peaks, instrument = args

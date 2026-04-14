@@ -14,7 +14,7 @@ from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
-from subhkl.integration.worker import _render_finder_unrolled_plot, _RunPeaksFinder
+from subhkl.integration.worker import _RunPeaksFinder, _safe_plot_wrapper
 from subhkl.viz.detector_assembly import plot_unrolled_detector
 
 
@@ -177,7 +177,8 @@ class Peaks:
             precomputed_peaks=precomputed_peaks if show_candidates else None,
             visualize=visualize, 
             max_workers=max_workers,
-            instrument_label=self.instrument
+            instrument_label=self.instrument,
+            file_prefix=file_prefix, # <--- Pass the output directory prefix here!
         )
 
     def predict_peaks(
@@ -336,8 +337,15 @@ class Peaks:
             f["peaks/image_index"] = detector_peaks.image_index
             f["peaks/run_index"] = detector_peaks.run_id
 
-    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False,
-                                 max_workers=None, instrument_label=None):
+    def _assemble_detector_peaks(
+        self, 
+        results_by_key, 
+        precomputed_peaks=None, 
+        visualize=False,
+        max_workers=None, 
+        instrument_label=None,
+        file_prefix=None,
+    ):
         if precomputed_peaks is None:
             precomputed_peaks = {}
 
@@ -349,7 +357,7 @@ class Peaks:
         intensity: list[float] = []
         sigma: list[float] = []
         radii: list[float] = []
-        xyz_out: list[list[float]] = [] # We still accumulate it for plotting if needed, but don't save
+        xyz_out: list[list[float]] = [] 
         banks: list[int] = []
         image_indices: list[int] = []
         run_ids: list[int] = []
@@ -414,6 +422,11 @@ class Peaks:
                     runs_plot_data[run_id]['finder_peaks'][img_key] = precomputed_peaks[img_key]
 
             run_tasks = []
+            base_dir = os.path.dirname(file_prefix) if file_prefix else ""
+            base_name = os.path.basename(file_prefix) if file_prefix else "finder"
+            # Strip extension if passed
+            if base_name.endswith('.h5'): base_name = base_name[:-3]
+
             for r_id, data in runs_plot_data.items():
                 mask = [i for i, run in enumerate(peaks.run_id) if run == r_id]
 
@@ -424,7 +437,16 @@ class Peaks:
                     peak_cols=[peaks.peak_cols[i] for i in mask] if peaks.peak_cols else [],
                 )
 
-                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks'], instrument_label))
+                out_name = os.path.join(base_dir, f"{base_name}_unrolled_{data['label']}.png")
+
+                run_tasks.append((
+                    run_peaks, 
+                    data['images'], 
+                    data['detectors'], 
+                    data['finder_peaks'], 
+                    out_name,
+                    instrument_label
+                ))
 
             if max_workers is None:
                 max_workers = os.cpu_count()
@@ -433,11 +455,16 @@ class Peaks:
 
             ctx = multiprocessing.get_context("spawn")
             with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-                list(tqdm(
-                    executor.map(_render_finder_unrolled_plot, run_tasks),
-                    total=len(run_tasks),
-                    desc="Rendering Finder Unrolled Plots"
-                ))
+                # Use submit instead of map to guarantee exceptions aren't swallowed
+                futures = {executor.submit(_safe_plot_wrapper, t): t[4] for t in run_tasks}
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Rendering Finder Unrolled Plots"):
+                    try:
+                        out_path = future.result()
+                        # print(f"Saved: {out_path}") # Optional debug print
+                    except Exception as e:
+                        import traceback
+                        print(f"Visualization failed for {futures[future]}:")
+                        traceback.print_exc()
 
         return peaks
 
