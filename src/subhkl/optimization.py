@@ -966,13 +966,24 @@ class FindUB:
             fixed_rot_params=self.fixed_rot_params,
         )
 
-        num_dims = (0 if freeze_orientation else 3) + (num_lattice_params if refine_lattice else 0)
-        if refine_sample and self.peak_xyz is not None: num_dims += 3
-        if refine_beam and self.peak_xyz is not None: num_dims += 2
-        if refine_goniometer: num_dims += np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
-        if refine_detector: num_dims += objective.num_det_params
+        # The base orientation is 3 parameters, unless frozen (then 0).
+        num_dims = 0 if freeze_orientation else 3
 
-        # --- FAST EVALUATION BYPASS ---
+        if refine_lattice:
+            num_dims += num_lattice_params
+
+        if refine_sample and self.peak_xyz is not None:
+            num_dims += 3
+
+        if refine_beam and self.peak_xyz is not None:
+            num_dims += 2
+
+        if refine_goniometer:
+            num_dims += np.sum(goniometer_refine_mask) if goniometer_refine_mask is not None else len(goniometer_axes)
+
+        if refine_detector:
+            num_dims += objective.num_det_params
+
         # If there are 0 parameters to refine, simply evaluate the initial geometry.
         if num_dims == 0:
             print("No parameters selected for refinement. Evaluating static physical model...")
