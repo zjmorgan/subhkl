@@ -200,8 +200,8 @@ def plot_unrolled_detector(peaks, images, detectors, finder_peaks=None, out_name
             ax.plot(e_roty, e_Y, color='red', lw=0.25, alpha=0.8, label=label)
             added_ellipse_label = True
 
-    # 4. Plot the Integrated Peaks
-    if getattr(peaks, 'peak_rows', None) is not None and getattr(peaks, 'peak_cols', None) is not None:
+    # 4. Plot the peak centers
+    if getattr(peaks, 'peak_rows', None) is not None and getattr(peaks, 'peak_cols', None) is not None and getattr(peaks, 'var_u', None) is None:
         p_rotys = []
         p_Ys = []
         
