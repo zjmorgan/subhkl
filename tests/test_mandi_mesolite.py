@@ -71,7 +71,6 @@ INDEXER_DEFAULTS = {
     "refine_beam": False,
     "beam_bound_deg": 1.0,
     "bootstrap_filename": None,
-    "loss_method": "gaussian",
     "batch_size": None,
 }
 
