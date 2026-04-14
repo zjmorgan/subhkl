@@ -16,7 +16,7 @@ def generate_synthetic_data(
     rotations,
     gonio_axes,
     sample_offset_true=None,
-    space_group="P 1",
+    lattice_system='Triclinic',
     hkl_range_k=None,
 ):
     fu_helper = FindUB()
@@ -122,7 +122,7 @@ def test_clipping_logic_direct():
         kf_ki_dir=np.zeros((3, 4)),
         peak_xyz_lab=None,
         wavelength=[1.0, 5.0],
-        space_group="P 1 21 1",
+        lattice_system='Monoclinic',
         hkl_search_range=2,
     )
     h = np.array([0, 0, 0, 0])
@@ -224,7 +224,7 @@ def test_ghost_indexing_vulnerability():
         kf_ki_dir=np.zeros((3, 1)),
         peak_xyz_lab=None,
         wavelength=[1.0, 5.0],
-        space_group="I 2 2 2",
+        lattice_system='Cubic',
     )
     h_out, k_out, l_out = np.array([21]), np.array([0]), np.array([0])
     r = obj.mask_range
