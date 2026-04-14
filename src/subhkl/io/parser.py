@@ -45,7 +45,6 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
             if count > 0:
                 print(f"Successfully applied calibration to {count} detector panels.")
 
-
 @app.command()
 def indexer(
     peaks_h5_filename: str, 
@@ -81,11 +80,11 @@ def indexer(
     beam_bound_deg: float = typer.Option(1.0, "--beam-bound-deg"),
     refine_detector: bool = typer.Option(False, "--refine-detector"),
     refine_detector_banks: str = typer.Option(None, "--refine-detector-banks", help="Comma-separated bank IDs to refine"),
-    detector_modes: str = typer.Option("independent", "--detector-modes", help="Modes: radial, global_rot, global_rot_axis, global_trans, independent"),
-    detector_global_rot_axis: str = typer.Option("0,1,0", "--detector-global-rot-axis", help="Axis vector for global_rot_axis mode (e.g. 0,1,0)"),
+    detector_modes: str = typer.Option("independent", "--detector-modes", help="Comma-separated list of refinement modes (e.g. radial,global_rot,independent)"),
     detector_trans_bound_meters: float = typer.Option(0.005, "--detector-trans-bound-meters"),
     detector_rot_bound_deg: float = typer.Option(1.0, "--detector-rot-bound-deg"),
     detector_global_rot_bound_deg: float = typer.Option(2.0, "--detector-global-rot-bound-deg"),
+    detector_global_rot_axis: str = typer.Option("0,1,0", "--detector-global-rot-axis", help="Axis vector for global_rot_axis mode (e.g. 0,1,0)"),
     detector_global_trans_bound_meters: float = typer.Option(0.01, "--detector-global-trans-bound-meters"),
     detector_radial_bound_frac: float = typer.Option(0.05, "--detector-radial-bound-frac"),
     bootstrap_filename: str | None = typer.Option(None, "--bootstrap"),
@@ -110,9 +109,8 @@ def indexer(
     gonio_axes_list = [x.strip() for x in _val(refine_goniometer_axes).split(",")] if _val(refine_goniometer_axes) else None
     det_banks_list = [int(x.strip()) for x in _val(refine_detector_banks).split(",")] if _val(refine_detector_banks) else None
     det_modes_list = [x.strip().lower() for x in _val(detector_modes).split(",")] if _val(detector_modes) else ["independent"]
-    
-    # Parse the custom rotation axis
     det_rot_axis = np.array([float(x.strip()) for x in _val(detector_global_rot_axis).split(",")])
+
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
         if a_val is None: a_val = f["sample/a"][()] if "sample/a" in f else None
@@ -144,13 +142,73 @@ def indexer(
                 raise ValueError("Wavelength min/max not provided and not found in input file.")
 
         keys_to_load = [
-            "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma",
-            "peaks/radius", "peaks/xyz", "goniometer/R", "goniometer/axes",
-            "goniometer/angles", "goniometer/names", "files", "file_offsets",
-            "peaks/run_index", "peaks/image_index", "bank", "bank_ids", "sample/offset", "beam/ki_vec",
+            "peaks/intensity", "peaks/sigma", "peaks/radius",
+            "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names", 
+            "files", "file_offsets", "peaks/run_index", "peaks/image_index", 
+            "bank", "bank_ids", "sample/offset", "beam/ki_vec",
+            "peaks/pixel_r", "peaks/pixel_c" # <--- Must load pixels to rebuild XYZ dynamically
         ]
         for k in keys_to_load:
             if k in f: input_data[k] = f[k][()]
+
+        # --- DYNAMICALLY RECONSTRUCT XYZ FROM PIXELS FOR THE OPTIMIZER ---
+        if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
+            print("Reconstructing physical XYZ coordinates from pixels for physics optimization...")
+            if not _val(instrument_name): raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument to rebuild geometry.")
+            if not _val(original_nexus_filename): raise ValueError("ERROR: Finder file contains pixels. You must provide --nexus to rebuild geometry.")
+                
+            pixel_r = f["peaks/pixel_r"][()]
+            pixel_c = f["peaks/pixel_c"][()]
+            
+            bank_array = None
+            if "bank" in f: bank_array = f["bank"][()]
+            elif "peaks/bank" in f: bank_array = f["peaks/bank"][()]
+            elif "bank_ids" in f and "peaks/image_index" in f:
+                b_ids = f["bank_ids"][()]
+                img_idx = f["peaks/image_index"][()]
+                bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
+            else:
+                bank_array = f["peaks/image_index"][()] 
+                
+            peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
+            
+            calibration_dict = {}
+            if "detector_calibration" in f:
+                calib_grp = f["detector_calibration"]
+                for b_key in calib_grp.keys():
+                    calibration_dict[b_key] = {
+                        "center": calib_grp[b_key]["center"][()],
+                        "uhat": calib_grp[b_key]["uhat"][()],
+                        "vhat": calib_grp[b_key]["vhat"][()]
+                    }
+                    
+            xyz_out = np.zeros((len(pixel_r), 3))
+            from subhkl.config import beamlines
+            from subhkl.instrument.detector import Detector
+            
+            for phys_bank in np.unique(bank_array):
+                mask = bank_array == phys_bank
+                if not np.any(mask): continue
+                    
+                try:
+                    det_config = beamlines[_val(instrument_name)][str(int(phys_bank))]
+                    det = Detector(det_config)
+                    
+                    bank_str = f"bank_{int(phys_bank)}"
+                    if bank_str in calibration_dict:
+                        det.center = calibration_dict[bank_str]["center"]
+                        det.uhat = calibration_dict[bank_str]["uhat"]
+                        det.vhat = calibration_dict[bank_str]["vhat"]
+                        
+                    xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                except KeyError as e:
+                    print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
+                    
+            # Inject xyz into input_data purely so FindUB can use it internally for the math.
+            # We will NOT copy it to the output file.
+            input_data["peaks/xyz"] = xyz_out
+        else:
+            raise ValueError("ERROR: Input file does not contain peaks/pixel_r and peaks/pixel_c. Cannot perform physically sound indexing.")
 
     if "peaks/image_index" in input_data:
         input_data["peaks/run_index"] = input_data["peaks/image_index"]
@@ -162,67 +220,6 @@ def indexer(
 
     if _val(ki_vec) is not None:
         input_data["beam/ki_vec"] = np.array([float(x.strip()) for x in _val(ki_vec).split(",")])
-
-    # dynamically reconstruct xyz from pixels
-    if "peaks/xyz" not in input_data and "peaks/pixel_r" in f and "peaks/pixel_c" in f:
-        print("Reconstructing physical XYZ coordinates from pixels using detector metrology...")
-        if not _val(instrument_name):
-            raise ValueError("ERROR: Finder file contains pixels, not XYZ. You must provide --instrument to rebuild geometry.")
-        if not _val(original_nexus_filename):
-            raise ValueError("ERROR: Finder file contains pixels, not XYZ. You must provide --nexus to rebuild geometry.")
-            
-        pixel_r = f["peaks/pixel_r"][()]
-        pixel_c = f["peaks/pixel_c"][()]
-        
-        bank_array = None
-        if "bank" in f: bank_array = f["bank"][()]
-        elif "peaks/bank" in f: bank_array = f["peaks/bank"][()]
-        elif "bank_ids" in f and "peaks/image_index" in f:
-            b_ids = f["bank_ids"][()]
-            img_idx = f["peaks/image_index"][()]
-            bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
-        else:
-            bank_array = f["peaks/image_index"][()] # Fallback assumption
-            
-        peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
-        
-        # Load Calibration if available in the input file
-        calibration_dict = {}
-        if "detector_calibration" in f:
-            calib_grp = f["detector_calibration"]
-            for b_key in calib_grp.keys():
-                calibration_dict[b_key] = {
-                    "center": calib_grp[b_key]["center"][()],
-                    "uhat": calib_grp[b_key]["uhat"][()],
-                    "vhat": calib_grp[b_key]["vhat"][()]
-                }
-                
-        xyz_out = np.zeros((len(pixel_r), 3))
-        from subhkl.config import beamlines
-        from subhkl.instrument.detector import Detector
-        
-        for phys_bank in np.unique(bank_array):
-            mask = bank_array == phys_bank
-            if not np.any(mask): continue
-                
-            try:
-                det_config = beamlines[_val(instrument_name)][str(int(phys_bank))]
-                det = Detector(det_config)
-                
-                bank_str = f"bank_{int(phys_bank)}"
-                if bank_str in calibration_dict:
-                    det.center = calibration_dict[bank_str]["center"]
-                    det.uhat = calibration_dict[bank_str]["uhat"]
-                    det.vhat = calibration_dict[bank_str]["vhat"]
-                    
-                xyz_out[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
-            except KeyError as e:
-                print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
-                
-        input_data["peaks/xyz"] = xyz_out
-
-    if "peaks/image_index" in input_data:
-        input_data["peaks/run_index"] = input_data["peaks/image_index"]
 
     opt = FindUB(data=input_data)
     opt.wavelength = [float(w_min_val), float(w_max_val)]
@@ -269,14 +266,7 @@ def indexer(
             print(f"Joint Metrology Refinement active. Pipeline: {' -> '.join(det_modes_list)}")
             try:
                 peaks_obj = Peaks(_val(original_nexus_filename), _val(instrument_name))
-               
-                if "bank" in input_data:
-                    bank_array = input_data["bank"]
-                elif "peaks/bank" in input_data:
-                    bank_array = input_data["peaks/bank"]
-                else:
-                    bank_array = opt.run_indices
-
+                
                 from subhkl.config import beamlines
                 all_physical_banks = [int(k) for k in beamlines[_val(instrument_name)].keys()]
                 target_banks = det_banks_list if det_banks_list else sorted(all_physical_banks)
@@ -304,14 +294,18 @@ def indexer(
                     'modes': det_modes_list,
                     'radial_bound': _val(detector_radial_bound_frac),
                     'global_rot_bound_deg': _val(detector_global_rot_bound_deg),
-                    'global_rot_axis': det_rot_axis, # <--- NEW
+                    'global_rot_axis': det_rot_axis,
                     'global_trans_bound_meters': _val(detector_global_trans_bound_meters)
                 }
-
-                xyz = opt.peak_xyz if opt.peak_xyz is not None else input_data.get("peaks/xyz")
                 
-                if xyz is not None:
+                if "peaks/xyz" in input_data:
+                    xyz = input_data["peaks/xyz"]
                     rows, cols, bank_indices = [], [], []
+                    
+                    if "bank" in input_data: bank_array = input_data["bank"]
+                    elif "peaks/bank" in input_data: bank_array = input_data["peaks/bank"]
+                    else: bank_array = opt.run_indices
+                        
                     for i_p in range(len(xyz)):
                         b_id = int(bank_array[i_p])
                         if b_id in bank_to_idx:
@@ -389,12 +383,13 @@ def indexer(
 
     opt.reciprocal_lattice_B()
 
+    # Strip physical coordinates from the copy operation
     copy_keys = [
         "sample/space_group", "instrument/wavelength", "peaks/intensity",
-        "peaks/sigma", "peaks/two_theta", "peaks/azimuthal", "peaks/radius",
-        "peaks/xyz", "goniometer/R", "goniometer/axes", "goniometer/angles",
-        "goniometer/names", "files", "file_offsets", "peaks/run_index",
-        "bank", "sample/offset", "beam/ki_vec",
+        "peaks/sigma", "peaks/radius", "goniometer/R", "goniometer/axes", 
+        "goniometer/angles", "goniometer/names", "files", "file_offsets", 
+        "peaks/run_index", "peaks/image_index", "bank", "sample/offset", 
+        "beam/ki_vec", "peaks/pixel_r", "peaks/pixel_c"
     ]
 
     copied_data = {}
@@ -458,7 +453,6 @@ def indexer(
                 f[f"{grp_name}/vhat"] = opt.calibrated_vhats[b_idx]
 
     print("Done.")
-
 
 @app.command()
 def finder(
