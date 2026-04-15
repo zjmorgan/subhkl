@@ -13,6 +13,7 @@ from subhkl.commands import (
     run_mtz_exporter,
     run_reduce,
     run_merge_images,
+    run_zone_axis_search,
 )
 
 app = typer.Typer()
