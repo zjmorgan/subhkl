@@ -17,6 +17,7 @@ from subhkl.commands import (
 
 app = typer.Typer()
 
+
 @app.command()
 def finder(
     filename: Annotated[str, typer.Argument(help="Input raw/event Nexus file")],
@@ -52,11 +53,15 @@ def finder(
     sparse_rbf_max_sigma: float = 10.0,
     sparse_rbf_max_peaks: int = 500,
     sparse_rbf_chunk_size: int = 512,
-    sparse_rbf_tile_rows: int = 2,
-    sparse_rbf_tile_cols: int = 2,
-    sparse_rbf_loss: Annotated[str, typer.Option(help="Likelihood for peak finder.")] = "gaussian",
-    sparse_rbf_auto_tune_alpha: Annotated[bool, typer.Option(help="Auto-tune SNR threshold.")] = False,
-    sparse_rbf_candidate_alphas: Annotated[str, typer.Option(help="Candidate SNR thresholds alpha for auto-tuning")] = "3.0,5.0,10.0,15.0,20.0,25.0,30",
+    sparse_rbf_loss: Annotated[
+        str, typer.Option(help="Likelihood for peak finder.")
+    ] = "gaussian",
+    sparse_rbf_auto_tune_alpha: Annotated[
+        bool, typer.Option(help="Auto-tune SNR threshold.")
+    ] = False,
+    sparse_rbf_candidate_alphas: Annotated[
+        str, typer.Option(help="Candidate SNR thresholds alpha for auto-tuning")
+    ] = "3.0,5.0,10.0,15.0,20.0,25.0,30.0",
     max_workers: int = 16,
 ):
     # Pass everything straight into the core logic function
@@ -94,8 +99,6 @@ def finder(
         sparse_rbf_max_sigma=sparse_rbf_max_sigma,
         sparse_rbf_max_peaks=sparse_rbf_max_peaks,
         sparse_rbf_chunk_size=sparse_rbf_chunk_size,
-        sparse_rbf_tile_rows=sparse_rbf_tile_rows,
-        sparse_rbf_tile_cols=sparse_rbf_tile_cols,
         sparse_rbf_loss=sparse_rbf_loss,
         sparse_rbf_auto_tune_alpha=sparse_rbf_auto_tune_alpha,
         sparse_rbf_candidate_alphas=sparse_rbf_candidate_alphas,
@@ -107,20 +110,49 @@ def finder(
 def rbf_integrator(
     filename: Annotated[str, typer.Argument(help="Merged HDF5 image stack")],
     instrument: Annotated[str, typer.Argument(help="Instrument name")],
-    integration_peaks_filename: Annotated[str, typer.Argument(help="Predicted peaks HDF5 file")],
-    output_filename: Annotated[str, typer.Argument(help="Output integrated peaks HDF5 file")],
-    alpha: Annotated[float, typer.Option("--alpha", help="Peak over background threshold (Z-score)")] = 1.0,
-    gamma: Annotated[float, typer.Option("--gamma", help="Besov space weight exponent")] = 1.0,
+    integration_peaks_filename: Annotated[
+        str, typer.Argument(help="Predicted peaks HDF5 file")
+    ],
+    output_filename: Annotated[
+        str, typer.Argument(help="Output integrated peaks HDF5 file")
+    ],
+    alpha: Annotated[
+        float, typer.Option("--alpha", help="Peak over background threshold (Z-score)")
+    ] = 1.0,
+    gamma: Annotated[
+        float, typer.Option("--gamma", help="Besov space weight exponent")
+    ] = 1.0,
     sigmas: Annotated[str, typer.Option(help="Unstretched peak radii")] = "1.0,2.0,4.0",
-    nominal_sigma: Annotated[float, typer.Option(help="The typical peak radius, used as a fallback for weak reflections")] = 1.0,
-    anisotropic: Annotated[bool, typer.Option(help="Integrate anisotropic quasi-Laue peaks")] = False,
-    fit_mosaicity: Annotated[bool, typer.Option(help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries.")] = False,
-    max_peaks: Annotated[int, typer.Option("--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)")] = 500,
-    rel_border_width: Annotated[float, typer.Option(help="Border width in fraction of image size")] = 0.0,
+    nominal_sigma: Annotated[
+        float,
+        typer.Option(
+            help="The typical peak radius, used as a fallback for weak reflections"
+        ),
+    ] = 1.0,
+    anisotropic: Annotated[
+        bool, typer.Option(help="Integrate anisotropic quasi-Laue peaks")
+    ] = False,
+    fit_mosaicity: Annotated[
+        bool,
+        typer.Option(
+            help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries."
+        ),
+    ] = False,
+    max_peaks: Annotated[
+        int,
+        typer.Option(
+            "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"
+        ),
+    ] = 500,
+    rel_border_width: Annotated[
+        float, typer.Option(help="Border width in fraction of image size")
+    ] = 0.0,
     show_progress: Annotated[bool, typer.Option("--show-progress")] = True,
     create_visualizations: bool = False,
     chunk_size: int = 256,
-    max_workers: Annotated[int | None, typer.Option(help="Maximum number of CPU tasks for visualization.")] = None,
+    max_workers: Annotated[
+        int | None, typer.Option(help="Maximum number of CPU tasks for visualization.")
+    ] = None,
 ):
     """
     Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
@@ -142,82 +174,6 @@ def rbf_integrator(
         show_progress=show_progress,
         create_visualizations=create_visualizations,
         chunk_size=chunk_size,
-        max_workers=max_workers,
-    )
-
-def index(
-    hdf5_peaks_filename: str | None = None,  # Made optional
-    output_peaks_filename: str | None = None,
-    strategy_name: str = "DE",
-    population_size: int = 1000,
-    gens: int = 100,
-    n_runs: int = 1,
-    seed: int = 0,
-    tolerance_deg: float = 0.1,
-    sigma_init: float | None = None,
-    refine_lattice: bool = False,
-    lattice_bound_frac: float = 0.05,
-    bootstrap_filename: str | None = None,
-    refine_goniometer: bool = False,
-    refine_goniometer_axes: list | None = None,
-    goniometer_bound_deg: float = 5.0,
-    refine_sample: bool = False,
-    sample_bound_meters: float = 0.002,
-    refine_beam: bool = False,
-    beam_bound_deg: float = 1.0,
-    nexus_filename: str | None = None,
-    instrument_name: str | None = None,
-    loss_method: str = "cosine",
-    hkl_search_range: int = 20,
-    d_min: float | None = None,
-    d_max: float | None = None,
-    search_window_size: int = 512,
-    batch_size: int | None = None,
-    window_batch_size: int = 32,
-    chunk_size: int = 256,
-    num_iters: int = 20,
-    top_k: int = 32,
-    B_sharpen: float | None = None,
-    input_data: dict | None = None,
-    wavelength_min: float | None = None,
-    wavelength_max: float | None = None,
-):
-    run_finder(
-        filename=filename,
-        instrument=instrument,
-        output_filename=output_filename,
-        finder_algorithm=finder_algorithm,
-        show_progress=show_progress,
-        create_visualizations=create_visualizations,
-        show_steps=show_steps,
-        peak_local_max_min_pixel_distance=peak_local_max_min_pixel_distance,
-        peak_local_max_min_relative_intensity=peak_local_max_min_relative_intensity,
-        peak_local_max_normalization=peak_local_max_normalization,
-        thresholding_noise_cutoff_quantile=thresholding_noise_cutoff_quantile,
-        thresholding_min_peak_dist_pixels=thresholding_min_peak_dist_pixels,
-        thresholding_mask_file=thresholding_mask_file,
-        thresholding_mask_rel_erosion_radius=thresholding_mask_rel_erosion_radius,
-        thresholding_blur_kernel_sigma=thresholding_blur_kernel_sigma,
-        thresholding_open_kernel_size_pixels=thresholding_open_kernel_size_pixels,
-        wavelength_min=wavelength_min,
-        wavelength_max=wavelength_max,
-        region_growth_distance_threshold=region_growth_distance_threshold,
-        region_growth_minimum_sigma=region_growth_minimum_sigma,
-        region_growth_minimum_intensity=region_growth_minimum_intensity,
-        region_growth_maximum_pixel_radius=region_growth_maximum_pixel_radius,
-        peak_center_box_size=peak_center_box_size,
-        peak_smoothing_window_size=peak_smoothing_window_size,
-        peak_minimum_pixels=peak_minimum_pixels,
-        peak_minimum_signal_to_noise=peak_minimum_signal_to_noise,
-        peak_pixel_outlier_threshold=peak_pixel_outlier_threshold,
-        sparse_rbf_alpha=sparse_rbf_alpha,
-        sparse_rbf_gamma=sparse_rbf_gamma,
-        sparse_rbf_min_sigma=sparse_rbf_min_sigma,
-        sparse_rbf_max_sigma=sparse_rbf_max_sigma,
-        sparse_rbf_max_peaks=sparse_rbf_max_peaks,
-        sparse_rbf_chunk_size=sparse_rbf_chunk_size,
-        sparse_rbf_tile_rows=sparse_rbf_tile_rows,
-        sparse_rbf_tile_cols=sparse_rbf_tile_cols,
         max_workers=max_workers,
     )
 
@@ -355,43 +311,6 @@ def indexer(
         batch_size=batch_size,
         wavelength_min=input_data["instrument/wavelength"][0],
         wavelength_max=input_data["instrument/wavelength"][1],
-    )
-
-
-@app.command()
-def indexer_using_file(
-    hdf5_peaks_filename: str,
-    output_peaks_filename: str,
-    original_nexus_filename: str | None = None,
-    instrument_name: str | None = None,
-    strategy_name: Annotated[str, typer.Option("--strategy")] = "DE",
-    n_runs: Annotated[int, typer.Option("--n-runs")] = 1,
-    population_size: Annotated[int, typer.Option("--population-size")] = 1000,
-    gens: Annotated[int, typer.Option("--gens")] = 100,
-    seed: Annotated[int, typer.Option("--seed")] = 0,
-    refine_lattice: Annotated[bool, typer.Option("--refine-lattice")] = False,
-    lattice_bound_frac: Annotated[float, typer.Option("--lattice-bound-frac")] = 0.05,
-    refine_goniometer: Annotated[bool, typer.Option("--refine-goniometer")] = False,
-    goniometer_bound_deg: Annotated[
-        float, typer.Option("--goniometer-bound-deg")
-    ] = 5.0,
-    tolerance_deg: float = 0.1,
-):
-    run_index(
-        hdf5_peaks_filename=hdf5_peaks_filename,
-        output_peaks_filename=output_peaks_filename,
-        strategy_name=strategy_name,
-        population_size=population_size,
-        gens=gens,
-        n_runs=n_runs,
-        seed=seed,
-        tolerance_deg=tolerance_deg,
-        refine_lattice=refine_lattice,
-        lattice_bound_frac=lattice_bound_frac,
-        refine_goniometer=refine_goniometer,
-        goniometer_bound_deg=goniometer_bound_deg,
-        nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name,
     )
 
 

@@ -1,15 +1,11 @@
-import glob
 import h5py
 import numpy as np
 
 # NOTE(Vivek): deprecate and use Goniometer class to handler rotation calc
 from subhkl.instrument.goniometer import (
-    calc_goniometer_rotation_matrix,
     get_rotation_data_from_nexus,
 )
-from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
 from subhkl.integration import Peaks
-from subhkl.instrument.metrics import compute_metrics
 from subhkl.optimization import FindUB
 
 
@@ -275,7 +271,7 @@ def run_finder(
     sparse_rbf_candidate_alphas: str = "3.0,5.0,10.0,15.0,20.0,25.0,30",
     max_workers: int = 16,
 ):
-    from subhkl.integration import Peaks  # Ensure imported globally or locally
+
     print(f"Creating peaks from {filename} for instrument {instrument}")
 
     wavelength_kwargs = {}
@@ -381,36 +377,41 @@ def run_rbf_integrator(
     max_workers: int | None = None,
 ):
     import h5py
-    from subhkl.integration import Peaks
     from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
 
     sigma_list = [float(k.strip()) for k in sigmas.split(",")]
     print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}")
+    print(
+        f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}"
+    )
 
     peak_dict = {}
 
     with h5py.File(integration_peaks_filename, "r") as f:
         if "sample/U" in f:
-            U = f["sample/U"][()]
+            f["sample/U"][()]
         if "sample/B" in f:
-            B = f["sample/B"][()]
+            f["sample/B"][()]
         if "goniometer/R" in f:
             all_R = f["goniometer/R"][()]
         if "goniometer/angles" in f:
             angles_stack = f["goniometer/angles"][()]
-            
+
         if "sample/offset" in f:
             sample_offset = f["sample/offset"][()]
         else:
             sample_offset = np.zeros(3)
-            
+
         for key in f["banks"].keys():
             img_idx = int(key)
             grp = f[f"banks/{key}"]
             peak_dict[img_idx] = [
-                grp["i"][()], grp["j"][()], grp["h"][()],
-                grp["k"][()], grp["l"][()], grp["wavelength"][()]
+                grp["i"][()],
+                grp["j"][()],
+                grp["h"][()],
+                grp["k"][()],
+                grp["l"][()],
+                grp["wavelength"][()],
             ]
 
     peaks = Peaks(filename, instrument)
@@ -425,14 +426,14 @@ def run_rbf_integrator(
 
     result = integrate_peaks_rbf_ssn(
         peak_dict=peak_dict,
-        peaks_obj=peaks,             # Pass the full Peaks object
+        peaks_obj=peaks,  # Pass the full Peaks object
         alpha=alpha,
         sigmas=sigma_list,
         gamma=gamma,
         nominal_sigma=nominal_sigma,
         max_peaks=max_peaks,
         show_progress=show_progress,
-        all_R=all_R,                 # Pass rotation and offset downstream
+        all_R=all_R,  # Pass rotation and offset downstream
         sample_offset=sample_offset,
         anisotropic=anisotropic,
         fit_mosaicity=fit_mosaicity,
@@ -454,20 +455,28 @@ def run_rbf_integrator(
         f["peaks/azimuthal"] = result.az
         f["peaks/bank"] = result.bank
         f["peaks/run_index"] = result.run_id
-        
+
         # Copy full metadata context from predictor output
         copy_keys = [
-            "sample/a", "sample/b", "sample/c", 
-            "sample/alpha", "sample/beta", "sample/gamma",
-            "sample/space_group", "sample/U", "sample/B", 
-            "sample/offset", "beam/ki_vec", "instrument/wavelength"
+            "sample/a",
+            "sample/b",
+            "sample/c",
+            "sample/alpha",
+            "sample/beta",
+            "sample/gamma",
+            "sample/space_group",
+            "sample/U",
+            "sample/B",
+            "sample/offset",
+            "beam/ki_vec",
+            "instrument/wavelength",
         ]
-        
+
         with h5py.File(integration_peaks_filename, "r") as f_in:
             for key in copy_keys:
                 if key in f_in:
                     f_in.copy(f_in[key], f, key)
-                    
+
             for k in ["goniometer/axes", "goniometer/names"]:
                 if k in f_in:
                     f_in.copy(f_in[k], f, k)
