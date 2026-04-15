@@ -1,4 +1,238 @@
+import glob
+import h5py
 import numpy as np
+
+# NOTE(Vivek): deprecate and use Goniometer class to handler rotation calc
+from subhkl.instrument.goniometer import (
+    calc_goniometer_rotation_matrix,
+    get_rotation_data_from_nexus,
+)
+from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
+from subhkl.integration import Peaks
+from subhkl.instrument.metrics import compute_metrics
+from subhkl.optimization import FindUB
+
+
+def run_index(
+    hdf5_peaks_filename: str | None = None,
+    output_peaks_filename: str | None = None,
+    strategy_name: str = "DE",
+    population_size: int = 1000,
+    gens: int = 100,
+    n_runs: int = 1,
+    seed: int = 0,
+    tolerance_deg: float = 0.1,
+    sigma_init: float | None = None,
+    refine_lattice: bool = False,
+    lattice_bound_frac: float = 0.05,
+    bootstrap_filename: str | None = None,
+    refine_goniometer: bool = False,
+    refine_goniometer_axes: list | None = None,
+    goniometer_bound_deg: float = 5.0,
+    refine_sample: bool = False,
+    sample_bound_meters: float = 0.002,
+    refine_beam: bool = False,
+    beam_bound_deg: float = 1.0,
+    nexus_filename: str | None = None,
+    instrument_name: str | None = None,
+    loss_method: str = "cosine",
+    hkl_search_range: int = 20,
+    d_min: float | None = None,
+    d_max: float | None = None,
+    search_window_size: int = 512,
+    batch_size: int | None = None,
+    window_batch_size: int = 32,
+    chunk_size: int = 256,
+    num_iters: int = 20,
+    top_k: int = 32,
+    B_sharpen: float | None = None,
+    input_data: dict | None = None,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+):
+    """
+    Index the given peak file and save it using the evosax optimizer.
+    """
+    if input_data is not None:
+        opt = FindUB(data=input_data)
+    else:
+        opt = FindUB(filename=hdf5_peaks_filename)
+
+    if wavelength_min is not None and wavelength_max is not None:
+        opt.wavelength = [wavelength_min, wavelength_max]
+
+    print(f"Starting evosax optimization with strategy: {strategy_name}")
+    print(f"Running {n_runs} run(s)...")
+    print(f"Settings per run: Population Size={population_size}, Generations={gens}")
+    if refine_lattice:
+        print(f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds.")
+    if refine_sample:
+        print(f"Refining sample offset with {1000 * sample_bound_meters} mm bounds.")
+    if refine_beam:
+        print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
+
+    goniometer_names = None
+    if refine_goniometer:
+        if nexus_filename and instrument_name:
+            print(
+                f"Refining goniometer angles from Nexus with {goniometer_bound_deg} deg bounds."
+            )
+            axes, angles, names = get_rotation_data_from_nexus(
+                nexus_filename, instrument_name
+            )
+            opt.goniometer_axes = np.array(axes)
+
+            if opt.run_indices is not None:
+                num_runs = np.max(opt.run_indices) + 1
+                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(
+                    num_runs, axis=1
+                )
+            else:
+                num_peaks = len(opt.two_theta)
+                opt.goniometer_angles = np.array(angles)[:, np.newaxis].repeat(
+                    num_peaks, axis=1
+                )
+            goniometer_names = names
+        elif opt.goniometer_axes is not None:
+            print(
+                f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
+            )
+        else:
+            print(
+                "WARNING: refine_goniometer requested but goniometer data not found. Skipping."
+            )
+            refine_goniometer = False
+
+    init_params = None
+    if bootstrap_filename:
+        init_params = opt.get_bootstrap_params(
+            bootstrap_filename,
+            refine_lattice=refine_lattice,
+            lattice_bound_frac=lattice_bound_frac,
+            refine_sample=refine_sample,
+            sample_bound_meters=sample_bound_meters,
+            refine_beam=refine_beam,
+            beam_bound_deg=beam_bound_deg,
+            refine_goniometer=refine_goniometer,
+            goniometer_bound_deg=goniometer_bound_deg,
+            refine_goniometer_axes=refine_goniometer_axes,
+        )
+
+    num, hkl, lamda, U = opt.minimize(
+        strategy_name=strategy_name,
+        population_size=population_size,
+        num_generations=gens,
+        n_runs=n_runs,
+        sigma_init=sigma_init,
+        seed=seed,
+        tolerance_deg=tolerance_deg,
+        init_params=init_params,
+        refine_lattice=refine_lattice,
+        lattice_bound_frac=lattice_bound_frac,
+        refine_goniometer=refine_goniometer,
+        refine_goniometer_axes=refine_goniometer_axes,
+        goniometer_bound_deg=goniometer_bound_deg,
+        goniometer_names=goniometer_names,
+        refine_sample=refine_sample,
+        sample_bound_meters=sample_bound_meters,
+        refine_beam=refine_beam,
+        beam_bound_deg=beam_bound_deg,
+        loss_method=loss_method,
+        d_min=d_min,
+        d_max=d_max,
+        hkl_search_range=hkl_search_range,
+        search_window_size=search_window_size,
+        batch_size=batch_size,
+        window_batch_size=window_batch_size,
+        chunk_size=chunk_size,
+        num_iters=num_iters,
+        top_k=top_k,
+        B_sharpen=B_sharpen,
+    )
+
+    print(f"\nOptimization complete. Best solution indexed {num} peaks.")
+
+    opt.reciprocal_lattice_B()
+
+    copy_keys = [
+        "sample/space_group",
+        "instrument/wavelength",
+        "peaks/intensity",
+        "peaks/sigma",
+        "peaks/two_theta",
+        "peaks/azimuthal",
+        "peaks/radius",
+        "peaks/xyz",
+        "goniometer/R",
+        "goniometer/axes",
+        "goniometer/angles",
+        "goniometer/names",
+        "files",
+        "file_offsets",
+        "peaks/run_index",
+        "bank",
+        "sample/offset",
+        "beam/ki_vec",
+    ]
+
+    copied_data = {}
+
+    if input_data is not None:
+        for key in copy_keys:
+            if key in input_data:
+                copied_data[key] = input_data[key]
+    else:
+        with h5py.File(hdf5_peaks_filename, "r") as f:
+            for key in copy_keys:
+                if key in f:
+                    copied_data[key] = np.array(f[key])
+
+    print(f"Saving indexed peaks to {output_peaks_filename}...")
+    with h5py.File(output_peaks_filename, "w") as f:
+        if instrument_name:
+            f.attrs["instrument"] = instrument_name
+        elif "instrument" in input_data:
+            f.attrs["instrument"] = input_data["instrument"]
+        for key, value in copied_data.items():
+            f[key] = value
+
+        def safe_write(grp, name, data):
+            if name in grp:
+                del grp[name]
+            grp[name] = data
+
+        safe_write(f, "goniometer/R", opt.R)
+
+        if opt.goniometer_offsets is not None:
+            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
+
+        if opt.sample_offset is not None:
+            safe_write(f, "sample/offset", opt.sample_offset)
+
+        if opt.ki_vec is not None:
+            safe_write(f, "beam/ki_vec", opt.ki_vec)
+
+        safe_write(f, "sample/a", opt.a)
+        safe_write(f, "sample/b", opt.b)
+        safe_write(f, "sample/c", opt.c)
+        safe_write(f, "sample/alpha", opt.alpha)
+        safe_write(f, "sample/beta", opt.beta)
+        safe_write(f, "sample/gamma", opt.gamma)
+
+        B_mat = opt.reciprocal_lattice_B()
+        safe_write(f, "sample/B", B_mat)
+        f["sample/U"] = U
+
+        if opt.run_indices is not None:
+            safe_write(f, "peaks/run_index", opt.run_indices)
+
+        f["peaks/h"] = hkl[:, 0]
+        f["peaks/k"] = hkl[:, 1]
+        f["peaks/l"] = hkl[:, 2]
+        f["peaks/lambda"] = lamda
+        f["optimization/best_params"] = opt.x
+    print("Done.")
+
 
 def run_finder(
     filename: str,
