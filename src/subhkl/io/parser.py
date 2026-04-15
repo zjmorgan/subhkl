@@ -16,6 +16,133 @@ from subhkl.optimization import FindUB
 
 app = typer.Typer()
 
+@app.command()
+def finder(
+    filename: Annotated[str, typer.Argument(help="Input raw/event Nexus file")],
+    instrument: Annotated[str, typer.Argument(help="Instrument name")],
+    output_filename: str = "output.h5",
+    finder_algorithm: str = "peak_local_max",
+    show_progress: bool = True,
+    create_visualizations: bool = False,
+    show_steps: bool = False,
+    peak_local_max_min_pixel_distance: int = -1,
+    peak_local_max_min_relative_intensity: float = -1,
+    peak_local_max_normalization: bool = False,
+    mask_file: str | None = None,
+    mask_rel_erosion_radius: float | None = None,
+    thresholding_noise_cutoff_quantile: float = 0.8,
+    thresholding_min_peak_dist_pixels: float = 8.0,
+    thresholding_blur_kernel_sigma: int = 5,
+    thresholding_open_kernel_size_pixels: int = 3,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_sigma: float | None = None,
+    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_maximum_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 30,
+    peak_minimum_signal_to_noise: float = 1.0,
+    peak_pixel_outlier_threshold: float = 2.0,
+    sparse_rbf_alpha: float = 0.1,
+    sparse_rbf_gamma: float = 1.0,
+    sparse_rbf_min_sigma: float = 1.5,
+    sparse_rbf_max_sigma: float = 10.0,
+    sparse_rbf_max_peaks: int = 500,
+    sparse_rbf_chunk_size: int = 512,
+    sparse_rbf_tile_rows: int = 2,
+    sparse_rbf_tile_cols: int = 2,
+    sparse_rbf_loss: Annotated[str, typer.Option(help="Likelihood for peak finder.")] = "gaussian",
+    sparse_rbf_auto_tune_alpha: Annotated[bool, typer.Option(help="Auto-tune SNR threshold.")] = False,
+    sparse_rbf_candidate_alphas: Annotated[str, typer.Option(help="Candidate SNR thresholds alpha for auto-tuning")] = "3.0,5.0,10.0,15.0,20.0,25.0,30",
+    max_workers: int = 16,
+):
+    # Pass everything straight into the core logic function
+    run_finder(
+        filename=filename,
+        instrument=instrument,
+        output_filename=output_filename,
+        finder_algorithm=finder_algorithm,
+        show_progress=show_progress,
+        create_visualizations=create_visualizations,
+        show_steps=show_steps,
+        peak_local_max_min_pixel_distance=peak_local_max_min_pixel_distance,
+        peak_local_max_min_relative_intensity=peak_local_max_min_relative_intensity,
+        peak_local_max_normalization=peak_local_max_normalization,
+        mask_file=mask_file,
+        mask_rel_erosion_radius=mask_rel_erosion_radius,
+        thresholding_noise_cutoff_quantile=thresholding_noise_cutoff_quantile,
+        thresholding_min_peak_dist_pixels=thresholding_min_peak_dist_pixels,
+        thresholding_blur_kernel_sigma=thresholding_blur_kernel_sigma,
+        thresholding_open_kernel_size_pixels=thresholding_open_kernel_size_pixels,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max,
+        region_growth_distance_threshold=region_growth_distance_threshold,
+        region_growth_minimum_sigma=region_growth_minimum_sigma,
+        region_growth_minimum_intensity=region_growth_minimum_intensity,
+        region_growth_maximum_pixel_radius=region_growth_maximum_pixel_radius,
+        peak_center_box_size=peak_center_box_size,
+        peak_smoothing_window_size=peak_smoothing_window_size,
+        peak_minimum_pixels=peak_minimum_pixels,
+        peak_minimum_signal_to_noise=peak_minimum_signal_to_noise,
+        peak_pixel_outlier_threshold=peak_pixel_outlier_threshold,
+        sparse_rbf_alpha=sparse_rbf_alpha,
+        sparse_rbf_gamma=sparse_rbf_gamma,
+        sparse_rbf_min_sigma=sparse_rbf_min_sigma,
+        sparse_rbf_max_sigma=sparse_rbf_max_sigma,
+        sparse_rbf_max_peaks=sparse_rbf_max_peaks,
+        sparse_rbf_chunk_size=sparse_rbf_chunk_size,
+        sparse_rbf_tile_rows=sparse_rbf_tile_rows,
+        sparse_rbf_tile_cols=sparse_rbf_tile_cols,
+        sparse_rbf_loss=sparse_rbf_loss,
+        sparse_rbf_auto_tune_alpha=sparse_rbf_auto_tune_alpha,
+        sparse_rbf_candidate_alphas=sparse_rbf_candidate_alphas,
+        max_workers=max_workers,
+    )
+
+
+@app.command()
+def rbf_integrator(
+    filename: Annotated[str, typer.Argument(help="Merged HDF5 image stack")],
+    instrument: Annotated[str, typer.Argument(help="Instrument name")],
+    integration_peaks_filename: Annotated[str, typer.Argument(help="Predicted peaks HDF5 file")],
+    output_filename: Annotated[str, typer.Argument(help="Output integrated peaks HDF5 file")],
+    alpha: Annotated[float, typer.Option("--alpha", help="Peak over background threshold (Z-score)")] = 1.0,
+    gamma: Annotated[float, typer.Option("--gamma", help="Besov space weight exponent")] = 1.0,
+    sigmas: Annotated[str, typer.Option(help="Unstretched peak radii")] = "1.0,2.0,4.0",
+    nominal_sigma: Annotated[float, typer.Option(help="The typical peak radius, used as a fallback for weak reflections")] = 1.0,
+    anisotropic: Annotated[bool, typer.Option(help="Integrate anisotropic quasi-Laue peaks")] = False,
+    fit_mosaicity: Annotated[bool, typer.Option(help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries.")] = False,
+    max_peaks: Annotated[int, typer.Option("--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)")] = 500,
+    rel_border_width: Annotated[float, typer.Option(help="Border width in fraction of image size")] = 0.0,
+    show_progress: Annotated[bool, typer.Option("--show-progress")] = True,
+    create_visualizations: bool = False,
+    chunk_size: int = 256,
+    max_workers: Annotated[int | None, typer.Option(help="Maximum number of CPU tasks for visualization.")] = None,
+):
+    """
+    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
+    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
+    """
+    run_rbf_integrator(
+        filename=filename,
+        instrument=instrument,
+        integration_peaks_filename=integration_peaks_filename,
+        output_filename=output_filename,
+        alpha=alpha,
+        gamma=gamma,
+        sigmas=sigmas,
+        nominal_sigma=nominal_sigma,
+        anisotropic=anisotropic,
+        fit_mosaicity=fit_mosaicity,
+        max_peaks=max_peaks,
+        rel_border_width=rel_border_width,
+        show_progress=show_progress,
+        create_visualizations=create_visualizations,
+        chunk_size=chunk_size,
+        max_workers=max_workers,
+    )
 
 def index(
     hdf5_peaks_filename: str | None = None,  # Made optional
@@ -245,164 +372,6 @@ def index(
         f["peaks/lambda"] = lamda
         f["optimization/best_params"] = opt.x
     print("Done.")
-
-
-@app.command()
-def finder(
-    filename: str,
-    instrument: str,
-    output_filename: str = "output.h5",
-    finder_algorithm: str = "peak_local_max",
-    show_progress: bool = True,
-    create_visualizations: bool = False,
-    show_steps: bool = False,
-    peak_local_max_min_pixel_distance: int = -1,
-    peak_local_max_min_relative_intensity: float = -1,
-    peak_local_max_normalization: bool = False,
-    mask_file: str | None = None,
-    mask_rel_erosion_radius: float = None,
-    thresholding_noise_cutoff_quantile: float = 0.8,
-    thresholding_min_peak_dist_pixels: float = 8.0,
-    thresholding_blur_kernel_sigma: int = 5,
-    thresholding_open_kernel_size_pixels: int = 3,
-    wavelength_min: float | None = None,
-    wavelength_max: float | None = None,
-    region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_sigma: float | None = None,
-    region_growth_minimum_intensity: float = 4500.0,
-    region_growth_maximum_pixel_radius: float = 17.0,
-    peak_center_box_size: int = 15,
-    peak_smoothing_window_size: int = 15,
-    peak_minimum_pixels: int = 30,
-    peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0,
-    sparse_rbf_alpha: float = 0.1,  # Regularization (Higher = fewer, stronger peaks)
-    sparse_rbf_gamma: float = 1.0,  # Besov space coefficient (shape prior)
-    sparse_rbf_min_sigma: float = 1.5,  # Min spot size (pixels)
-    sparse_rbf_max_sigma: float = 10.0,  # Max spot size (pixels)
-    sparse_rbf_max_peaks: int = 500,  # Max peaks per bank
-    sparse_rbf_chunk_size: int = 512,  # reduce if OOM
-    sparse_rbf_tile_rows: int = 2,  # NEW: Number of row divisions for tiling
-    sparse_rbf_tile_cols: int = 2,  # NEW: Number of col divisions for tiling
-    sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
-    sparse_rbf_auto_tune_alpha: bool = typer.Option(False, help="Auto-tune SNR threshold."),
-    sparse_rbf_candidate_alphas: str = typer.Option("3.0,5.0,10.0,15.0,20.0,25.0,30", help="Candidate SNR thresholds alpha for auto-tuning"),
-    max_workers: int = 16,
-):
-    print(f"Creating peaks from {filename} for instrument {instrument}")
-
-    wavelength_kwargs = {}
-    if wavelength_min:
-        wavelength_kwargs["wavelength_min"] = wavelength_min
-    if wavelength_max:
-        wavelength_kwargs["wavelength_max"] = wavelength_max
-
-    peaks = Peaks(filename, instrument, **wavelength_kwargs)
-
-    peak_kwargs = {"algorithm": finder_algorithm}
-    if finder_algorithm == "peak_local_max":
-        if peak_local_max_min_pixel_distance > 0:
-            peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
-        if peak_local_max_min_relative_intensity > 0:
-            peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
-        peak_kwargs["normalize"] = peak_local_max_normalization
-    elif finder_algorithm == "thresholding":
-        peak_kwargs.update(
-            {
-                "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
-                "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-                "blur_kernel_sigma": thresholding_blur_kernel_sigma,
-                "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-                "show_steps": show_steps,
-                "show_scale": "log",
-            }
-        )
-    elif finder_algorithm == "sparse_rbf":
-        alpha_list = [float(k.strip()) for k in sparse_rbf_candidate_alphas.split(",")]
-
-        peak_kwargs.update(
-            {
-                "alpha": sparse_rbf_alpha,
-                "gamma": sparse_rbf_gamma,
-                "min_sigma": sparse_rbf_min_sigma,
-                "max_sigma": sparse_rbf_max_sigma,
-                "max_peaks": sparse_rbf_max_peaks,
-                "chunk_size": sparse_rbf_chunk_size,
-                "show_steps": show_steps,
-                "show_scale": "linear",
-                "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
-                "loss": sparse_rbf_loss,
-                "auto_tune_alpha": sparse_rbf_auto_tune_alpha,
-                "candidate_alphas": alpha_list,
-            }
-        )
-    else:
-        raise ValueError("Invalid finder algorithm")
-
-    peak_kwargs.update(
-        {
-            "mask_file": mask_file,
-            "mask_rel_erosion_radius": mask_rel_erosion_radius,
-        }
-    )
-
-    integration_params = {
-        "region_growth_distance_threshold": region_growth_distance_threshold,
-        "region_growth_minimum_sigma": region_growth_minimum_sigma,
-        "region_growth_minimum_intensity": region_growth_minimum_intensity,
-        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
-        "peak_center_box_size": peak_center_box_size,
-        "peak_smoothing_window_size": peak_smoothing_window_size,
-        "peak_minimum_pixels": peak_minimum_pixels,
-        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
-    }
-
-    detector_peaks = peaks.get_detector_peaks(
-        peak_kwargs,
-        integration_params,
-        visualize=create_visualizations,
-        show_progress=show_progress,
-        file_prefix=filename,
-        max_workers=max_workers,
-    )
-
-    peaks.write_hdf5(
-        output_filename=output_filename,
-        detector_peaks=detector_peaks,
-        instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
-    )
-
-
-@app.command()
-def finder_merger(
-    finder_h5_txt_list_filename: str,
-    output_pre_index_filename: str,
-    a: float,
-    b: float,
-    c: float,
-    alpha: float,
-    beta: float,
-    gamma: float,
-    wavelength_min: float,
-    wavelength_max: float,
-    space_group: str,
-):
-    with open(finder_h5_txt_list_filename) as f:
-        finder_h5_files = f.read().splitlines()
-
-    merging_algorithm = FinderConcatenateMerger(finder_h5_files)
-    merging_algorithm.merge(output_pre_index_filename)
-
-    with h5py.File(output_pre_index_filename, "r+") as f:
-        f["sample/a"] = a
-        f["sample/b"] = b
-        f["sample/c"] = c
-        f["sample/alpha"] = alpha
-        f["sample/beta"] = beta
-        f["sample/gamma"] = gamma
-        f["sample/space_group"] = space_group
-        f["instrument/wavelength"] = [wavelength_min, wavelength_max]
 
 
 @app.command()
@@ -1109,121 +1078,6 @@ def merge_images(
 
     print(f"Successfully created {output_filename}")
 
-@app.command()
-def rbf_integrator(
-    filename: str = typer.Argument(..., help="Merged HDF5 image stack"),
-    instrument: str = typer.Argument(..., help="Instrument name"),
-    integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
-    output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
-    alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
-    gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
-    sigmas: str = typer.Option("1.0,2.0,4.0", help="Unstretched peak radii"),
-    nominal_sigma: float = typer.Option(1.0, help="The typical peak radius, used as a fallback for weak reflections"),
-    anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
-    fit_mosaicity: bool = typer.Option(False, help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. "
-                                                   "Only use in non-spherical detector geometries."),
-    max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
-    rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
-    show_progress: bool = typer.Option(True, "--show-progress"),
-    create_visualizations: bool = False,
-    chunk_size: int = 256,
-    max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
-):
-    """
-    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
-    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
-    """
-    import h5py
-    from subhkl.integration import Peaks
-    from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
-
-    sigma_list = [float(k.strip()) for k in sigmas.split(",")]
-    print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}")
-
-    peak_dict = {}
-
-    with h5py.File(integration_peaks_filename, "r") as f:
-        if "sample/U" in f:
-            U = f["sample/U"][()]
-        if "sample/B" in f:
-            B = f["sample/B"][()]
-        if "goniometer/R" in f:
-            all_R = f["goniometer/R"][()]
-        if "goniometer/angles" in f:
-            angles_stack = f["goniometer/angles"][()]
-            
-        if "sample/offset" in f:
-            sample_offset = f["sample/offset"][()]
-        else:
-            sample_offset = np.zeros(3)
-            
-        for key in f["banks"].keys():
-            img_idx = int(key)
-            grp = f[f"banks/{key}"]
-            peak_dict[img_idx] = [
-                grp["i"][()], grp["j"][()], grp["h"][()],
-                grp["k"][()], grp["l"][()], grp["wavelength"][()]
-            ]
-
-    peaks = Peaks(filename, instrument)
-
-    if all_R is None:
-        all_R = peaks.goniometer.rotation
-    if angles_stack is None:
-        angles_stack = peaks.goniometer.angles_raw
-
-    one_image = next(iter(peaks.image.ims.values()))
-    border_width = int(rel_border_width * min(one_image.shape[0], one_image.shape[1]))
-
-    result = integrate_peaks_rbf_ssn(
-        peak_dict=peak_dict,
-        peaks_obj=peaks,             # Pass the full Peaks object
-        alpha=alpha,
-        sigmas=sigma_list,
-        gamma=gamma,
-        nominal_sigma=nominal_sigma,
-        max_peaks=max_peaks,
-        show_progress=show_progress,
-        all_R=all_R,                 # Pass rotation and offset downstream
-        sample_offset=sample_offset,
-        anisotropic=anisotropic,
-        fit_mosaicity=fit_mosaicity,
-        border_width=border_width,
-        chunk_size=chunk_size,
-        create_visualizations=create_visualizations,
-        max_workers=max_workers,
-    )
-
-    print(f"Saving RBF integrated peaks to {output_filename}")
-    with h5py.File(output_filename, "w") as f:
-        f["peaks/h"] = result.h
-        f["peaks/k"] = result.k
-        f["peaks/l"] = result.l
-        f["peaks/lambda"] = result.wavelength
-        f["peaks/intensity"] = result.intensity
-        f["peaks/sigma"] = result.sigma  # SVD-stabilized Fisher Info UQ
-        f["peaks/two_theta"] = result.tt
-        f["peaks/azimuthal"] = result.az
-        f["peaks/bank"] = result.bank
-        f["peaks/run_index"] = result.run_id
-        
-        # Copy full metadata context from predictor output
-        copy_keys = [
-            "sample/a", "sample/b", "sample/c", 
-            "sample/alpha", "sample/beta", "sample/gamma",
-            "sample/space_group", "sample/U", "sample/B", 
-            "sample/offset", "beam/ki_vec", "instrument/wavelength"
-        ]
-        
-        with h5py.File(integration_peaks_filename, "r") as f_in:
-            for key in copy_keys:
-                if key in f_in:
-                    f_in.copy(f_in[key], f, key)
-                    
-            for k in ["goniometer/axes", "goniometer/names"]:
-                if k in f_in:
-                    f_in.copy(f_in[k], f, k)
 
 if __name__ == "__main__":
     app()
