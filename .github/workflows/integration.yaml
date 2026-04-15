@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --extra jax
+        run: uv sync
       - name: Run integration tests
         run: uv run pytest -v -m "integration" tests/test_mandi_mesolite.py::TestMandiMesoliteSingleRun
         env:
