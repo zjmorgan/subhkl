@@ -358,6 +358,180 @@ def run_finder(
     )
 
 
+
+def run_metrics(
+    filename: str,
+    found_peaks_file: str | None = None,
+    instrument: str | None = None,
+    d_min: float | None = None,
+    per_run: bool = False,
+):
+    result = compute_metrics(
+        filename=filename,
+        found_peaks_file=found_peaks_file,
+        instrument=instrument,
+        d_min=d_min,
+        per_run=per_run,
+    )
+
+    if "error_message" in result:
+        print(result["error_message"])
+        if result["error_message"].startswith("Exception"):
+            print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
+        return
+
+    if "filter_message" in result:
+        print(f"METRICS: {result['filter_message']}")
+
+    print(
+        f"METRICS: {result['median_d_err']:.5f} {result['mean_d_err']:.5f} {result['max_d_err']:.5f} "
+        f"{result['median_ang_err']:.5f} {result['mean_ang_err']:.5f} {result['max_ang_err']:.5f}"
+    )
+
+    if per_run and "per_run_errors" in result:
+        print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
+        for r, err, count in result["per_run_errors"]:
+            status = "BAD" if err > 1.0 else "OK"
+            print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
+
+def run_peak_predictor(
+    filename: str,
+    instrument: str,
+    indexed_hdf5_filename: str,
+    integration_peaks_filename: str,
+    d_min: float = 1.0,
+    create_visualizations: bool = False,
+    space_group: str | None = None,
+    wavel_min: float | None = None,
+    wavel_max: float | None = None,
+    max_workers: int = 16,
+):
+    with h5py.File(indexed_hdf5_filename, "r") as f_idx:
+        a = float(f_idx["sample/a"][()])
+        b = float(f_idx["sample/b"][()])
+        c = float(f_idx["sample/c"][()])
+        alpha = float(f_idx["sample/alpha"][()])
+        beta = float(f_idx["sample/beta"][()])
+        gamma = float(f_idx["sample/gamma"][()])
+
+        if space_group is None:
+            space_group = f_idx["sample/space_group"][()].decode("utf-8")
+
+        wavelength = f_idx["instrument/wavelength"][()]
+        if wavel_min:
+            wavelength[0] = wavel_min
+        if wavel_max:
+            wavelength[1] = wavel_max
+
+        U = f_idx["sample/U"][()]
+        B = f_idx["sample/B"][()]
+
+        offsets = (
+            f_idx["optimization/goniometer_offsets"][()]
+            if "optimization/goniometer_offsets" in f_idx
+            else None
+        )
+        sample_offset = (
+            f_idx["sample/offset"][()] if "sample/offset" in f_idx else np.zeros(3)
+        )
+        ki_vec = (
+            f_idx["beam/ki_vec"][()]
+            if "beam/ki_vec" in f_idx
+            else np.array([0.0, 0.0, 1.0])
+        )
+
+    peaks = Peaks(
+        filename, instrument, wavelength_min=wavelength[0], wavelength_max=wavelength[1]
+    )
+    print(
+        f"Predicting peaks for {len(peaks.image.ims)} images using solution from {indexed_hdf5_filename}"
+    )
+
+    all_R = peaks.goniometer.rotation
+
+    if offsets is not None:
+        print(f"Applying refined goniometer offsets from indexer: {offsets}")
+        if (
+            peaks.goniometer.angles_raw is not None
+            and peaks.goniometer.axes_raw is not None
+        ):
+            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
+            all_R = np.stack(
+                [
+                    calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
+                    for ang in angles_refined
+                ]
+            )
+        else:
+            print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
+    else:
+        print("Using nominal R stack directly from raw images (no offsets applied).")
+
+    UB = U @ B
+    if all_R.ndim == 3:
+        RUB = np.matmul(all_R, UB)
+    else:
+        RUB = all_R @ UB
+
+    results_map = peaks.predict_peaks(
+        a,
+        b,
+        c,
+        alpha,
+        beta,
+        gamma,
+        d_min,
+        RUB=RUB,
+        space_group=space_group,
+        sample_offset=sample_offset,
+        ki_vec=ki_vec,
+        max_workers=max_workers,
+        R_all=all_R,
+    )
+
+    print(f"Saving predictions to {integration_peaks_filename}")
+    with h5py.File(integration_peaks_filename, "w") as f:
+        f.attrs["instrument"] = instrument
+        f["sample/a"], f["sample/b"], f["sample/c"] = a, b, c
+        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = alpha, beta, gamma
+
+        sorted_keys = sorted(peaks.image.ims.keys())
+        bank_ids = np.array(
+            [peaks.image.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
+        )
+        f.create_dataset("bank_ids", data=bank_ids)
+
+        f["sample/space_group"] = space_group
+        f["sample/U"], f["sample/B"] = U, B
+        f["instrument/wavelength"] = wavelength
+        f["goniometer/R"] = all_R
+
+        try:
+            goniometer_angles_to_save = angles_refined
+        except NameError:
+            goniometer_angles_to_save = peaks.goniometer.angles_raw
+
+        f["goniometer/angles"] = goniometer_angles_to_save
+        f["goniometer/axes"] = peaks.goniometer.axes_raw
+        if peaks.goniometer.names_raw:
+            dt = h5py.string_dtype(encoding="utf-8")
+            f.create_dataset(
+                "goniometer/names", data=peaks.goniometer.names_raw, dtype=dt
+            )
+
+        f["sample/offset"] = sample_offset
+        f["beam/ki_vec"] = ki_vec
+
+        for img_key, (i, j, h, k, l, wl) in results_map.items():
+            grp = f.create_group(f"banks/{img_key}")
+            grp.create_dataset("i", data=i)
+            grp.create_dataset("j", data=j)
+            grp.create_dataset("h", data=h)
+            grp.create_dataset("k", data=k)
+            grp.create_dataset("l", data=l)
+            grp.create_dataset("wavelength", data=wl)
+
+
 def run_rbf_integrator(
     filename: str,
     instrument: str,
@@ -480,3 +654,215 @@ def run_rbf_integrator(
             for k in ["goniometer/axes", "goniometer/names"]:
                 if k in f_in:
                     f_in.copy(f_in[k], f, k)
+
+def run_integrator(
+    filename: str,
+    instrument: str,
+    integration_peaks_filename: str,
+    output_filename: str,
+    integration_method: str = "free_fit",
+    integration_mask_file: str | None = None,
+    integration_mask_rel_erosion_radius: float | None = 0.05,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_intensity: float = 50.0,
+    region_growth_minimum_sigma: float | None = None,
+    region_growth_maximum_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 10,
+    peak_minimum_signal_to_noise: float = 1.0,
+    peak_pixel_outlier_threshold: float = 2.0,
+    create_visualizations: bool = False,
+    show_progress: bool = True,
+    found_peaks_file: str | None = None,
+    max_workers: int = 16,
+):
+    peak_dict = {}
+    angles_stack = None
+    all_R = None
+    with h5py.File(integration_peaks_filename, "r") as f:
+        U = f["sample/U"][()] if "sample/U" in f else None
+        B = f["sample/B"][()] if "sample/B" in f else None
+        all_R = f["goniometer/R"][()] if "goniometer/R" in f else None
+        angles_stack = f["goniometer/angles"][()] if "goniometer/angles" in f else None
+        sample_offset = f["sample/offset"][()] if "sample/offset" in f else np.zeros(3)
+        ki_vec = (
+            f["beam/ki_vec"][()] if "beam/ki_vec" in f else np.array([0.0, 0.0, 1.0])
+        )
+
+        for key in f["banks"].keys():
+            img_idx = int(key)
+            grp = f[f"banks/{key}"]
+            peak_dict[img_idx] = [
+                grp["i"][()],
+                grp["j"][()],
+                grp["h"][()],
+                grp["k"][()],
+                grp["l"][()],
+                grp["wavelength"][()],
+            ]
+
+    peaks = Peaks(filename, instrument)
+
+    integration_params = {
+        "region_growth_distance_threshold": region_growth_distance_threshold,
+        "region_growth_minimum_intensity": region_growth_minimum_intensity,
+        "region_growth_minimum_sigma": region_growth_minimum_sigma,
+        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
+        "peak_center_box_size": peak_center_box_size,
+        "peak_smoothing_window_size": peak_smoothing_window_size,
+        "peak_minimum_pixels": peak_minimum_pixels,
+        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
+        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
+        "integration_mask_file": integration_mask_file,
+        "integration_mask_rel_erosion_radius": integration_mask_rel_erosion_radius,
+    }
+
+    if all_R is None:
+        print("Warning: Refined R stack not found in prediction file. Using nominal.")
+        all_R = peaks.goniometer.rotation
+
+    if angles_stack is None:
+        angles_stack = peaks.goniometer.angles_raw
+
+    UB = U @ B if U is not None and B is not None else None
+    RUB = None
+    if UB is not None:
+        RUB = np.matmul(all_R, UB) if all_R.ndim == 3 else all_R @ UB
+
+    result = peaks.integrate(
+        peak_dict,
+        integration_params,
+        RUB=RUB,
+        R_stack=all_R,
+        angles_stack=angles_stack,
+        sample_offset=sample_offset,
+        ki_vec=ki_vec,
+        create_visualizations=create_visualizations,
+        show_progress=show_progress,
+        integration_method=integration_method,
+        file_prefix=filename,
+        found_peaks_file=found_peaks_file,
+        max_workers=max_workers,
+    )
+
+    print(f"Saving integrated peaks to {output_filename}")
+
+    copy_keys = [
+        "sample/a",
+        "sample/b",
+        "sample/c",
+        "sample/alpha",
+        "sample/beta",
+        "sample/gamma",
+        "sample/space_group",
+        "sample/U",
+        "sample/B",
+        "sample/offset",
+        "beam/ki_vec",
+        "instrument/wavelength",
+    ]
+
+    with h5py.File(output_filename, "w") as f:
+        f["peaks/h"], f["peaks/k"], f["peaks/l"] = result.h, result.k, result.l
+        f["peaks/lambda"] = result.wavelength
+        f["peaks/intensity"], f["peaks/sigma"] = result.intensity, result.sigma
+        f["peaks/two_theta"], f["peaks/azimuthal"] = result.tt, result.az
+        f["peaks/bank"] = result.bank
+        f["peaks/run_index"] = result.run_id
+        f["peaks/xyz"] = result.xyz
+
+        if result.R and any(r is not None for r in result.R):
+            f["goniometer/R"] = np.array(result.R)
+        if result.angles and any(a is not None for a in result.angles):
+            f["goniometer/angles"] = np.array(result.angles)
+
+        with h5py.File(integration_peaks_filename, "r") as f_in:
+            for key in copy_keys:
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
+            for k in ["goniometer/axes", "goniometer/names"]:
+                if k in f_in:
+                    f_in.copy(f_in[k], f, k)
+
+
+def run_mtz_exporter(
+    indexed_h5_filename: str, output_mtz_filename: str, space_group: str
+):
+    algorithm = MTZExporter(indexed_h5_filename, space_group)
+    algorithm.write_mtz(output_mtz_filename)
+
+
+def run_reduce(
+    nexus_filename: str,
+    output_filename: str,
+    instrument: str,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+):
+    print(f"Reducing {nexus_filename} -> {output_filename}")
+    peaks_handler = Peaks(
+        nexus_filename,
+        instrument,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max,
+    )
+
+    if not peaks_handler.image.ims:
+        print("Warning: No images found in file.")
+        return
+
+    sorted_banks = sorted(peaks_handler.image.ims.keys())
+    image_stack = np.stack([peaks_handler.image.ims[b] for b in sorted_banks])
+    bank_ids = np.array(sorted_banks, dtype=np.int32)
+    n_images = len(sorted_banks)
+
+    if peaks_handler.goniometer.angles_raw is not None:
+        angles_repeated = np.tile(peaks_handler.goniometer.angles_raw, (n_images, 1))
+    else:
+        angles_repeated = np.zeros((n_images, 3))
+
+    axes = (
+        np.array(peaks_handler.goniometer.axes_raw)
+        if peaks_handler.goniometer.axes_raw is not None
+        else np.array([0.0, 1.0, 0.0])
+    )
+
+    with h5py.File(output_filename, "w") as f:
+        f.create_dataset("images", data=image_stack, compression="lzf")
+        f.create_dataset("bank_ids", data=bank_ids)
+        f.create_dataset("goniometer/angles", data=angles_repeated)
+        f.create_dataset("goniometer/axes", data=axes)
+
+        if peaks_handler.goniometer.names_raw:
+            dt = h5py.string_dtype(encoding="utf-8")
+            f.create_dataset(
+                "goniometer/names", data=peaks_handler.goniometer.names_raw, dtype=dt
+            )
+
+        f.create_dataset(
+            "instrument/wavelength",
+            data=[peaks_handler.wavelength.min, peaks_handler.wavelength.max],
+        )
+        f.attrs["instrument"] = instrument
+
+    print(f"Saved {n_images} banks to {output_filename}")
+
+
+def run_merge_images(input_pattern: str, output_filename: str):
+    if " " in input_pattern:
+        h5_files = []
+        for p in input_pattern.split():
+            h5_files.extend(glob.glob(p))
+    else:
+        h5_files = glob.glob(input_pattern)
+
+    h5_files = sorted(list(set(h5_files)))
+
+    if not h5_files:
+        raise ValueError(f"No files found matching: {input_pattern}")
+
+    print(f"Found {len(h5_files)} files. Merging...")
+    merger = ImageStackMerger(h5_files)
+    merger.merge(output_filename)
+    print(f"Successfully created {output_filename}")
