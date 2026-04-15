@@ -35,6 +35,8 @@ class DetectorPeaks:
     gonio_axes: Optional[List[List[float]]]
     gonio_angles: List[List[float]]
     gonio_names: Optional[List[str]]
+    peak_rows: Optional[List[int]]
+    peak_cols: Optional[List[int]]
 
     def __iter__(self):
         """Allows tuple unpacking"""
@@ -108,7 +110,7 @@ def prepare_harvest_tasks(
             chunk_size=harvest_peaks_kwargs.get("chunk_size", 128),
             show_steps=harvest_peaks_kwargs.get("show_steps", False),
             auto_tune_alpha=harvest_peaks_kwargs.get("auto_tune_alpha", False),
-            candidate_alphas=harvest_peaks_kwargs.get("candidate_alphas", None)
+            candidate_alphas=harvest_peaks_kwargs.get("candidate_alphas", None),
         )
         batch_coords = alg.find_peaks_batch(img_stack)
         precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords, strict=False)}
@@ -186,7 +188,7 @@ def prepare_harvest_tasks(
                 viz_info,
             )
         )
-    return tasks
+    return tasks, precomputed_peaks
 
 
 def prepare_predict_tasks(
@@ -207,7 +209,6 @@ def prepare_predict_tasks(
     ki_vec: Optional[np.ndarray] = None,
     R_all: Optional[np.ndarray] = None,
 ) -> List[Tuple[Any, ...]]:
-    ims = image_data.ims
     bank_mapping = image_data.bank_mapping
     tasks = []
 
@@ -220,20 +221,20 @@ def prepare_predict_tasks(
     total_images = len(sorted_keys)
 
     def _resolve(stack, seq_idx, name):
-        if stack is None: 
+        if stack is None:
             return None
-            
+
         is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
         if not is_batch:
             return stack
-        
+
         n_items = stack.shape[0]
         if n_items == 1:
             return stack[0]
-            
+
         if n_items == total_images:
             return stack[seq_idx]
-            
+
         raise ValueError(
             f"CRITICAL: Array dimension mismatch for '{name}'. "
             f"The stack contains {n_items} matrices, but the dataset has {total_images} images. "
@@ -264,6 +265,7 @@ def prepare_predict_tasks(
         )
     return tasks
 
+
 def prepare_integrate_tasks(
     image: ImageData,
     filename: str,
@@ -281,7 +283,6 @@ def prepare_integrate_tasks(
     file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
-
     found_peaks_xyz = None
     found_peaks_bank = None
     found_peaks_run = None

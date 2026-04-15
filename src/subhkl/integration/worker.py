@@ -4,6 +4,8 @@ import PIL.Image
 import scipy
 import skimage.feature
 
+from dataclasses import dataclass
+
 from subhkl.convex_hull.peak_integrator import PeakIntegrator
 from subhkl.instrument.detector import Detector
 from subhkl.search.threshold import ThresholdingPeakFinder
@@ -12,6 +14,42 @@ from subhkl.instrument.physics import (
     predict_reflections_on_panel,
 )
 from subhkl.core.crystallography import generate_reflections
+
+
+@dataclass
+class _RunPeaksFinder:
+    """Lightweight mock of DetectorPeaks for the unrolled plotter."""
+
+    xyz: list
+    image_index: list
+    peak_rows: list
+    peak_cols: list
+    intensity: list = None
+    var_u: list = None
+    var_v: list = None
+    cov_uv: list = None
+
+
+def _render_finder_unrolled_plot(args):
+    """Standalone plotting function for generating unrolled plots per run."""
+    run_id, peaks, images, detectors, finder_peaks, instrument = args
+
+    import matplotlib.pyplot as plt
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    out_name = f"{run_id}_finder.png"
+    plot_unrolled_detector(
+        peaks,
+        images,
+        detectors,
+        finder_peaks=finder_peaks,
+        out_name=out_name,
+        instrument=instrument,
+    )
 
 
 def _run_harvest_local_max(
@@ -103,7 +141,7 @@ def process_single_image(
         mask_im = np.array(PIL.Image.open(mask_file))
         if erosion:
             radius = max(1, int(min(mask_im.shape) * erosion))
-            kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
+            kernel = np.ones((2 * radius, 2 * radius), dtype=np.uint8)
             mask = cv2.erode(mask_im, kernel).astype(bool)
         else:
             mask = mask_im.astype(bool)
@@ -231,6 +269,8 @@ def process_single_image(
             "image_indices": [img_key] * num,
             "gonio_angles": [gonio_angles] * num if gonio_angles is not None else [],
             "count": num,
+            "i": i,
+            "j": j,
         }
         log_msg = (
             f"Integrated {len(i)}/{len(centers)} peaks for {img_label} "
@@ -316,7 +356,9 @@ def integrate_single_bank(
     s_lab = (
         current_R_val @ sample_offset if current_R_val is not None else sample_offset
     )
-    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab)
+    bank_tt, bank_az = det.pixel_to_angles(
+        bank_i, bank_j, sample_offset=s_lab, ki_vec=ki_vec
+    )
 
     # Correctly handle lab coordinate shape (N, 3)
     lab_coords = det.pixel_to_lab(bank_i, bank_j)
@@ -407,7 +449,7 @@ def integrate_single_bank(
     if mask_file is not None:
         mask_im = np.array(PIL.Image.open(mask_file))
         radius = max(1, int(min(mask_im.shape) * mask_erosion))
-        kernel = np.ones((2*radius, 2*radius), dtype=np.uint8)
+        kernel = np.ones((2 * radius, 2 * radius), dtype=np.uint8)
         mask = cv2.erode(mask_im, kernel).astype(bool)
     else:
         mask = np.full(image.shape, True)
@@ -463,7 +505,10 @@ def integrate_single_bank(
     kept_centers = refined_centers[keep]
     # Re-calculate angles and lab coordinates
     bank_tt, bank_az = det.pixel_to_angles(
-        kept_centers[:, 0], kept_centers[:, 1], sample_offset=s_lab
+        kept_centers[:, 0],
+        kept_centers[:, 1],
+        sample_offset=s_lab,
+        ki_vec=ki_vec,
     )
     lab_coords = det.pixel_to_lab(kept_centers[:, 0], kept_centers[:, 1])
     if lab_coords.ndim == 1:

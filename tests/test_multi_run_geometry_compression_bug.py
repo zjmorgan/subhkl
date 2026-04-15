@@ -126,8 +126,6 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
         gens=1000,
         n_runs=1,
         seed=42,
-        tolerance_deg=0.1,
-        loss_method="gaussian",
         sigma_init=3.14,
     )
 

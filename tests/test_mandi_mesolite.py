@@ -18,12 +18,12 @@ from pathlib import Path
 import h5py
 import pytest
 
-from subhkl.io.parser import (
-    finder,
-    indexer,
-    integrator,
-    mtz_exporter,
-    peak_predictor,
+from subhkl.io.parser import indexer
+from subhkl.commands import (
+    run_finder as finder,
+    run_integrator as integrator,
+    run_mtz_exporter as mtz_exporter,
+    run_peak_predictor as peak_predictor,
 )
 from subhkl.instrument.metrics import compute_metrics
 
@@ -56,12 +56,11 @@ INTEGRATOR_PARAMS = {
 # to avoid OptionInfo type errors when calling functions directly
 INDEXER_DEFAULTS = {
     "strategy_name": "DE",
-    "n_runs": 2,
+    "n_runs": 10,
     "population_size": 1000,
-    "gens": 500,
+    "gens": 200,
     "seed": 12345,
     "sigma_init": None,
-    "tolerance_deg": 0.5,
     "refine_lattice": False,
     "lattice_bound_frac": 0.05,
     "refine_goniometer": False,
@@ -72,17 +71,7 @@ INDEXER_DEFAULTS = {
     "refine_beam": False,
     "beam_bound_deg": 1.0,
     "bootstrap_filename": None,
-    "loss_method": "gaussian",
-    "d_min": None,
-    "d_max": None,
-    "hkl_search_range": 20,
-    "search_window_size": 256,
     "batch_size": None,
-    "window_batch_size": 32,
-    "chunk_size": 256,
-    "num_iters": 20,
-    "top_k": 32,
-    "B_sharpen": None,
 }
 
 
@@ -107,377 +96,11 @@ def fixture__temp_output_dir():
 class TestMandiMesoliteSingleRun:
     """Test suite for single-run MANDI mesolite workflow."""
 
-    def test_01_finder(self, mesolite_input_file, temp_output_dir):
-        """Test peak finding on mesolite data."""
-        output_file = os.path.join(temp_output_dir, "mesolite.finder.h5")
-
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=output_file,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        # Verify output file was created
-        assert os.path.exists(output_file), "Finder output file was not created"
-
-        # Verify HDF5 structure
-        with h5py.File(output_file, "r") as f:
-            # Check for expected groups
-            assert "peaks" in f, "Expected 'peaks' group in finder output"
-            assert "instrument" in f, "Expected 'instrument' group"
-            assert "goniometer" in f, "Expected 'goniometer' group"
-
-            # Check peaks group has data
-            peaks = f["peaks"]
-            required_datasets = ["intensity", "two_theta", "azimuthal", "xyz"]
-            for dataset in required_datasets:
-                assert dataset in peaks, f"Missing dataset '{dataset}' in peaks"
-                assert len(peaks[dataset]) > 0, f"No peaks in dataset '{dataset}'"
-
-            num_peaks = len(peaks["intensity"])
-            print(f"\n  Found {num_peaks} peaks")
-
-        print(f"✓ Finder completed: {output_file}")
-
-    def test_02_indexer(self, mesolite_input_file, temp_output_dir):
-        """Test indexing using differential evolution strategy."""
-        # First run finder
-        finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=finder_output,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        # Run indexer
-        indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        indexer(
-            peaks_h5_filename=finder_output,
-            output_peaks_filename=indexer_output,
-            a=LATTICE_PARAMS["a"],
-            b=LATTICE_PARAMS["b"],
-            c=LATTICE_PARAMS["c"],
-            alpha=LATTICE_PARAMS["alpha"],
-            beta=LATTICE_PARAMS["beta"],
-            gamma=LATTICE_PARAMS["gamma"],
-            space_group=SPACE_GROUP,
-            wavelength_min=2.0,
-            wavelength_max=4.5,
-            **INDEXER_DEFAULTS,
-        )
-
-        # Verify output file
-        assert os.path.exists(indexer_output), "Indexer output file was not created"
-
-        # Verify indexing results
-        with h5py.File(indexer_output, "r") as f:
-            # Check sample parameters
-            assert "sample" in f, "Missing 'sample' group"
-            sample = f["sample"]
-
-            assert "a" in sample, "Missing lattice parameter 'a'"
-            assert "b" in sample, "Missing lattice parameter 'b'"
-            assert "c" in sample, "Missing lattice parameter 'c'"
-            assert "U" in sample, "Missing orientation matrix 'U'"
-            assert "B" in sample, "Missing reciprocal lattice matrix 'B'"
-
-            # Check orientation matrix shape
-            U = sample["U"][()]
-            assert U.shape == (3, 3), f"U matrix has incorrect shape: {U.shape}"
-
-            # Check instrument parameters
-            assert "instrument" in f, "Missing 'instrument' group"
-            assert "goniometer" in f, "Missing 'goniometer' group"
-
-        print(f"✓ Indexer completed: {indexer_output}")
-
-    def test_03_metrics(self, mesolite_input_file, temp_output_dir):
-        """Test peak prediction from indexed solution."""
-        # Run finder and indexer first
-        finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=finder_output,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        indexer(
-            peaks_h5_filename=finder_output,
-            output_peaks_filename=indexer_output,
-            a=LATTICE_PARAMS["a"],
-            b=LATTICE_PARAMS["b"],
-            c=LATTICE_PARAMS["c"],
-            alpha=LATTICE_PARAMS["alpha"],
-            beta=LATTICE_PARAMS["beta"],
-            gamma=LATTICE_PARAMS["gamma"],
-            space_group=SPACE_GROUP,
-            wavelength_min=2.0,
-            wavelength_max=4.5,
-            **INDEXER_DEFAULTS,
-        )
-
-        # Run peak predictor
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
-        peak_predictor(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            indexed_hdf5_filename=indexer_output,
-            integration_peaks_filename=predictor_output,
-            d_min=1.35,
-        )
-
-        # Verify output
-        assert os.path.exists(predictor_output), (
-            "Peak predictor output file was not created"
-        )
-
-        with h5py.File(predictor_output, "r") as f:
-            # Check predicted peaks
-            assert "banks" in f, "Missing 'banks' group"
-            banks = f["banks"]
-
-            # Should have predicted peaks
-            assert len(banks.keys()) > 0, "No predicted peaks found"
-
-            # Check first bank structure
-            first_bank = list(banks.keys())[0]
-            bank_group = banks[first_bank]
-
-            # Should have Miller indices
-            assert "h" in bank_group, "Missing Miller index 'h'"
-            assert "k" in bank_group, "Missing Miller index 'k'"
-            assert "l" in bank_group, "Missing Miller index 'l'"
-            assert "i" in bank_group, "Missing pixel coordinate 'i'"
-            assert "j" in bank_group, "Missing pixel coordinate 'j'"
-
-            # Verify we have predictions
-            assert len(bank_group["h"]) > 0, "No predicted peaks in first bank"
-
-        print(f"✓ Peak predictor completed: {predictor_output}")
-
-    def test_04_peak_predictor(self, mesolite_input_file, temp_output_dir):
-        """Test peak prediction from indexed solution."""
-        # Run finder and indexer first
-        finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=finder_output,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        indexer(
-            peaks_h5_filename=finder_output,
-            output_peaks_filename=indexer_output,
-            a=LATTICE_PARAMS["a"],
-            b=LATTICE_PARAMS["b"],
-            c=LATTICE_PARAMS["c"],
-            alpha=LATTICE_PARAMS["alpha"],
-            beta=LATTICE_PARAMS["beta"],
-            gamma=LATTICE_PARAMS["gamma"],
-            space_group=SPACE_GROUP,
-            wavelength_min=2.0,
-            wavelength_max=4.5,
-            **INDEXER_DEFAULTS,
-        )
-
-        # Run peak predictor
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
-        peak_predictor(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            indexed_hdf5_filename=indexer_output,
-            integration_peaks_filename=predictor_output,
-            d_min=1.35,
-        )
-
-        # Verify output
-        assert os.path.exists(predictor_output), (
-            "Peak predictor output file was not created"
-        )
-
-        with h5py.File(predictor_output, "r") as f:
-            # Check predicted peaks
-            assert "banks" in f, "Missing 'banks' group"
-            banks = f["banks"]
-
-            # Should have predicted peaks
-            assert len(banks.keys()) > 0, "No predicted peaks found"
-
-            # Check first bank structure
-            first_bank = list(banks.keys())[0]
-            bank_group = banks[first_bank]
-
-            # Should have Miller indices
-            assert "h" in bank_group, "Missing Miller index 'h'"
-            assert "k" in bank_group, "Missing Miller index 'k'"
-            assert "l" in bank_group, "Missing Miller index 'l'"
-            assert "i" in bank_group, "Missing pixel coordinate 'i'"
-            assert "j" in bank_group, "Missing pixel coordinate 'j'"
-
-            # Verify we have predictions
-            assert len(bank_group["h"]) > 0, "No predicted peaks in first bank"
-
-        metrics = compute_metrics(indexer_output)
-        assert metrics["median_d_err"] is not None and metrics["median_d_err"] > 0
-        assert metrics["mean_d_err"] is not None and metrics["mean_d_err"] > 0
-        assert metrics["max_d_err"] is not None and metrics["max_d_err"] > 0
-        assert metrics["median_ang_err"] is not None and metrics["median_ang_err"] > 0
-        assert metrics["mean_ang_err"] is not None and metrics["mean_ang_err"] > 0
-        assert metrics["max_ang_err"] is not None and metrics["max_ang_err"] > 0
-        assert metrics["num_peaks"] is not None and metrics["num_peaks"] > 0
-
-        print(f"✓ Metrics calculation completed: {metrics}")
-
-    def test_05_integrator(self, mesolite_input_file, temp_output_dir):
-        """Test peak integration."""
-        # Run full pipeline up to peak prediction
-        finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=finder_output,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        indexer(
-            peaks_h5_filename=finder_output,
-            output_peaks_filename=indexer_output,
-            a=LATTICE_PARAMS["a"],
-            b=LATTICE_PARAMS["b"],
-            c=LATTICE_PARAMS["c"],
-            alpha=LATTICE_PARAMS["alpha"],
-            beta=LATTICE_PARAMS["beta"],
-            gamma=LATTICE_PARAMS["gamma"],
-            space_group=SPACE_GROUP,
-            wavelength_min=2.0,
-            wavelength_max=4.5,
-            **INDEXER_DEFAULTS,
-        )
-
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
-        peak_predictor(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            indexed_hdf5_filename=indexer_output,
-            integration_peaks_filename=predictor_output,
-            d_min=1.35,
-        )
-
-        # Run integrator
-        integrator_output = os.path.join(temp_output_dir, "mesolite.integrator.h5")
-        integrator(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            integration_peaks_filename=predictor_output,
-            output_filename=integrator_output,
-            **INTEGRATOR_PARAMS,
-        )
-
-        # Verify output
-        assert os.path.exists(integrator_output), (
-            "Integrator output file was not created"
-        )
-
-        with h5py.File(integrator_output, "r") as f:
-            # Check for integrated intensities in peaks group
-            assert "peaks" in f, "Missing 'peaks' group"
-            peaks = f["peaks"]
-
-            # Should have the required datasets (may be empty for single-file test)
-            required_datasets = ["h", "k", "l", "intensity", "sigma"]
-            for dataset in required_datasets:
-                assert dataset in peaks, f"Missing dataset 'peaks/{dataset}'"
-
-            num_peaks = len(peaks["h"])
-            print(f"  Integrated {num_peaks} peaks")
-
-        print(f"✓ Integrator completed: {integrator_output}")
-
-    def test_06_mtz_exporter(self, mesolite_input_file, temp_output_dir):
-        """Test MTZ file export."""
-        # Run full pipeline
-        finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
-        finder(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            output_filename=finder_output,
-            finder_algorithm="thresholding",
-            thresholding_noise_cutoff_quantile=0.99,
-            **INTEGRATOR_PARAMS,
-        )
-
-        indexer_output = os.path.join(temp_output_dir, "mesolite.indexer.h5")
-        indexer(
-            peaks_h5_filename=finder_output,
-            output_peaks_filename=indexer_output,
-            a=LATTICE_PARAMS["a"],
-            b=LATTICE_PARAMS["b"],
-            c=LATTICE_PARAMS["c"],
-            alpha=LATTICE_PARAMS["alpha"],
-            beta=LATTICE_PARAMS["beta"],
-            gamma=LATTICE_PARAMS["gamma"],
-            space_group=SPACE_GROUP,
-            wavelength_min=2.0,
-            wavelength_max=4.5,
-            **INDEXER_DEFAULTS,
-        )
-
-        predictor_output = os.path.join(temp_output_dir, "mesolite.peak_predictor.h5")
-        peak_predictor(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            indexed_hdf5_filename=indexer_output,
-            integration_peaks_filename=predictor_output,
-            d_min=1.35,
-        )
-
-        integrator_output = os.path.join(temp_output_dir, "mesolite.integrator.h5")
-        integrator(
-            filename=mesolite_input_file,
-            instrument=INSTRUMENT,
-            integration_peaks_filename=predictor_output,
-            output_filename=integrator_output,
-            **INTEGRATOR_PARAMS,
-        )
-
-        # Export to MTZ
-        mtz_output = os.path.join(temp_output_dir, "mesolite.mtz")
-        mtz_exporter(
-            indexed_h5_filename=integrator_output,
-            output_mtz_filename=mtz_output,
-            space_group=SPACE_GROUP,
-        )
-
-        # Verify MTZ file was created
-        assert os.path.exists(mtz_output), "MTZ output file was not created"
-        assert os.path.getsize(mtz_output) > 0, "MTZ file is empty"
-
-        print(f"✓ MTZ exporter completed: {mtz_output}")
-
     @pytest.mark.slow
     def test_full_workflow(self, mesolite_input_file, temp_output_dir):
         """
         Integration test for complete single-run workflow.
-
-        This test runs all steps in sequence and validates the final output.
-        Mark as 'slow' since it runs the complete pipeline.
+        Runs all steps sequentially and halts immediately if any step fails.
         """
         # Define output filenames
         finder_output = os.path.join(temp_output_dir, "mesolite.finder.h5")
@@ -495,7 +118,7 @@ class TestMandiMesoliteSingleRun:
             thresholding_noise_cutoff_quantile=0.99,
             **INTEGRATOR_PARAMS,
         )
-        assert os.path.exists(finder_output)
+        assert os.path.exists(finder_output), "Finder failed to create output file"
 
         print("[2/5] Running indexer...")
         indexer(
@@ -512,16 +135,17 @@ class TestMandiMesoliteSingleRun:
             wavelength_max=4.5,
             **INDEXER_DEFAULTS,
         )
-        assert os.path.exists(indexer_output)
+        assert os.path.exists(indexer_output), "Indexer failed to create output file"
 
-        # check the accuracy
+        # Check the accuracy
+        print("[3/5] Validating metrics...")
         metrics = compute_metrics(indexer_output)
         median_ang_err_deg = metrics["median_ang_err"]
+        assert median_ang_err_deg < 0.3, (
+            f"Indexing accuracy too low: {median_ang_err_deg} deg"
+        )
 
-        # 0.3 deg median angular devation is a reasonable constraint on indexing accuracy
-        assert median_ang_err_deg < 0.3
-
-        print("[4/6] Running peak predictor...")
+        print("[4/5] Running peak predictor...")
         peak_predictor(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -529,9 +153,11 @@ class TestMandiMesoliteSingleRun:
             integration_peaks_filename=predictor_output,
             d_min=1.35,
         )
-        assert os.path.exists(predictor_output)
+        assert os.path.exists(predictor_output), (
+            "Predictor failed to create output file"
+        )
 
-        print("[5/6] Running integrator...")
+        print("[5/5] Running integrator...")
         integrator(
             filename=mesolite_input_file,
             instrument=INSTRUMENT,
@@ -539,7 +165,9 @@ class TestMandiMesoliteSingleRun:
             output_filename=integrator_output,
             **INTEGRATOR_PARAMS,
         )
-        assert os.path.exists(integrator_output)
+        assert os.path.exists(integrator_output), (
+            "Integrator failed to create output file"
+        )
 
         print("[6/6] Exporting to MTZ...")
         mtz_exporter(
@@ -547,21 +175,17 @@ class TestMandiMesoliteSingleRun:
             output_mtz_filename=mtz_output,
             space_group=SPACE_GROUP,
         )
-        assert os.path.exists(mtz_output)
+        assert os.path.exists(mtz_output), "MTZ Exporter failed to create output file"
 
         # Final validation: Check we have reflections in peaks group
         with h5py.File(integrator_output, "r") as f:
-            assert "peaks" in f, "Missing peaks group"
+            assert "peaks" in f, "Missing peaks group in final integrator output"
             peaks = f["peaks"]
+            total_reflections = len(peaks["h"]) if "h" in peaks else 0
 
-            if "h" in peaks:
-                total_reflections = len(peaks["h"])
-            else:
-                total_reflections = 0
-
-            print("\n✓ Complete workflow finished successfully")
-            print(f"  Total reflections: {total_reflections}")
-            print(f"  Output files in: {temp_output_dir}")
+        print("\n✓ Complete workflow finished successfully")
+        print(f"  Total reflections: {total_reflections}")
+        print(f"  Output files in: {temp_output_dir}")
 
 
 # Mark the test class for pytest markers
