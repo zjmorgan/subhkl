@@ -874,13 +874,18 @@ def run_merge_images(input_pattern: str, output_filename: str):
     merger.merge(output_filename)
     print(f"Successfully created {output_filename}")
 
+
 def run_zone_axis_search(
     merged_h5_filename: str,
     peaks_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
-    a: float, b: float, c: float,
-    alpha: float, beta: float, gamma: float,
+    a: float,
+    b: float,
+    c: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
     space_group: str,
     d_min: float = 1.0,
     sigma: float = 2.0,
@@ -910,13 +915,16 @@ def run_zone_axis_search(
     from subhkl.search.prior import HoughPrior
 
     print(f"Loading data from {merged_h5_filename}...")
-    with h5py.File(merged_h5_filename, 'r') as f_in:
+    with h5py.File(merged_h5_filename, "r") as f_in:
         file_bank_ids = list(int(bid) for bid in f_in["bank_ids"])
         ax = f_in["goniometer/axes"][()]
         goniometer_angles = np.array(f_in["goniometer/angles"][()])
 
         from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
-        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
+
+        R_stack = np.stack(
+            [calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles]
+        )
         file_offsets = f_in["file_offsets"][()]
 
     # Dynamically slice the arrays based on the requested number of runs
@@ -927,7 +935,9 @@ def run_zone_axis_search(
             end_idx = len(file_bank_ids)
             num_runs = len(file_offsets)
 
-        print(f"Limiting search to the first {num_runs} run(s) (Images 0 to {end_idx-1})...")
+        print(
+            f"Limiting search to the first {num_runs} run(s) (Images 0 to {end_idx - 1})..."
+        )
         file_bank_ids = file_bank_ids[:end_idx]
         R_stack = R_stack[:end_idx]
     else:
@@ -943,11 +953,13 @@ def run_zone_axis_search(
     B_mat = ub_helper.reciprocal_lattice_B()
 
     print("\n--- HOUGH PRIOR GENERATION ---")
-    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
+    prior_engine = HoughPrior(
+        B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0])
+    )
 
     print(f"Loading empirical rays from {peaks_h5_filename}...")
 
-    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
+    with h5py.File(peaks_h5_filename, "r") as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
         peaks_intensity = f_peaks["peaks/intensity"][()]
 
@@ -967,7 +979,13 @@ def run_zone_axis_search(
         if R_peaks_override is not None:
             R_peaks_override = R_peaks_override[()]
 
-    q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = [], [], [], [], []
+    q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = (
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
 
     unique_groups = np.unique(group_indices)
     for g_idx in unique_groups:
@@ -980,7 +998,9 @@ def run_zone_axis_search(
 
         # 2. Safely grab the rotation matrix using the flat bank index (g_idx)
         if R_peaks_override is not None:
-            if R_peaks_override.ndim == 3 and R_peaks_override.shape[0] == len(peaks_xyz):
+            if R_peaks_override.ndim == 3 and R_peaks_override.shape[0] == len(
+                peaks_xyz
+            ):
                 R_gonio = R_peaks_override[mask][0]
             elif R_peaks_override.ndim == 3 and R_peaks_override.shape[0] > g_idx:
                 R_gonio = R_peaks_override[g_idx]
@@ -991,13 +1011,15 @@ def run_zone_axis_search(
             R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
 
         intensity_mask = grp_intensity >= min_intensity
-        if not np.any(intensity_mask): 
+        if not np.any(intensity_mask):
             continue
-            
+
         grp_xyz = grp_xyz[intensity_mask]
         grp_intensity = grp_intensity[intensity_mask]
 
-        top_k_idx = np.argsort(grp_intensity)[::-1][:min(top_k_rays, len(grp_intensity))]
+        top_k_idx = np.argsort(grp_intensity)[::-1][
+            : min(top_k_rays, len(grp_intensity))
+        ]
         grp_xyz_top = grp_xyz[top_k_idx]
         grp_intensity_top = grp_intensity[top_k_idx]
 
@@ -1007,24 +1029,26 @@ def run_zone_axis_search(
 
         q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
         q_hat_grp = q_sample / q_norms
-        
+
         q_hat_list.append(q_hat_grp)
         q_lab_list.append(q_lab)
         peaks_xyz_list.append(grp_xyz_top)
         intensities_list.append(grp_intensity_top)
-        
+
         # 3. Map the VectorizedObjective strictly to the flat bank index
         mapped_bank_indices.append(np.full(len(grp_xyz_top), g_idx))
 
     if not q_hat_list:
-        print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
+        print(
+            "Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold."
+        )
         return
 
     q_hat = np.vstack(q_hat_list)
-    q_lab_all = np.vstack(q_lab_list).T  
-    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
+    q_lab_all = np.vstack(q_lab_list).T
+    peaks_xyz_all = np.vstack(peaks_xyz_list).T
     intensities_all = np.concatenate(intensities_list)
-    
+
     # This array now contains the exact bank index (0 to N_banks-1) for every single ray
     bank_indices_all = np.concatenate(mapped_bank_indices)
 
@@ -1034,22 +1058,32 @@ def run_zone_axis_search(
 
     print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
     n_obs, weights_obs = prior_engine.compute_hough_accumulator(
-        q_hat, grid_resolution=hough_grid_resolution, n_hough=n_hough,
-        plot_filename=output_hough, border_frac=border_frac
+        q_hat,
+        grid_resolution=hough_grid_resolution,
+        n_hough=n_hough,
+        plot_filename=output_hough,
+        border_frac=border_frac,
     )
 
     if len(n_obs) == 0:
         return
 
-    n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
-    print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
+    n_calc = prior_engine.generate_theoretical_zones(
+        L_max=L_max, top_k=top_k, max_uvw=max_uvw
+    )
+    print(
+        f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones."
+    )
 
     quats, _ = prior_engine.solve_permutations(
-        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat,
+        jnp.array(n_obs),
+        jnp.array(weights_obs),
+        n_calc,
+        q_hat,
         space_group=space_group,
         angle_tol_deg=davenport_angle_tol,
         scoring_tol_deg=vector_tolerance,
-        d_min=d_min
+        d_min=d_min,
     )
 
     if quats is None or len(quats) == 0:
@@ -1067,10 +1101,12 @@ def run_zone_axis_search(
         # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
         # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
         static_R=R_stack,
-        peak_run_indices=bank_indices_all 
+        peak_run_indices=bank_indices_all,
     )
 
-    prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
+    prior_rots = prior_engine.physics_filter(
+        quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0
+    )
 
     if prior_rots is None or len(prior_rots) == 0:
         print("Exact physical model rejected all seeds. Exiting.")
@@ -1082,6 +1118,7 @@ def run_zone_axis_search(
         f.create_dataset("optimization/best_params", data=best_rot)
 
         from subhkl.optimization import rotation_matrix_from_rodrigues_jax
+
         U_matrix = np.array(rotation_matrix_from_rodrigues_jax(best_rot))
         f.create_dataset("sample/U", data=U_matrix)
         f.create_dataset("sample/B", data=B_mat)
@@ -1096,7 +1133,9 @@ def run_zone_axis_search(
         f.create_dataset("sample/offset", data=np.zeros(3))
         f.create_dataset("beam/ki_vec", data=np.array([0.0, 0.0, 1.0]))
         f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
-        f.create_dataset("sample/space_group", data=space_group.encode('utf-8'))
+        f.create_dataset("sample/space_group", data=space_group.encode("utf-8"))
         f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
 
-    print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
+    print(
+        f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ..."
+    )
