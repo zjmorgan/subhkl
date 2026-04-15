@@ -182,25 +182,25 @@ def finder(
 
 @app.command()
 def indexer(
-    peaks_h5_filename: str, 
-    output_peaks_filename: str, 
-    a: Annotated[float | None, typer.Option(help="Unit cell parameter a")] = None, 
-    b: Annotated[float | None, typer.Option(help="Unit cell parameter b")] = None, 
+    peaks_h5_filename: str,
+    output_peaks_filename: str,
+    a: Annotated[float | None, typer.Option(help="Unit cell parameter a")] = None,
+    b: Annotated[float | None, typer.Option(help="Unit cell parameter b")] = None,
     c: Annotated[float | None, typer.Option(help="Unit cell parameter c")] = None,
-    alpha: Annotated[float | None, typer.Option(help="Unit cell parameter alpha")] = None, 
-    beta: Annotated[float | None, typer.Option(help="Unit cell parameter beta")] = None, 
-    gamma: Annotated[float | None, typer.Option(help="Unit cell parameter gamma")] = None, 
+    alpha: Annotated[float | None, typer.Option(help="Unit cell parameter alpha")] = None,
+    beta: Annotated[float | None, typer.Option(help="Unit cell parameter beta")] = None,
+    gamma: Annotated[float | None, typer.Option(help="Unit cell parameter gamma")] = None,
     space_group: Annotated[str | None, typer.Option(help="Space group (e.g. 'P 1')")] = None,
-    wavelength_min: Annotated[float | None, typer.Option("--wavelength-min")] = None, 
+    wavelength_min: Annotated[float | None, typer.Option("--wavelength-min")] = None,
     wavelength_max: Annotated[float | None, typer.Option("--wavelength-max")] = None,
     ki_vec: Annotated[str | None, typer.Option("--ki-vec", help="Override incident beam vector (e.g., '0,0,1' or '0,0,-1')")] = None,
     original_nexus_filename: Annotated[str | None, typer.Option("--nexus", help="Original nexus file for instrument definitions")] = None,
-    instrument_name: Annotated[str | None, typer.Option("--instrument")] = None, 
+    instrument_name: Annotated[str | None, typer.Option("--instrument")] = None,
     strategy_name: Annotated[str, typer.Option("--strategy")] = "DE",
-    sigma_init: Annotated[float | None, typer.Option("--sigma-init")] = None, 
+    sigma_init: Annotated[float | None, typer.Option("--sigma-init")] = None,
     n_runs: Annotated[int, typer.Option("--n-runs", "-n")] = 1,
     population_size: Annotated[int, typer.Option("--population-size", "--popsize")] = 1000,
-    gens: Annotated[int, typer.Option("--gens")] = 100, 
+    gens: Annotated[int, typer.Option("--gens")] = 100,
     seed: Annotated[int, typer.Option("--seed")] = 0,
     tolerance_deg: Annotated[float, typer.Option("--tolerance-deg")] = 0.1,
     freeze_orientation: Annotated[bool, typer.Option("--freeze-orientation", help="Lock the U matrix to its initial state.")] = False,
@@ -228,115 +228,54 @@ def indexer(
     d_min: Annotated[float | None, typer.Option("--d-min")] = None,
     d_max: Annotated[float | None, typer.Option("--d-max")] = None,
 ) -> None:
-    sg_to_use = "P 1"
 
-    print(f"Loading peaks from: {peaks_h5_filename}")
-    input_data = {}
-
-    with h5py.File(peaks_h5_filename, "r") as f:
-        # Gracefully handle optional lattice parameters by loading from file if missing
-        if a is None and "sample/a" in f: a = float(f["sample/a"][()])
-        if b is None and "sample/b" in f: b = float(f["sample/b"][()])
-        if c is None and "sample/c" in f: c = float(f["sample/c"][()])
-        if alpha is None and "sample/alpha" in f: alpha = float(f["sample/alpha"][()])
-        if beta is None and "sample/beta" in f: beta = float(f["sample/beta"][()])
-        if gamma is None and "sample/gamma" in f: gamma = float(f["sample/gamma"][()])
-        
-        # Determine space group
-        if space_group is None and "sample/space_group" in f:
-            sg_val = f["sample/space_group"][()]
-            space_group = sg_val.decode() if isinstance(sg_val, bytes) else str(sg_val)
-
-        if space_group:
-            from subhkl.core.spacegroup import get_space_group_object
-            try:
-                get_space_group_object(space_group)
-                sg_to_use = space_group
-            except ValueError as e:
-                print(f"ERROR: Invalid space group '{space_group}': {e}")
-                raise typer.Exit(code=1)
-
-        # Determine Wavelength
-        if wavelength_min is None or wavelength_max is None:
-            if "instrument/wavelength" in f:
-                wl = f["instrument/wavelength"][()]
-                if wavelength_min is None:
-                    wavelength_min = float(wl[0])
-                if wavelength_max is None:
-                    wavelength_max = float(wl[1])
-            else:
-                raise ValueError("Wavelength not provided and not found in input file.")
-
-        # Load bulk data
-        keys_to_load = [
-            "peaks/two_theta", "peaks/azimuthal", "peaks/intensity", "peaks/sigma",
-            "peaks/radius", "peaks/xyz", "goniometer/R", "goniometer/axes",
-            "goniometer/angles", "goniometer/names", "files", "file_offsets",
-            "peaks/run_index", "peaks/image_index", "bank", "bank_ids", 
-            "sample/offset", "beam/ki_vec",
-        ]
-        for k in keys_to_load:
-            if k in f:
-                input_data[k] = f[k][()]
-
-    # ToF Geometry mapping constraint
-    if "peaks/image_index" in input_data:
-        input_data["peaks/run_index"] = input_data["peaks/image_index"]
-
-    input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
-    input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha, beta, gamma
-    input_data["sample/space_group"] = sg_to_use
-    input_data["instrument/wavelength"] = [float(wavelength_min), float(wavelength_max)]
-
-    # Clean and parse string-based comma-separated lists
-    gonio_axes_list = [x.strip() for x in refine_goniometer_axes.split(",")] if refine_goniometer_axes else None
-    detector_banks_list = [int(x.strip()) for x in refine_detector_banks.split(",")] if refine_detector_banks else None
-    global_rot_axis_parsed = [float(x.strip()) for x in detector_global_rot_axis.split(",")] if detector_global_rot_axis else None
+    # 1. Safely Parse Comma-Separated Strings into Python Lists
     ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
-    
-    # Modes might also need space trimming just in case
-    detector_modes_list = [x.strip() for x in detector_modes.split(",")] if detector_modes else []
+    gonio_axes_parsed = [x.strip() for x in refine_goniometer_axes.split(",")] if refine_goniometer_axes else None
+    det_banks_parsed = [int(x.strip()) for x in refine_detector_banks.split(",")] if refine_detector_banks else None
+    det_modes_parsed = [x.strip().lower() for x in detector_modes.split(",")] if detector_modes else ["independent"]
+    global_rot_axis_parsed = [float(x.strip()) for x in detector_global_rot_axis.split(",")] if detector_global_rot_axis else [0.0, 1.0, 0.0]
 
-    # Send variables directly to core execution logic
+    # 2. Hand off to Core Logic
     run_index(
-        input_data=input_data,
+        peaks_h5_filename=peaks_h5_filename,
         output_peaks_filename=output_peaks_filename,
+        a=a, b=b, c=c, alpha=alpha, beta=beta, gamma=gamma, space_group=space_group,
+        wavelength_min=wavelength_min, wavelength_max=wavelength_max,
+        ki_vec=ki_vec_parsed,
+        original_nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name,
         strategy_name=strategy_name,
-        population_size=population_size,
-        gens=gens,
         sigma_init=sigma_init,
         n_runs=n_runs,
+        population_size=population_size,
+        gens=gens,
         seed=seed,
         tolerance_deg=tolerance_deg,
-        loss_method=loss_method,
-        d_min=d_min,
-        d_max=d_max,
         freeze_orientation=freeze_orientation,
         refine_lattice=refine_lattice,
         lattice_bound_frac=lattice_bound_frac,
-        bootstrap_filename=bootstrap_filename,
         refine_goniometer=refine_goniometer,
-        refine_goniometer_axes=gonio_axes_list,
+        refine_goniometer_axes=gonio_axes_parsed,
         goniometer_bound_deg=goniometer_bound_deg,
         refine_sample=refine_sample,
         sample_bound_meters=sample_bound_meters,
         refine_beam=refine_beam,
         beam_bound_deg=beam_bound_deg,
         refine_detector=refine_detector,
-        refine_detector_banks=detector_banks_list,
-        detector_modes=detector_modes_list,
+        refine_detector_banks=det_banks_parsed,
+        detector_modes=det_modes_parsed,
         detector_trans_bound_meters=detector_trans_bound_meters,
         detector_rot_bound_deg=detector_rot_bound_deg,
         detector_global_rot_bound_deg=detector_global_rot_bound_deg,
         detector_global_rot_axis=global_rot_axis_parsed,
         detector_global_trans_bound_meters=detector_global_trans_bound_meters,
         detector_radial_bound_frac=detector_radial_bound_frac,
-        nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name,
+        bootstrap_filename=bootstrap_filename,
         batch_size=batch_size,
-        wavelength_min=input_data["instrument/wavelength"][0],
-        wavelength_max=input_data["instrument/wavelength"][1],
-        ki_vec=ki_vec_parsed,
+        loss_method=loss_method,
+        d_min=d_min,
+        d_max=d_max
     )
 
 @app.command()
