@@ -9,40 +9,23 @@ import scipy.linalg
 from subhkl.instrument.detector import scattering_vector_from_angles
 from subhkl.core.spacegroup import get_space_group_object
 
-from subhkl.utils.shim import (
-    CMA_ES,
-    HAS_JAX,
-    OPTIMIZATION_BACKEND,
-    PSO,
-    DifferentialEvolution,
-    Mesh,
-    NamedSharding,
-    P,
-    jax,
-    lax,
-    jnp,
-    jnp_update_add,
-    jnp_update_set,
-    jscipy_linalg,
-)
+from evosax.algorithms import CMA_ES
+from evosax.algorithms import DifferentialEvolution
+from evosax.algorithms import PSO
+from jax import lax
+from jax.sharding import Mesh
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
+import jax
+import jax.numpy as jnp
+import jax.scipy.linalg as jscipy_linalg
 
-if HAS_JAX:
-    jax.config.update("jax_enable_x64", True)
-
-__all__ = ["OPTIMIZATION_BACKEND"]
+jax.config.update("jax_enable_x64", True)
 
 try:
     from tqdm import trange
 except ImportError:
     trange = None
-
-
-def require_jax():
-    if not HAS_JAX:
-        raise ImportError(
-            "JAX and evosax are required for this functionality. "
-            'Install with: pip install -e ".[jax]" or pip install jax jaxlib evosax'
-        )
 
 
 def _inverse_map_param(value, bound):
@@ -476,8 +459,8 @@ class VectorizedObjective:
             ty = _forward_map_param(x[:, idx + 1], bound_rad)
             idx += 2
             ki_vec = jnp.tile(self.beam_nominal[None, :], (x.shape[0], 1))
-            ki_vec = jnp_update_add(ki_vec, (slice(None), 0), tx)
-            ki_vec = jnp_update_add(ki_vec, (slice(None), 1), ty)
+            ki_vec = ki_vec.at[(slice(None), 0)].add(tx)
+            ki_vec = ki_vec.at[(slice(None), 1)].add(ty)
             ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
         else:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
@@ -485,11 +468,7 @@ class VectorizedObjective:
         if self.refine_goniometer:
             gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
             if self.num_active_gonio > 0:
-                gonio_norm = jnp_update_set(
-                    gonio_norm,
-                    (slice(None), self.gonio_mask),
-                    x[:, idx : idx + self.num_active_gonio],
-                )
+                gonio_norm = gonio_norm.at[(slice(None), self.gonio_mask)].set(x[:, idx : idx + self.num_active_gonio])
                 idx += self.num_active_gonio
 
             offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
@@ -896,8 +875,6 @@ class FindUB:
         sigma_init: float | None = None,
         **kwargs,
     ):
-        require_jax()
-
         if goniometer_axes is None and self.goniometer_axes is not None:
             goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
@@ -1084,7 +1061,7 @@ class FindUB:
                 )
             return state
 
-        mesh = Mesh(np.array(jax.devices()), ("i")) if HAS_JAX else None
+        mesh = Mesh(np.array(jax.devices()), ("i"))
 
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
