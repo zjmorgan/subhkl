@@ -468,7 +468,9 @@ class VectorizedObjective:
         if self.refine_goniometer:
             gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
             if self.num_active_gonio > 0:
-                gonio_norm = gonio_norm.at[(slice(None), self.gonio_mask)].set(x[:, idx : idx + self.num_active_gonio])
+                gonio_norm = gonio_norm.at[(slice(None), self.gonio_mask)].set(
+                    x[:, idx : idx + self.num_active_gonio]
+                )
                 idx += self.num_active_gonio
 
             offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
