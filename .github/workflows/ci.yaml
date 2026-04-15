@@ -27,7 +27,7 @@ jobs:
         run: uv sync
       - name: Run linting
         run: |
-          uv run ruff format --check
+          uv run ruff format --diff
           uv run ruff check
 
   test-unit:
