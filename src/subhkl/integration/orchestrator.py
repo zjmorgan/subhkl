@@ -8,9 +8,7 @@ from subhkl.config import beamlines
 from subhkl.instrument.goniometer import Goniometer
 from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
+
 
 @dataclass(frozen=True)
 class Wavelength:

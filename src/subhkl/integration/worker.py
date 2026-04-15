@@ -19,6 +19,7 @@ from subhkl.core.crystallography import generate_reflections
 @dataclass
 class _RunPeaksFinder:
     """Lightweight mock of DetectorPeaks for the unrolled plotter."""
+
     xyz: list
     image_index: list
     peak_rows: list
@@ -27,6 +28,7 @@ class _RunPeaksFinder:
     var_u: list = None
     var_v: list = None
     cov_uv: list = None
+
 
 def _render_finder_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
@@ -40,7 +42,15 @@ def _render_finder_unrolled_plot(args):
         plt.switch_backend("Agg")
 
     out_name = f"{run_id}_finder.png"
-    plot_unrolled_detector(peaks, images, detectors, finder_peaks=finder_peaks, out_name=out_name, instrument=instrument)
+    plot_unrolled_detector(
+        peaks,
+        images,
+        detectors,
+        finder_peaks=finder_peaks,
+        out_name=out_name,
+        instrument=instrument,
+    )
+
 
 def _run_harvest_local_max(
     im,
@@ -346,7 +356,9 @@ def integrate_single_bank(
     s_lab = (
         current_R_val @ sample_offset if current_R_val is not None else sample_offset
     )
-    bank_tt, bank_az = det.pixel_to_angles(bank_i, bank_j, sample_offset=s_lab, ki_vec=ki_vec)
+    bank_tt, bank_az = det.pixel_to_angles(
+        bank_i, bank_j, sample_offset=s_lab, ki_vec=ki_vec
+    )
 
     # Correctly handle lab coordinate shape (N, 3)
     lab_coords = det.pixel_to_lab(bank_i, bank_j)
@@ -493,7 +505,9 @@ def integrate_single_bank(
     kept_centers = refined_centers[keep]
     # Re-calculate angles and lab coordinates
     bank_tt, bank_az = det.pixel_to_angles(
-        kept_centers[:, 0], kept_centers[:, 1], sample_offset=s_lab,
+        kept_centers[:, 0],
+        kept_centers[:, 1],
+        sample_offset=s_lab,
         ki_vec=ki_vec,
     )
     lab_coords = det.pixel_to_lab(kept_centers[:, 0], kept_centers[:, 1])

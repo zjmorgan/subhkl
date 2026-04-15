@@ -12,6 +12,9 @@ import jax.scipy.optimize
 import jax.scipy.signal
 import scipy
 
+
+from dataclasses import dataclass
+
 from functools import partial
 from typing import Dict, List
 import multiprocessing
@@ -1721,12 +1724,10 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 # API WRAPPER FOR BACKWARD COMPATIBILITY
 # =====================================================================
 
-
-from dataclasses import dataclass
-
 @dataclass(frozen=True)
 class RunPeaks:
     """Lightweight dataclass to mock DetectorPeaks for the unrolled plotter."""
+
     image_index: list
     intensity: list
     peak_rows: list
@@ -1735,6 +1736,7 @@ class RunPeaks:
     var_v: list
     cov_uv: list
     ki_vec: np.ndarray
+
 
 def _render_run_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
@@ -1748,7 +1750,10 @@ def _render_run_unrolled_plot(args):
         plt.switch_backend("Agg")
 
     out_name = f"{run_id}_int.png"
-    plot_unrolled_detector(peaks, images, detectors, out_name=out_name, instrument=instrument)
+    plot_unrolled_detector(
+        peaks, images, detectors, out_name=out_name, instrument=instrument
+    )
+
 
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
@@ -1879,6 +1884,7 @@ def _render_and_save_rbf_plot(args):
     fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
     plt.close(fig)
 
+
 def integrate_peaks_rbf_ssn(
     peak_dict: Dict,
     peaks_obj,
@@ -1922,7 +1928,7 @@ def integrate_peaks_rbf_ssn(
     if sample_offset is None:
         sample_offset = np.zeros(3)
     if ki_vec is None:
-        ki_vec = np.array([0,0,1.0])
+        ki_vec = np.array([0, 0, 1.0])
 
     len(peaks_obj.image.ims)
 
@@ -2011,7 +2017,9 @@ def integrate_peaks_rbf_ssn(
         batch_rs = np.array([i_arr[d["rep_idx"]] for d in keep_data])
         batch_cs = np.array([j_arr[d["rep_idx"]] for d in keep_data])
 
-        bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab, ki_vec=ki_vec)
+        bank_tt, bank_az = det.pixel_to_angles(
+            batch_rs, batch_cs, sample_offset=s_lab, ki_vec=ki_vec
+        )
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -2196,15 +2204,15 @@ def integrate_peaks_rbf_ssn(
         results_by_img[meta_keys[i]].append(i)
 
     # Replaces the old plot_tasks list
-    runs_plot_data = defaultdict(lambda: {'images': {}, 'detectors': {}})
+    runs_plot_data = defaultdict(lambda: {"images": {}, "detectors": {}})
 
     # static per-run data
     if create_visualizations:
         for img_key, image_raw in peaks_obj.image.ims.items():
             run_id = peaks_obj.get_run_id(img_key)
             det = peaks_obj.get_detector_by_img(img_key)
-            runs_plot_data[run_id]['images'][img_key] = image_raw
-            runs_plot_data[run_id]['detectors'][img_key] = det
+            runs_plot_data[run_id]["images"][img_key] = image_raw
+            runs_plot_data[run_id]["detectors"][img_key] = det
 
     for img_key, indices in tqdm(
         results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"
@@ -2248,7 +2256,7 @@ def integrate_peaks_rbf_ssn(
         for local_idx, global_idx in zip(valid_local_indices, valid_global_indices):
             intensity = float(integrated_results[global_idx, 0])
             sigI = float(integrated_results[global_idx, 4])
-            
+
             r_center = float(integrated_results[global_idx, 1])
             c_center = float(integrated_results[global_idx, 2])
             var_u = float(all_var_u[global_idx])
@@ -2299,7 +2307,15 @@ def integrate_peaks_rbf_ssn(
                 ki_vec=ki_vec,
             )
 
-            run_tasks.append((image_label, run_peaks, data['images'], data['detectors'], peaks_obj.instrument))
+            run_tasks.append(
+                (
+                    image_label,
+                    run_peaks,
+                    data["images"],
+                    data["detectors"],
+                    peaks_obj.instrument,
+                )
+            )
 
         if max_workers is None:
             max_workers = os.cpu_count()
@@ -2307,12 +2323,16 @@ def integrate_peaks_rbf_ssn(
         max_workers = min(max_workers, len(run_tasks))
 
         ctx = multiprocessing.get_context("spawn")
-        with concurrent.futures.ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            list(tqdm(
-                executor.map(_render_run_unrolled_plot, run_tasks),
-                total=len(run_tasks),
-                desc="Rendering Unrolled Plots",
-                disable=not show_progress
-            ))
+        with concurrent.futures.ProcessPoolExecutor(
+            mp_context=ctx, max_workers=max_workers
+        ) as executor:
+            list(
+                tqdm(
+                    executor.map(_render_run_unrolled_plot, run_tasks),
+                    total=len(run_tasks),
+                    desc="Rendering Unrolled Plots",
+                    disable=not show_progress,
+                )
+            )
 
     return res

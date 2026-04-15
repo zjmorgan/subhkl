@@ -15,7 +15,6 @@ from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
 from subhkl.integration.worker import _render_finder_unrolled_plot, _RunPeaksFinder
-from subhkl.viz.detector_assembly import plot_unrolled_detector
 
 
 # NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
@@ -182,13 +181,13 @@ class Peaks:
                 except Exception as e:
                     print(f"Worker failed for image {img_key}: {e}")
 
-        show_candidates = harvest_peaks_kwargs.get('show_candidates', False)
+        show_candidates = harvest_peaks_kwargs.get("show_candidates", False)
         return self._assemble_detector_peaks(
             results_by_key,
             precomputed_peaks=precomputed_peaks if show_candidates else None,
-            visualize=visualize, 
+            visualize=visualize,
             max_workers=max_workers,
-            instrument_label=self.instrument
+            instrument_label=self.instrument,
         )
 
     def predict_peaks(
@@ -347,8 +346,14 @@ class Peaks:
             instrument_wavelength,
         )
 
-    def _assemble_detector_peaks(self, results_by_key, precomputed_peaks=None, visualize=False,
-                                 max_workers=None, instrument_label=None):
+    def _assemble_detector_peaks(
+        self,
+        results_by_key,
+        precomputed_peaks=None,
+        visualize=False,
+        max_workers=None,
+        instrument_label=None,
+    ):
         if precomputed_peaks is None:
             precomputed_peaks = {}
 
@@ -417,14 +422,22 @@ class Peaks:
             for img_key, img in self.image.ims.items():
                 run_id = self.get_run_id(img_key)
                 if run_id not in runs_plot_data:
-                    runs_plot_data[run_id] = {'images': {}, 'detectors': {}, 'finder_peaks': {}}
-                    runs_plot_data[run_id]['label'] = self.get_image_label(img_key)
+                    runs_plot_data[run_id] = {
+                        "images": {},
+                        "detectors": {},
+                        "finder_peaks": {},
+                    }
+                    runs_plot_data[run_id]["label"] = self.get_image_label(img_key)
 
-                runs_plot_data[run_id]['images'][img_key] = img
-                runs_plot_data[run_id]['detectors'][img_key] = self.get_detector_by_img(img_key)
+                runs_plot_data[run_id]["images"][img_key] = img
+                runs_plot_data[run_id]["detectors"][img_key] = self.get_detector_by_img(
+                    img_key
+                )
 
                 if img_key in precomputed_peaks:
-                    runs_plot_data[run_id]['finder_peaks'][img_key] = precomputed_peaks[img_key]
+                    runs_plot_data[run_id]["finder_peaks"][img_key] = precomputed_peaks[
+                        img_key
+                    ]
 
             run_tasks = []
             for r_id, data in runs_plot_data.items():
@@ -433,12 +446,27 @@ class Peaks:
 
                 run_peaks = _RunPeaksFinder(
                     xyz=[peaks.xyz[i] for i in mask] if peaks.xyz else [],
-                    image_index=[peaks.image_index[i] for i in mask] if peaks.image_index else [],
-                    peak_rows=[peaks.peak_rows[i] for i in mask] if peaks.peak_rows else [],
-                    peak_cols=[peaks.peak_cols[i] for i in mask] if peaks.peak_cols else [],
+                    image_index=[peaks.image_index[i] for i in mask]
+                    if peaks.image_index
+                    else [],
+                    peak_rows=[peaks.peak_rows[i] for i in mask]
+                    if peaks.peak_rows
+                    else [],
+                    peak_cols=[peaks.peak_cols[i] for i in mask]
+                    if peaks.peak_cols
+                    else [],
                 )
 
-                run_tasks.append((data['label'], run_peaks, data['images'], data['detectors'], data['finder_peaks'], instrument_label))
+                run_tasks.append(
+                    (
+                        data["label"],
+                        run_peaks,
+                        data["images"],
+                        data["detectors"],
+                        data["finder_peaks"],
+                        instrument_label,
+                    )
+                )
 
             if max_workers is None:
                 max_workers = os.cpu_count()
@@ -446,12 +474,16 @@ class Peaks:
             max_workers = min(max_workers, len(run_tasks))
 
             ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-                list(tqdm(
-                    executor.map(_render_finder_unrolled_plot, run_tasks),
-                    total=len(run_tasks),
-                    desc="Rendering Finder Unrolled Plots"
-                ))
+            with ProcessPoolExecutor(
+                mp_context=ctx, max_workers=max_workers
+            ) as executor:
+                list(
+                    tqdm(
+                        executor.map(_render_finder_unrolled_plot, run_tasks),
+                        total=len(run_tasks),
+                        desc="Rendering Finder Unrolled Plots",
+                    )
+                )
 
         return peaks
 
