@@ -107,8 +107,9 @@ def process_single_image(
     if erosion:
         radius = max(1, int(min(mask.shape) * erosion))
         kernel = np.ones((radius, radius), dtype=np.uint8)
-        mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
-                borderValue=0).astype(bool)
+        mask = cv2.erode(
+            mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
+        ).astype(bool)
 
     # ==========================================
     # 2.5 STRICTLY ENFORCE MASK ON CANDIDATES
@@ -431,8 +432,9 @@ def integrate_single_bank(
     if mask_erosion:
         radius = max(1, int(min(mask.shape) * mask_erosion))
         kernel = np.ones((radius, radius), dtype=np.uint8)
-        mask = cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT,
-            borderValue=0).astype(bool)
+        mask = cv2.erode(
+            mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
+        ).astype(bool)
 
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
     if integration_params.get("region_growth_minimum_sigma") is not None:
