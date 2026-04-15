@@ -185,7 +185,7 @@ def test_integrate_peaks_rbf_ssn_orchestrator():
             }
 
         def get_run_id(self, img_key):
-            return self.image.get_run_id()
+            return self.image.get_run_id(img_key)
 
         def get_detector_by_img(self, img_key):
             from subhkl.instrument.detector import Detector
@@ -681,7 +681,7 @@ def test_large_sensor_basic_integration():
             self.image = MockImageHandler(ims)
 
         def get_run_id(self, img_key):
-            return self.image.get_run_id()
+            return self.image.get_run_id(img_key)
 
         def get_detector_by_img(self, img_key):
             from subhkl.instrument.detector import Detector
@@ -794,7 +794,7 @@ def test_integrator_large_sensor_halo_suppression():
             self.image = MockImageHandler(ims)
 
         def get_run_id(self, img_key):
-            return self.image.get_run_id()
+            return self.image.get_run_id(img_key)
 
         def get_detector_by_img(self, img_key):
             from subhkl.instrument.detector import Detector
