@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 import scipy.linalg
 
 from subhkl import optimization
