@@ -18,14 +18,12 @@ from pathlib import Path
 import h5py
 import pytest
 
-from subhkl.io.parser import (
-    indexer
-)
+from subhkl.io.parser import indexer
 from subhkl.commands import (
     run_finder as finder,
     run_integrator as integrator,
     run_mtz_exporter as mtz_exporter,
-    run_peak_predictor as peak_predictor
+    run_peak_predictor as peak_predictor,
 )
 from subhkl.instrument.metrics import compute_metrics
 

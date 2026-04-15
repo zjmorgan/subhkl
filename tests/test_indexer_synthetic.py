@@ -4,10 +4,7 @@ import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from subhkl.commands import (
-    run_index as index,
-    run_metrics as metrics
-)
+from subhkl.commands import run_index as index, run_metrics as metrics
 
 
 def create_synthetic_finder(filename):
