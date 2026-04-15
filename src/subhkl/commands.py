@@ -272,7 +272,6 @@ def run_finder(
     sparse_rbf_candidate_alphas: str = "3.0,5.0,10.0,15.0,20.0,25.0,30",
     max_workers: int = 16,
 ):
-
     print(f"Creating peaks from {filename} for instrument {instrument}")
 
     wavelength_kwargs = {}
