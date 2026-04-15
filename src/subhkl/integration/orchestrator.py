@@ -9,7 +9,6 @@ from subhkl.instrument.goniometer import Goniometer
 from subhkl.peakfinder.sparse_rbf import SparseRBFPeakFinder
 
 
-
 @dataclass(frozen=True)
 class Wavelength:
     min: float = None

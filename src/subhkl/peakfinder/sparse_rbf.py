@@ -1724,6 +1724,7 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 # API WRAPPER FOR BACKWARD COMPATIBILITY
 # =====================================================================
 
+
 @dataclass(frozen=True)
 class RunPeaks:
     """Lightweight dataclass to mock DetectorPeaks for the unrolled plotter."""
