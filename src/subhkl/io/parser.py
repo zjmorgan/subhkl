@@ -1,15 +1,21 @@
-import glob
-import os
-import json
-
-import h5py
-import numpy as np
+# src/subhkl/io/command_line_parser.py
+from typing import Annotated
 import typer
+import h5py
 
-from subhkl.instrument.goniometer import (
-    calc_goniometer_rotation_matrix,
-    get_rotation_data_from_nexus,
+from subhkl.commands import (
+    run_index,
+    run_finder,
+    run_rbf_integrator,
+    run_metrics,
+    run_peak_predictor,
+    run_integrator,
+    run_mtz_exporter,
+    run_reduce,
+    run_merge_images,
+    run_zone_axis_search,
 )
+
 from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
 from subhkl.integration import Peaks
 from subhkl.instrument.metrics import compute_metrics
@@ -43,6 +49,136 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
                     count += 1
             if count > 0:
                 print(f"Successfully applied calibration to {count} detector panels.")
+
+app = typer.Typer()
+
+@app.command()
+def finder(
+    filename: Annotated[str, typer.Argument(help="Input raw/event Nexus file")],
+    instrument: Annotated[str, typer.Argument(help="Instrument name")],
+    output_filename: str = "output.h5",
+    finder_algorithm: str = "peak_local_max",
+    show_progress: bool = True,
+    create_visualizations: bool = False,
+    show_steps: bool = False,
+    peak_local_max_min_pixel_distance: int = -1,
+    peak_local_max_min_relative_intensity: float = -1,
+    peak_local_max_normalization: bool = False,
+    mask_file: str | None = None,
+    mask_rel_erosion_radius: float | None = None,
+    thresholding_noise_cutoff_quantile: float = 0.8,
+    thresholding_min_peak_dist_pixels: float = 8.0,
+    thresholding_blur_kernel_sigma: int = 5,
+    thresholding_open_kernel_size_pixels: int = 3,
+    wavelength_min: float | None = None,
+    wavelength_max: float | None = None,
+    region_growth_distance_threshold: float = 1.5,
+    region_growth_minimum_sigma: float | None = None,
+    region_growth_minimum_intensity: float = 4500.0,
+    region_growth_maximum_pixel_radius: float = 17.0,
+    peak_center_box_size: int = 15,
+    peak_smoothing_window_size: int = 15,
+    peak_minimum_pixels: int = 30,
+    peak_minimum_signal_to_noise: float = 1.0,
+    peak_pixel_outlier_threshold: float = 2.0,
+    sparse_rbf_alpha: float = 0.1,
+    sparse_rbf_gamma: float = 1.0,
+    sparse_rbf_min_sigma: float = 1.5,
+    sparse_rbf_max_sigma: float = 10.0,
+    sparse_rbf_max_peaks: int = 500,
+    sparse_rbf_chunk_size: int = 512,
+    sparse_rbf_loss: Annotated[
+        str, typer.Option(help="Likelihood for peak finder.")
+    ] = "gaussian",
+    sparse_rbf_auto_tune_alpha: Annotated[
+        bool, typer.Option(help="Auto-tune SNR threshold.")
+    ] = False,
+    sparse_rbf_candidate_alphas: Annotated[
+        str, typer.Option(help="Candidate SNR thresholds alpha for auto-tuning")
+    ] = "3.0,5.0,10.0,15.0,20.0,25.0,30.0",
+    max_workers: int = 16,
+):
+    # Pass everything straight into the core logic function
+    run_finder(
+        filename=filename,
+        instrument=instrument,
+        output_filename=output_filename,
+        finder_algorithm=finder_algorithm,
+        show_progress=show_progress,
+        create_visualizations=create_visualizations,
+        show_steps=show_steps,
+        peak_local_max_min_pixel_distance=peak_local_max_min_pixel_distance,
+        peak_local_max_min_relative_intensity=peak_local_max_min_relative_intensity,
+        peak_local_max_normalization=peak_local_max_normalization,
+        mask_file=mask_file,
+        mask_rel_erosion_radius=mask_rel_erosion_radius,
+        thresholding_noise_cutoff_quantile=thresholding_noise_cutoff_quantile,
+        thresholding_min_peak_dist_pixels=thresholding_min_peak_dist_pixels,
+        thresholding_blur_kernel_sigma=thresholding_blur_kernel_sigma,
+        thresholding_open_kernel_size_pixels=thresholding_open_kernel_size_pixels,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max,
+        region_growth_distance_threshold=region_growth_distance_threshold,
+        region_growth_minimum_sigma=region_growth_minimum_sigma,
+        region_growth_minimum_intensity=region_growth_minimum_intensity,
+        region_growth_maximum_pixel_radius=region_growth_maximum_pixel_radius,
+        peak_center_box_size=peak_center_box_size,
+        peak_smoothing_window_size=peak_smoothing_window_size,
+        peak_minimum_pixels=peak_minimum_pixels,
+        peak_minimum_signal_to_noise=peak_minimum_signal_to_noise,
+        peak_pixel_outlier_threshold=peak_pixel_outlier_threshold,
+        sparse_rbf_alpha=sparse_rbf_alpha,
+        sparse_rbf_gamma=sparse_rbf_gamma,
+        sparse_rbf_min_sigma=sparse_rbf_min_sigma,
+        sparse_rbf_max_sigma=sparse_rbf_max_sigma,
+        sparse_rbf_max_peaks=sparse_rbf_max_peaks,
+        sparse_rbf_chunk_size=sparse_rbf_chunk_size,
+        sparse_rbf_loss=sparse_rbf_loss,
+        sparse_rbf_auto_tune_alpha=sparse_rbf_auto_tune_alpha,
+        sparse_rbf_candidate_alphas=sparse_rbf_candidate_alphas,
+        max_workers=max_workers,
+    )
+
+    input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
+    (
+        input_data["sample/alpha"],
+        input_data["sample/beta"],
+        input_data["sample/gamma"],
+    ) = alpha, beta, gamma
+    input_data["sample/space_group"] = sg_to_use
+    input_data["instrument/wavelength"] = [float(wavelength_min), float(wavelength_max)]
+
+    gonio_axes_list = (
+        [x.strip() for x in refine_goniometer_axes.split(",")]
+        if refine_goniometer_axes
+        else None
+    )
+
+    run_index(
+        input_data=input_data,
+        output_peaks_filename=output_peaks_filename,
+        strategy_name=strategy_name,
+        population_size=population_size,
+        gens=gens,
+        sigma_init=sigma_init,
+        n_runs=n_runs,
+        seed=seed,
+        refine_lattice=refine_lattice,
+        lattice_bound_frac=lattice_bound_frac,
+        bootstrap_filename=bootstrap_filename,
+        refine_goniometer=refine_goniometer,
+        refine_goniometer_axes=gonio_axes_list,
+        goniometer_bound_deg=goniometer_bound_deg,
+        refine_sample=refine_sample,
+        sample_bound_meters=sample_bound_meters,
+        refine_beam=refine_beam,
+        beam_bound_deg=beam_bound_deg,
+        nexus_filename=original_nexus_filename,
+        instrument_name=instrument_name,
+        batch_size=batch_size,
+        wavelength_min=input_data["instrument/wavelength"][0],
+        wavelength_max=input_data["instrument/wavelength"][1],
+    )
 
 @app.command()
 def indexer(
@@ -465,149 +601,6 @@ def indexer(
                 f[f"{grp_name}/vhat"] = opt.calibrated_vhats[b_idx]
     print("Done.")
 
-@app.command()
-def finder(
-    filename: str,
-    instrument: str,
-    output_filename: str = "output.h5",
-    finder_algorithm: str = "peak_local_max",
-    show_progress: bool = True,
-    create_visualizations: bool = False,
-    show_steps: bool = False,
-    show_candidates: bool = False,
-    peak_local_max_min_pixel_distance: int = -1,
-    peak_local_max_min_relative_intensity: float = -1,
-    peak_local_max_normalization: bool = False,
-    mask_file: str | None = None,
-    mask_rel_erosion_radius: float = None,
-    thresholding_noise_cutoff_quantile: float = 0.8,
-    thresholding_min_peak_dist_pixels: float = 8.0,
-    thresholding_blur_kernel_sigma: int = 5,
-    thresholding_open_kernel_size_pixels: int = 3,
-    wavelength_min: float | None = None,
-    wavelength_max: float | None = None,
-    region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_sigma: float | None = None,
-    region_growth_minimum_intensity: float = 4500.0,
-    region_growth_maximum_pixel_radius: float = 17.0,
-    peak_center_box_size: int = 15,
-    peak_smoothing_window_size: int = 15,
-    peak_minimum_pixels: int = 30,
-    peak_minimum_signal_to_noise: float = 1.0,
-    peak_pixel_outlier_threshold: float = 2.0,
-    sparse_rbf_alpha: float = 0.1,  
-    sparse_rbf_gamma: float = 1.0,  
-    sparse_rbf_min_sigma: float = 1.5,  
-    sparse_rbf_max_sigma: float = 10.0,  
-    sparse_rbf_max_peaks: int = 500,  
-    sparse_rbf_chunk_size: int = 512,  
-    sparse_rbf_tile_rows: int = 2,  
-    sparse_rbf_tile_cols: int = 2,  
-    sparse_rbf_loss: str = typer.Option("gaussian", help="Likelihood for peak finder."),
-    sparse_rbf_auto_tune_alpha: bool = typer.Option(False, help="Auto-tune SNR threshold."),
-    sparse_rbf_candidate_alphas: str = typer.Option("3.0,5.0,10.0,15.0,20.0,25.0,30", help="Candidate SNR thresholds alpha for auto-tuning"),
-    max_workers: int = 16,
-):
-    print(f"Creating peaks from {filename} for instrument {instrument}")
-
-    wavelength_kwargs = {}
-    if wavelength_min:
-        wavelength_kwargs["wavelength_min"] = wavelength_min
-    if wavelength_max:
-        wavelength_kwargs["wavelength_max"] = wavelength_max
-
-    peaks = Peaks(filename, instrument, **wavelength_kwargs)
-
-    peak_kwargs = {"algorithm": finder_algorithm}
-    if finder_algorithm == "peak_local_max":
-        if peak_local_max_min_pixel_distance > 0:
-            peak_kwargs["min_pix"] = peak_local_max_min_pixel_distance
-        if peak_local_max_min_relative_intensity > 0:
-            peak_kwargs["min_rel_intensity"] = peak_local_max_min_relative_intensity
-        peak_kwargs["normalize"] = peak_local_max_normalization
-    elif finder_algorithm == "thresholding":
-        peak_kwargs.update(
-            {
-                "noise_cutoff_quantile": thresholding_noise_cutoff_quantile,
-                "min_peak_dist_pixels": thresholding_min_peak_dist_pixels,
-                "blur_kernel_sigma": thresholding_blur_kernel_sigma,
-                "open_kernel_size_pixels": thresholding_open_kernel_size_pixels,
-                "show_steps": show_steps,
-                "show_scale": "log",
-            }
-        )
-    elif finder_algorithm == "sparse_rbf":
-        alpha_list = [float(k.strip()) for k in sparse_rbf_candidate_alphas.split(",")]
-
-        peak_kwargs.update(
-            {
-                "alpha": sparse_rbf_alpha,
-                "gamma": sparse_rbf_gamma,
-                "min_sigma": sparse_rbf_min_sigma,
-                "max_sigma": sparse_rbf_max_sigma,
-                "max_peaks": sparse_rbf_max_peaks,
-                "chunk_size": sparse_rbf_chunk_size,
-                "show_steps": show_steps,
-                "show_scale": "linear",
-                "tiles": (sparse_rbf_tile_rows, sparse_rbf_tile_cols),
-                "loss": sparse_rbf_loss,
-                "auto_tune_alpha": sparse_rbf_auto_tune_alpha,
-                "candidate_alphas": alpha_list,
-            }
-        )
-    else:
-        raise ValueError("Invalid finder algorithm")
-
-    peak_kwargs.update(
-        {
-            "mask_file": mask_file,
-            "mask_rel_erosion_radius": mask_rel_erosion_radius,
-            "show_candidates": show_candidates
-        }
-    )
-
-    integration_params = {
-        "region_growth_distance_threshold": region_growth_distance_threshold,
-        "region_growth_minimum_sigma": region_growth_minimum_sigma,
-        "region_growth_minimum_intensity": region_growth_minimum_intensity,
-        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
-        "peak_center_box_size": peak_center_box_size,
-        "peak_smoothing_window_size": peak_smoothing_window_size,
-        "peak_minimum_pixels": peak_minimum_pixels,
-        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
-    }
-
-    detector_peaks = peaks.get_detector_peaks(
-        peak_kwargs,
-        integration_params,
-        visualize=create_visualizations,
-        show_progress=show_progress,
-        file_prefix=filename,
-        max_workers=max_workers,
-    )
-
-    peaks.write_hdf5(
-        output_filename=output_filename,
-        detector_peaks=detector_peaks,
-        instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
-    )
-
-    try:
-        copy_keys = [
-            "sample/a", "sample/b", "sample/c", 
-            "sample/alpha", "sample/beta", "sample/gamma", 
-            "sample/space_group"
-        ]
-        with h5py.File(output_filename, "a") as f_out:
-            with h5py.File(filename, "r") as f_in:
-                for key in copy_keys:
-                    if key in f_in:
-                        if key in f_out:
-                            del f_out[key]
-                        f_in.copy(f_in[key], f_out, key)
-    except Exception as e:
-        print(f"Warning: Could not forward embedded unit cell metadata: {e}")
 
 
 @app.command()
@@ -639,19 +632,8 @@ def metrics(
     CLI command to compute and display indexing quality metrics.
     Compares HKL accuracy internally (file1), or spatial matching between file1 (predicted) and file2 (observed).
     """
-    if hasattr(file2, "default"): file2 = file2.default
-    if hasattr(instrument, "default"): instrument = instrument.default
-    if hasattr(d_min, "default"): d_min = d_min.default
-    if hasattr(per_run, "default"): per_run = per_run.default
-    if hasattr(ki_vec, "default"): ki_vec = ki_vec.default
-
-    ki_vec_arr = None
-    if ki_vec is not None:
-        ki_vec_arr = np.array([float(x.strip()) for x in ki_vec.split(",")])
-
-    # No need to call apply_detector_calibration here because metrics.py
     # dynamically shifts coordinates using the detector_calibration group.
-    result = compute_metrics(
+    result = run_metrics(
         file1=file1,
         file2=file2,
         instrument=instrument,
@@ -659,26 +641,6 @@ def metrics(
         per_run=per_run,
         ki_vec_override=ki_vec_arr
     )
-
-    if "error_message" in result:
-        print(result["error_message"])
-        if result["error_message"].startswith("Exception"):
-            print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
-        return
-
-    if "filter_message" in result:
-        print(f"METRICS: {result['filter_message']}")
-
-    print(
-        f"METRICS: {result['median_d_err']:.5f} {result['mean_d_err']:.5f} {result['max_d_err']:.5f} "
-        f"{result['median_ang_err']:.5f} {result['mean_ang_err']:.5f} {result['max_ang_err']:.5f}"
-    )
-
-    if per_run and "per_run_errors" in result:
-        print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
-        for r, err, count in result["per_run_errors"]:
-            status = "BAD" if err > 1.0 else "OK"
-            print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
 
 
 @app.command()
@@ -695,47 +657,7 @@ def peak_predictor(
     ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     max_workers: int = 16,
 ):
-    apply_detector_calibration(indexed_hdf5_filename, instrument)
-
-    with h5py.File(indexed_hdf5_filename, "r") as f_idx:
-        a = float(f_idx["sample/a"][()])
-        b = float(f_idx["sample/b"][()])
-        c = float(f_idx["sample/c"][()])
-        alpha = float(f_idx["sample/alpha"][()])
-        beta = float(f_idx["sample/beta"][()])
-        gamma = float(f_idx["sample/gamma"][()])
-
-        if space_group is None:
-            space_group = f_idx["sample/space_group"][()].decode("utf-8")
-
-        wavelength = f_idx["instrument/wavelength"][()]
-        if wavel_min:
-            wavelength[0] = wavel_min
-        if wavel_max:
-            wavelength[1] = wavel_max
-
-        U = f_idx["sample/U"][()]
-        B = f_idx["sample/B"][()]
-
-        offsets = (
-            f_idx["optimization/goniometer_offsets"][()]
-            if "optimization/goniometer_offsets" in f_idx
-            else None
-        )
-
-        if "sample/offset" in f_idx:
-            sample_offset = f_idx["sample/offset"][()]
-        else:
-            sample_offset = np.zeros(3)
-
-        if ki_vec is not None:
-            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
-        elif "beam/ki_vec" in f_idx:
-            ki_vec_val = f_idx["beam/ki_vec"][()]
-        else:
-            ki_vec_val = np.array([0.0, 0.0, 1.0])
-
-    peaks = Peaks(
+    run_peak_predictor(
         filename,
         instrument,
         wavelength_min=wavelength[0],
@@ -746,88 +668,10 @@ def peak_predictor(
         f"Predicting peaks for {len(peaks.image.ims)} images using solution from {indexed_hdf5_filename}"
     )
 
-    all_R = peaks.goniometer.rotation
-
-    if offsets is not None:
-        print(f"Applying refined goniometer offsets from indexer: {offsets}")
-        if peaks.goniometer.angles_raw is not None and peaks.goniometer.axes_raw is not None:
-            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
-            all_R = np.stack([
-                calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
-                for ang in angles_refined
-            ])
-        else:
-            print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
-    else:
-        print("Using nominal R stack directly from raw images (no offsets applied).")
-
-    UB = U @ B
-
-    if all_R.ndim == 3:
-        RUB = np.matmul(all_R, UB)
-    else:
-        RUB = all_R @ UB
-
-    results_map = peaks.predict_peaks(
-        a, b, c, alpha, beta, gamma, d_min,
-        RUB=RUB, space_group=space_group, sample_offset=sample_offset,
-        ki_vec=ki_vec_val, max_workers=max_workers, R_all=all_R,
-    )
-
-    print(f"Saving predictions to {integration_peaks_filename}")
-    with h5py.File(integration_peaks_filename, "w") as f:
-        f.attrs["instrument"] = instrument
-        f["sample/a"] = a
-        f["sample/b"] = b
-        f["sample/c"] = c
-        f["sample/alpha"] = alpha
-        f["sample/beta"] = beta
-        sorted_keys = sorted(peaks.image.ims.keys())
-        bank_ids = np.array(
-            [peaks.image.bank_mapping.get(k, k) for k in sorted_keys], dtype=np.int32
-        )
-        f.create_dataset("bank_ids", data=bank_ids)
-        f["sample/gamma"] = gamma
-        f["sample/space_group"] = space_group
-        f["sample/U"] = U
-        f["sample/B"] = B
-        f["instrument/wavelength"] = wavelength
-        f["goniometer/R"] = all_R 
-
-        try:
-            goniometer_angles_to_save = angles_refined
-        except NameError:
-            goniometer_angles_to_save = peaks.goniometer.angles_raw
-
-        f["goniometer/angles"] = goniometer_angles_to_save
-        f["goniometer/axes"] = peaks.goniometer.axes_raw
-        if peaks.goniometer.names_raw:
-            dt = h5py.string_dtype(encoding="utf-8")
-            f.create_dataset(
-                "goniometer/names", data=peaks.goniometer.names_raw, dtype=dt
-            )
-
-        f["sample/offset"] = sample_offset
-        f["beam/ki_vec"] = ki_vec_val
-
-        for img_key, (i, j, h, k, l, wl) in results_map.items():  # noqa: E741
-            grp = f.create_group(f"banks/{img_key}")
-            grp.create_dataset("i", data=i)
-            grp.create_dataset("j", data=j)
-            grp.create_dataset("h", data=h)
-            grp.create_dataset("k", data=k)
-            grp.create_dataset("l", data=l)
-            grp.create_dataset("wavelength", data=wl)
-
-        # Forward the calibration group to the prediction file
-        with h5py.File(indexed_hdf5_filename, "r") as f_in:
-            if "detector_calibration" in f_in:
-                f_in.copy("detector_calibration", f)
-
 
 @app.command()
 def integrator(
-    filename: str, 
+    filename: str,
     instrument: str,
     integration_peaks_filename: str,
     output_filename: str,
@@ -835,7 +679,7 @@ def integrator(
     integration_mask_file: str | None = None,
     integration_mask_rel_erosion_radius: float | None = None,
     region_growth_distance_threshold: float = 1.5,
-    region_growth_minimum_intensity: float = 50.0,  
+    region_growth_minimum_intensity: float = 50.0,
     region_growth_minimum_sigma: float | None = None,
     region_growth_maximum_pixel_radius: float = 17.0,
     peak_center_box_size: int = 15,
@@ -846,139 +690,31 @@ def integrator(
     ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     create_visualizations: bool = False,
     show_progress: bool = True,
-    found_peaks_file: str = None,
+    found_peaks_file: str | None = None,
     max_workers: int = 16,
 ):
-    apply_detector_calibration(integration_peaks_filename, instrument)
-
-    peak_dict = {}
-    angles_stack = None
-    all_R = None
-    with h5py.File(integration_peaks_filename, "r") as f:
-        if "sample/U" in f:
-            U = f["sample/U"][()]
-        if "sample/B" in f:
-            B = f["sample/B"][()]
-
-        if "goniometer/R" in f:
-            all_R = f["goniometer/R"][()]
-
-        if "goniometer/angles" in f:
-            angles_stack = f["goniometer/angles"][()]
-
-        if "sample/offset" in f:
-            sample_offset = f["sample/offset"][()]
-        else:
-            sample_offset = np.zeros(3)
-
-        if ki_vec is not None:
-            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
-        elif "beam/ki_vec" in f:
-            ki_vec_val = f["beam/ki_vec"][()]
-        else:
-            ki_vec_val = np.array([0.0, 0.0, 1.0])
-
-        for key in f["banks"].keys():
-            img_idx = int(key)
-            grp = f[f"banks/{key}"]
-            peak_dict[img_idx] = [
-                grp["i"][()],
-                grp["j"][()],
-                grp["h"][()],
-                grp["k"][()],
-                grp["l"][()],
-                grp["wavelength"][()],
-            ]
-
-    peaks = Peaks(filename, instrument)
-
-    integration_params = {
-        "region_growth_distance_threshold": region_growth_distance_threshold,
-        "region_growth_minimum_intensity": region_growth_minimum_intensity,
-        "region_growth_minimum_sigma": region_growth_minimum_sigma,
-        "region_growth_maximum_pixel_radius": region_growth_maximum_pixel_radius,
-        "peak_center_box_size": peak_center_box_size,
-        "peak_smoothing_window_size": peak_smoothing_window_size,
-        "peak_minimum_pixels": peak_minimum_pixels,
-        "peak_minimum_signal_to_noise": peak_minimum_signal_to_noise,
-        "peak_pixel_outlier_threshold": peak_pixel_outlier_threshold,
-        "integration_mask_file": integration_mask_file,
-        "integration_mask_rel_erosion_radius": integration_mask_rel_erosion_radius,
-    }
-
-    if all_R is None:
-        print("Warning: Refined R stack not found in prediction file. Using nominal.")
-        all_R = peaks.goniometer.rotation
-
-    if angles_stack is None:
-        angles_stack = peaks.goniometer.angles_raw
-
-    UB = U @ B
-    if all_R.ndim == 3:
-        RUB = np.matmul(all_R, UB)
-    else:
-        RUB = all_R @ UB
-
-    result = peaks.integrate(
-        peak_dict,
-        integration_params,
-        RUB=RUB,
-        R_stack=all_R,
-        angles_stack=angles_stack,
-        sample_offset=sample_offset,
-        ki_vec=ki_vec_val,
-        create_visualizations=create_visualizations,
-        show_progress=show_progress,
-        integration_method=integration_method,
-        file_prefix=filename,
-        found_peaks_file=found_peaks_file,
-        max_workers=max_workers,
+    run_integrator(
+        filename,
+        instrument,
+        integration_peaks_filename,
+        output_filename,
+        integration_method,
+        integration_mask_file,
+        integration_mask_rel_erosion_radius,
+        region_growth_distance_threshold,
+        region_growth_minimum_intensity,
+        region_growth_minimum_sigma,
+        region_growth_maximum_pixel_radius,
+        peak_center_box_size,
+        peak_smoothing_window_size,
+        peak_minimum_pixels,
+        peak_minimum_signal_to_noise,
+        peak_pixel_outlier_threshold,
+        create_visualizations,
+        show_progress,
+        found_peaks_file,
+        max_workers,
     )
-
-    print(f"Saving integrated peaks to {output_filename}")
-
-    copy_keys = [
-        "sample/a",
-        "sample/b",
-        "sample/c",
-        "sample/alpha",
-        "sample/beta",
-        "sample/gamma",
-        "sample/space_group",
-        "sample/U",
-        "sample/B",
-        "sample/offset",
-        "beam/ki_vec",
-        "instrument/wavelength",
-    ]
-
-    with h5py.File(output_filename, "w") as f:
-        f["peaks/h"] = result.h
-        f["peaks/k"] = result.k
-        f["peaks/l"] = result.l
-        f["peaks/lambda"] = result.wavelength
-        f["peaks/intensity"] = result.intensity
-        f["peaks/sigma"] = result.sigma
-        f["peaks/two_theta"] = result.tt
-        f["peaks/azimuthal"] = result.az
-        f["peaks/bank"] = result.bank
-        f["peaks/run_index"] = result.run_id 
-        f["peaks/xyz"] = result.xyz
-
-        if result.R and any(r is not None for r in result.R):
-            f["goniometer/R"] = np.array(result.R)
-        if result.angles and any(a is not None for a in result.angles):
-            f["goniometer/angles"] = np.array(result.angles)
-
-        with h5py.File(integration_peaks_filename, "r") as f_in:
-            for key in copy_keys:
-                if key in f_in:
-                    f_in.copy(f_in[key], f, key)
-
-            for k in ["goniometer/axes", "goniometer/names", "detector_calibration"]:
-                if k in f_in:
-                    f_in.copy(f_in[k], f, k)
-
 
 @app.command()
 def mtz_exporter(
@@ -986,17 +722,7 @@ def mtz_exporter(
     output_mtz_filename: str,
     space_group: str = typer.Option(None, help="Optional. Loaded from indexer h5 if missing."),
 ):
-    sg = space_group
-    if sg is None:
-        with h5py.File(indexed_h5_filename, 'r') as f:
-            if "sample/space_group" in f:
-                raw_sg = f["sample/space_group"][()]
-                sg = raw_sg.decode('utf-8') if isinstance(raw_sg, bytes) else str(raw_sg)
-            else:
-                raise ValueError("space_group must be provided as it is missing from the HDF5 file.")
-                
-    algorithm = MTZExporter(indexed_h5_filename, sg)
-    algorithm.write_mtz(output_mtz_filename)
+    run_mtz_exporter(indexed_h5_filename, output_mtz_filename, space_group)
 
 
 @app.command()
@@ -1004,109 +730,31 @@ def reduce(
     nexus_filename: str,
     output_filename: str,
     instrument: str,
-    wavelength_min: float = typer.Option(None, help="Override min wavelength"),
-    wavelength_max: float = typer.Option(None, help="Override max wavelength"),
+    wavelength_min: Annotated[
+        float | None, typer.Option(help="Override min wavelength")
+    ] = None,
+    wavelength_max: Annotated[
+        float | None, typer.Option(help="Override max wavelength")
+    ] = None,
 ):
-    print(f"Reducing {nexus_filename} -> {output_filename}")
-
-    peaks_handler = Peaks(
-        nexus_filename,
-        instrument,
-        wavelength_min=wavelength_min,
-        wavelength_max=wavelength_max,
+    run_reduce(
+        nexus_filename, output_filename, instrument, wavelength_min, wavelength_max
     )
-
-    if not peaks_handler.image.ims:
-        print("Warning: No images found in file.")
-        return
-
-    sorted_banks = sorted(peaks_handler.image.ims.keys())
-
-    image_stack = np.stack([peaks_handler.image.ims[b] for b in sorted_banks])
-
-    bank_ids = np.array(sorted_banks, dtype=np.int32)
-    n_images = len(sorted_banks)
-
-    if peaks_handler.goniometer.angles_raw is not None:
-        angles_repeated = np.tile(peaks_handler.goniometer.angles_raw, (n_images, 1))
-    else:
-        angles_repeated = np.zeros((n_images, 3)) 
-
-    if peaks_handler.goniometer.axes_raw is not None:
-        axes = np.array(peaks_handler.goniometer.axes_raw)
-    else:
-        axes = np.array([0.0, 1.0, 0.0])  
-
-    with h5py.File(output_filename, "w") as f:
-        f.create_dataset("images", data=image_stack, compression="lzf")
-        f.create_dataset("bank_ids", data=bank_ids)
-        f.create_dataset("goniometer/angles", data=angles_repeated)
-        f.create_dataset("goniometer/axes", data=axes)
-
-        if peaks_handler.goniometer.names_raw:
-            dt = h5py.string_dtype(encoding="utf-8")
-            f.create_dataset(
-                "goniometer/names",
-                data=peaks_handler.goniometer.names_raw,
-                dtype=dt,
-            )
-
-        wl = [peaks_handler.wavelength.min, peaks_handler.wavelength.max]
-        f.create_dataset("instrument/wavelength", data=wl)
-        f.attrs["instrument"] = instrument
-
-    print(f"Saved {n_images} banks to {output_filename}")
 
 
 @app.command()
 def merge_images(
-    input_pattern: str = typer.Argument(
-        ..., help="Glob pattern for reduced .h5 files (e.g. 'reduced/*.h5')"
-    ),
-    output_filename: str = typer.Argument(..., help="Output master .h5 file"),
-    a: float = typer.Argument(..., help="Unit cell parameter a"), 
-    b: float = typer.Argument(..., help="Unit cell parameter b"), 
-    c: float = typer.Argument(..., help="Unit cell parameter c"),
-    alpha: float = typer.Argument(..., help="Unit cell parameter alpha"), 
-    beta: float = typer.Argument(..., help="Unit cell parameter beta"), 
-    gamma: float = typer.Argument(..., help="Unit cell parameter gamma"), 
-    space_group: str = typer.Argument(..., help="Space group (e.g. 'P 1')"),
+    input_pattern: Annotated[
+        str,
+        typer.Argument(help="Glob pattern for reduced .h5 files (e.g. 'reduced/*.h5')"),
+    ],
+    output_filename: Annotated[str, typer.Argument(help="Output master .h5 file")],
 ):
-    
     try:
-        get_space_group_object(space_group)
+        run_merge_images(input_pattern, output_filename)
     except ValueError as e:
-        print(f"ERROR: Invalid space group '{space_group}': {e}")
+        print(str(e))
         raise typer.Exit(code=1)
-
-    if " " in input_pattern:
-        h5_files = []
-        for p in input_pattern.split():
-            h5_files.extend(glob.glob(p))
-    else:
-        h5_files = glob.glob(input_pattern)
-
-    h5_files = sorted(list(set(h5_files)))
-
-    if not h5_files:
-        print(f"No files found matching: {input_pattern}")
-        raise typer.Exit(code=1)
-
-    print(f"Found {len(h5_files)} files. Merging...")
-    merger = ImageStackMerger(h5_files)
-    merger.merge(output_filename)
-    
-    with h5py.File(output_filename, "a") as f:
-        f["sample/a"] = a
-        f["sample/b"] = b
-        f["sample/c"] = c
-        f["sample/alpha"] = alpha
-        f["sample/beta"] = beta
-        f["sample/gamma"] = gamma
-        f["sample/space_group"] = space_group.encode('utf-8')
-
-    print(f"Successfully created {output_filename} with cell constraints embedded.")
-
 
 @app.command()
 def zone_axis_search(
@@ -1114,421 +762,88 @@ def zone_axis_search(
     peaks_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
-    a: float = typer.Option(None, help="Override unit cell parameter a"), 
-    b: float = typer.Option(None, help="Override unit cell parameter b"), 
-    c: float = typer.Option(None, help="Override unit cell parameter c"),
-    alpha: float = typer.Option(None, help="Override unit cell parameter alpha"), 
-    beta: float = typer.Option(None, help="Override unit cell parameter beta"), 
-    gamma: float = typer.Option(None, help="Override unit cell parameter gamma"), 
-    space_group: str = typer.Option(None, help="Override Space group (e.g. 'P 1')"),
-    ki_vec: str = typer.Option("0,0,1", "--ki-vec", help="Incident beam vector"),
     d_min: float = 1.0,
-    sigma: float = typer.Option(2.0, help="(Legacy) Replaced by vector_tolerance."),
-    vector_tolerance: float = typer.Option(0.15, help="Angular capture radius in degrees for the objective function."),
-    border_frac: float = typer.Option(0.1, help="Fraction of image to crop at the border."),
-    min_intensity: float = typer.Option(50.0, help="Minimum peak amplitude."),
-    hough_grid_resolution: int = typer.Option(1024, help="Lambert grid resolution."),
-    n_hough: int = typer.Option(15, help="Maximum number of empirical zone axes."),
-    davenport_angle_tol: float = typer.Option(0.5, help="Graph search angle tolerance in degrees."),
-    top_k_rays: int = typer.Option(15, help="Max rays per image to feed the Hough Transform."),
-    max_uvw: int = typer.Option(25, help="Maximum uvw index for zone axis search"),
-    L_max: float = typer.Option(250.0, help="Maximum real-space vector length for theoretical zone axes (Angstroms)."),
-    top_k: int = typer.Option(1000, help="Maximum number of reciprocal grid points to consider."),
-    num_runs: int = typer.Option(0, help="Number of goniometer runs to use. Set to 0 to use all."),
-    output_hough: str = typer.Option(None, help="Diagnostic hough transform image filename."),
-    batch_size: int = typer.Option(1024, help="Batch size for validation loop"),
+    sigma: Annotated[
+        float, typer.Option(help="(Legacy) Replaced by vector_tolerance.")
+    ] = 2.0,
+    vector_tolerance: Annotated[
+        float,
+        typer.Option(
+            help="Angular capture radius in degrees for the objective function."
+        ),
+    ] = 0.15,
+    border_frac: Annotated[
+        float, typer.Option(help="Fraction of image to crop at the border.")
+    ] = 0.1,
+    min_intensity: Annotated[
+        float, typer.Option(help="Minimum peak amplitude.")
+    ] = 50.0,
+    hough_grid_resolution: Annotated[
+        int, typer.Option(help="Lambert grid resolution.")
+    ] = 1024,
+    n_hough: Annotated[
+        int, typer.Option(help="Maximum number of empirical zone axes.")
+    ] = 15,
+    davenport_angle_tol: Annotated[
+        float, typer.Option(help="Graph search angle tolerance in degrees.")
+    ] = 0.5,
+    top_k_rays: Annotated[
+        int, typer.Option(help="Max rays per image to feed the Hough Transform.")
+    ] = 15,
+    max_uvw: Annotated[
+        int, typer.Option(help="Maximum uvw index for zone axis search")
+    ] = 25,
+    L_max: Annotated[
+        float,
+        typer.Option(
+            help="Maximum real-space vector length for theoretical zone axes (Angstroms)."
+        ),
+    ] = 250.0,
+    top_k: Annotated[
+        int, typer.Option(help="Maximum number of reciprocal grid points to consider.")
+    ] = 1000,
+    num_runs: Annotated[
+        int, typer.Option(help="Number of goniometer runs to use. Set to 0 to use all.")
+    ] = 0,
+    output_hough: Annotated[
+        str | None, typer.Option(help="Diagnostic hough transform image filename.")
+    ] = None,
+    batch_size: Annotated[
+        int, typer.Option(help="Batch size for validation loop")
+    ] = 1024,
 ):
     """
     Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
     Outputs an HDF5 file that can be passed directly to 'indexer --bootstrap'.
     """
-    import jax.numpy as jnp
-    from subhkl.config import reduction_settings
-    from subhkl.optimization import VectorizedObjective
-    from subhkl.search.prior import HoughPrior
-
-    print(f"Loading data from {merged_h5_filename}...")
-    with h5py.File(merged_h5_filename, 'r') as f_in:
-        file_bank_ids = list(int(bid) for bid in f_in["bank_ids"])
-        ax = f_in["goniometer/axes"][()]
-        goniometer_angles = np.array(f_in["goniometer/angles"][()])
-
-        R_stack = np.stack([calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles])
-        file_offsets = f_in["file_offsets"][()]
-        
-        file_a = f_in["sample/a"][()] if "sample/a" in f_in else None
-        a_val = a if a is not None else file_a
-        
-        file_b = f_in["sample/b"][()] if "sample/b" in f_in else None
-        b_val = b if b is not None else file_b
-        
-        file_c = f_in["sample/c"][()] if "sample/c" in f_in else None
-        c_val = c if c is not None else file_c
-        
-        file_alpha = f_in["sample/alpha"][()] if "sample/alpha" in f_in else None
-        alpha_val = alpha if alpha is not None else file_alpha
-        
-        file_beta = f_in["sample/beta"][()] if "sample/beta" in f_in else None
-        beta_val = beta if beta is not None else file_beta
-        
-        file_gamma = f_in["sample/gamma"][()] if "sample/gamma" in f_in else None
-        gamma_val = gamma if gamma is not None else file_gamma
-        
-        file_sg = f_in["sample/space_group"][()] if "sample/space_group" in f_in else None
-        if file_sg is not None and isinstance(file_sg, bytes): file_sg = file_sg.decode('utf-8')
-        sg_val = space_group if space_group is not None else file_sg
-        
-        if None in (a_val, b_val, c_val, alpha_val, beta_val, gamma_val, sg_val):
-            raise ValueError("Unit cell parameters and Space Group must be present in the merged.h5 file or provided via CLI.")
-
-    if num_runs > 0:
-        if len(file_offsets) > num_runs:
-            end_idx = file_offsets[num_runs]
-        else:
-            end_idx = len(file_bank_ids)
-            num_runs = len(file_offsets)
-
-        print(f"Limiting search to the first {num_runs} run(s) (Images 0 to {end_idx-1})...")
-        file_bank_ids = file_bank_ids[:end_idx]
-        R_stack = R_stack[:end_idx]
-    else:
-        end_idx = len(file_bank_ids)
-        print(f"Using all {len(file_offsets)} available runs for the search...")
-
-    settings = reduction_settings[instrument]
-    wavelength_min, wavelength_max = settings.get("Wavelength")
-
-    ub_helper = FindUB()
-    ub_helper.a, ub_helper.b, ub_helper.c = a_val, b_val, c_val
-    ub_helper.alpha, ub_helper.beta, ub_helper.gamma = alpha_val, beta_val, gamma_val
-    B_mat = ub_helper.reciprocal_lattice_B()
-
-    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
-        ki_vec_override = None if ki_vec == "0,0,1" else np.array([float(x.strip()) for x in ki_vec.split(",")])
-        if ki_vec_override is not None:
-            ki_vec_val = ki_vec_override
-        elif "beam/ki_vec" in f_peaks:
-            ki_vec_val = f_peaks["beam/ki_vec"][()]
-        else:
-            ki_vec_val = np.array([0.0, 0.0, 1.0])
-
-    print("\n--- HOUGH PRIOR GENERATION ---")
-    prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=ki_vec_val)
-
-    print(f"Loading empirical rays from {peaks_h5_filename}...")
-    
-    with h5py.File(peaks_h5_filename, 'r') as f_peaks:
-        peaks_intensity = f_peaks["peaks/intensity"][()]
-
-        if "peaks/image_index" in f_peaks:
-            group_indices = f_peaks["peaks/image_index"][()]
-        else:
-            group_indices = f_peaks["peaks/run_index"][()]
-
-        R_peaks_override = f_peaks.get("goniometer/R")
-        if R_peaks_override is not None:
-            R_peaks_override = R_peaks_override[()]
-
-        if "peaks/xyz" in f_peaks:
-            peaks_xyz = f_peaks["peaks/xyz"][()]
-        elif "peaks/pixel_r" in f_peaks and "peaks/pixel_c" in f_peaks:
-            pixel_r = f_peaks["peaks/pixel_r"][()]
-            pixel_c = f_peaks["peaks/pixel_c"][()]
-            
-            bank_array = None
-            if "bank" in f_peaks: bank_array = f_peaks["bank"][()]
-            elif "peaks/bank" in f_peaks: bank_array = f_peaks["peaks/bank"][()]
-            elif "bank_ids" in f_peaks and "peaks/image_index" in f_peaks:
-                b_ids = f_peaks["bank_ids"][()]
-                img_idx = f_peaks["peaks/image_index"][()]
-                bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
-            else:
-                bank_array = group_indices
-                
-            peaks_xyz = np.zeros((len(pixel_r), 3))
-            
-            calibration_dict = {}
-            if "detector_calibration" in f_peaks:
-                calib_grp = f_peaks["detector_calibration"]
-                for b_key in calib_grp.keys():
-                    calibration_dict[b_key] = {
-                        "center": calib_grp[b_key]["center"][()],
-                        "uhat": calib_grp[b_key]["uhat"][()],
-                        "vhat": calib_grp[b_key]["vhat"][()]
-                    }
-                    
-            from subhkl.config import beamlines
-            from subhkl.instrument.detector import Detector
-            
-            for phys_bank in np.unique(bank_array):
-                mask = bank_array == phys_bank
-                if not np.any(mask): continue
-                    
-                try:
-                    det_config = beamlines[instrument][str(int(phys_bank))]
-                    det = Detector(det_config)
-                    
-                    bank_str = f"bank_{int(phys_bank)}"
-                    if bank_str in calibration_dict:
-                        det.center = calibration_dict[bank_str]["center"]
-                        det.uhat = calibration_dict[bank_str]["uhat"]
-                        det.vhat = calibration_dict[bank_str]["vhat"]
-                        
-                    peaks_xyz[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
-                except KeyError as e:
-                    print(f"Warning: Could not rebuild XYZ for bank {phys_bank}: {e}")
-        else:
-            raise ValueError("peaks_h5_filename must contain either xyz or pixel_r/pixel_c to reconstruct geometry.")
-
-    q_hat_list, q_lab_list, peaks_xyz_list, intensities_list, mapped_bank_indices = [], [], [], [], []
-
-    unique_groups = np.unique(group_indices)
-    for g_idx in unique_groups:
-        if g_idx >= end_idx:
-            continue
-
-        mask = group_indices == g_idx
-        grp_xyz = peaks_xyz[mask]
-        grp_intensity = peaks_intensity[mask]
-
-        if R_peaks_override is not None:
-            if R_peaks_override.ndim == 3 and R_peaks_override.shape[0] == len(peaks_xyz):
-                R_gonio = R_peaks_override[mask][0]
-            elif R_peaks_override.ndim == 3 and R_peaks_override.shape[0] > g_idx:
-                R_gonio = R_peaks_override[g_idx]
-            else:
-                R_gonio = R_peaks_override
-        else:
-            R_gonio = R_stack[g_idx] if g_idx < len(R_stack) else np.eye(3)
-
-        intensity_mask = grp_intensity >= min_intensity
-        if not np.any(intensity_mask): 
-            continue
-            
-        grp_xyz = grp_xyz[intensity_mask]
-        grp_intensity = grp_intensity[intensity_mask]
-
-        top_k_idx = np.argsort(grp_intensity)[::-1][:min(top_k_rays, len(grp_intensity))]
-        grp_xyz_top = grp_xyz[top_k_idx]
-        grp_intensity_top = grp_intensity[top_k_idx]
-
-        kf = grp_xyz_top / np.linalg.norm(grp_xyz_top, axis=1, keepdims=True)
-        q_lab = kf - ki_vec_val[None, :]
-        q_sample = np.dot(q_lab, R_gonio)
-
-        q_norms = np.linalg.norm(q_sample, axis=1, keepdims=True)
-        q_hat_grp = q_sample / q_norms
-        
-        q_hat_list.append(q_hat_grp)
-        q_lab_list.append(q_lab)
-        peaks_xyz_list.append(grp_xyz_top)
-        intensities_list.append(grp_intensity_top)
-        
-        mapped_bank_indices.append(np.full(len(grp_xyz_top), g_idx))
-
-    if not q_hat_list:
-        print("Failed to extract any valid rays from the peaks file. Check your --min-intensity threshold.")
-        return
-
-    q_hat = np.vstack(q_hat_list)
-    q_lab_all = np.vstack(q_lab_list).T  
-    peaks_xyz_all = np.vstack(peaks_xyz_list).T 
-    intensities_all = np.concatenate(intensities_list)
-    
-    bank_indices_all = np.concatenate(mapped_bank_indices)
-
-    median_intensity = np.median(intensities_all)
-    weights_all = intensities_all / (median_intensity + 1e-6)
-    weights_all = np.clip(weights_all, 0.0, 10.0)
-
-    print(f"Extracted {len(q_hat)} physical rays. Running 3D Combinatorial Hough...")
-    n_obs, weights_obs = prior_engine.compute_hough_accumulator(
-        q_hat, grid_resolution=hough_grid_resolution, n_hough=n_hough,
-        plot_filename=output_hough, border_frac=border_frac
-    )
-
-    if len(n_obs) == 0:
-        return
-
-    n_calc = prior_engine.generate_theoretical_zones(L_max=L_max, top_k=top_k, max_uvw=max_uvw)
-    print(f"Extracted {len(n_obs)} Empirical Zones against {len(n_calc)} Theoretical Zones.")
-
-    quats, _ = prior_engine.solve_permutations(
-        jnp.array(n_obs), jnp.array(weights_obs), n_calc, q_hat,
-        space_group=sg_val,
-        angle_tol_deg=davenport_angle_tol,
-        scoring_tol_deg=vector_tolerance,
-        d_min=d_min
-    )
-
-    if quats is None or len(quats) == 0:
-        return
-
-    print(f"Filtering Prior through Exact Physics Forward-Model...")
-
-    ray_objective = VectorizedObjective(
-        B=B_mat,
-        kf_ki_dir=q_lab_all,
-        peak_xyz_lab=peaks_xyz_all,
-        wavelength=[wavelength_min, wavelength_max],
-        cell_params=[a_val, b_val, c_val, alpha_val, beta_val, gamma_val],
-        static_R=R_stack,
-        peak_run_indices=bank_indices_all,
-        beam_nominal=ki_vec_val
-    )
-
-    prior_rots = prior_engine.physics_filter(quats, ray_objective, batch_size=batch_size, z_score_threshold=3.0)
-
-    if prior_rots is None or len(prior_rots) == 0:
-        print("Exact physical model rejected all seeds. Exiting.")
-        return
-
-    print(f"Success! Saving optimal seed to {output_h5_filename}...")
-    with h5py.File(output_h5_filename, "w") as f:
-        best_rot = np.array(prior_rots[0])
-        f.create_dataset("optimization/best_params", data=best_rot)
-
-        from subhkl.optimization import rotation_matrix_from_rodrigues_jax
-        U_matrix = np.array(rotation_matrix_from_rodrigues_jax(best_rot))
-        f.create_dataset("sample/U", data=U_matrix)
-        f.create_dataset("sample/B", data=B_mat)
-
-        f.create_dataset("sample/a", data=a_val)
-        f.create_dataset("sample/b", data=b_val)
-        f.create_dataset("sample/c", data=c_val)
-        f.create_dataset("sample/alpha", data=alpha_val)
-        f.create_dataset("sample/beta", data=beta_val)
-        f.create_dataset("sample/gamma", data=gamma_val)
-
-        f.create_dataset("sample/offset", data=np.zeros(3))
-        f.create_dataset("beam/ki_vec", data=ki_vec_val)
-        f.create_dataset("optimization/goniometer_offsets", data=np.zeros(len(ax)))
-        f.create_dataset("sample/space_group", data=sg_val.encode('utf-8'))
-        f.create_dataset("instrument/wavelength", data=[wavelength_min, wavelength_max])
-
-    print(f"Done. You can now run:\n subhkl indexer {merged_h5_filename} <output.h5> --bootstrap {output_h5_filename} ...")
-
-@app.command()
-def rbf_integrator(
-    filename: str = typer.Argument(..., help="Merged HDF5 image stack"),
-    instrument: str = typer.Argument(..., help="Instrument name"),
-    integration_peaks_filename: str = typer.Argument(..., help="Predicted peaks HDF5 file"),
-    output_filename: str = typer.Argument(..., help="Output integrated peaks HDF5 file"),
-    alpha: float = typer.Option(1.0, "--alpha", help="Peak over background threshold (Z-score)"),
-    gamma: float = typer.Option(1.0, "--gamma", help="Besov space weight exponent"),
-    sigmas: str = typer.Option("1.0,2.0,4.0", help="Unstretched peak radii"),
-    nominal_sigma: float = typer.Option(1.0, help="The typical peak radius, used as a fallback for weak reflections"),
-    anisotropic: bool = typer.Option(False, help="Integrate anisotropic quasi-Laue peaks"),
-    fit_mosaicity: bool = typer.Option(False, help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries."),
-    max_peaks: int = typer.Option(500, "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"),
-    rel_border_width: float = typer.Option(0, help="Border width in fraction of image size"),
-    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
-    show_progress: bool = typer.Option(True, "--show-progress"),
-    create_visualizations: bool = False,
-    chunk_size: int = 256,
-    max_workers: int = typer.Option(None, help="Maximum number of CPU tasks for visualization."),
-):
-    import h5py
-    from subhkl.integration import Peaks
-    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
-
-    apply_detector_calibration(integration_peaks_filename, instrument)
-
-    sigma_list = [float(k.strip()) for k in sigmas.split(",")]
-    print(f"Starting Dense Sparse RBF Integration on {filename}")
-    print(f"Parameters: Alpha={alpha}, Gamma={gamma}, Sigma={sigma_list}, Max Peaks Padding={max_peaks}")
-
-    peak_dict = {}
-
-    with h5py.File(integration_peaks_filename, "r") as f:
-        if "sample/U" in f:
-            U = f["sample/U"][()]
-        if "sample/B" in f:
-            B = f["sample/B"][()]
-        if "goniometer/R" in f:
-            all_R = f["goniometer/R"][()]
-        if "goniometer/angles" in f:
-            angles_stack = f["goniometer/angles"][()]
-            
-        if "sample/offset" in f:
-            sample_offset = f["sample/offset"][()]
-        else:
-            sample_offset = np.zeros(3)
-            
-        if ki_vec is not None:
-            ki_vec_val = np.array([float(x.strip()) for x in ki_vec.split(",")])
-        elif "beam/ki_vec" in f:
-            ki_vec_val = f["beam/ki_vec"][()]
-        else:
-            ki_vec_val = np.array([0.0, 0.0, 1.0])
-
-        for key in f["banks"].keys():
-            img_idx = int(key)
-            grp = f[f"banks/{key}"]
-            peak_dict[img_idx] = [
-                grp["i"][()], grp["j"][()], grp["h"][()],
-                grp["k"][()], grp["l"][()], grp["wavelength"][()]
-            ]
-
-    peaks = Peaks(filename, instrument)
-
-    if all_R is None:
-        all_R = peaks.goniometer.rotation
-    if angles_stack is None:
-        angles_stack = peaks.goniometer.angles_raw
-
-    one_image = next(iter(peaks.image.ims.values()))
-    border_width = int(rel_border_width * min(one_image.shape[0], one_image.shape[1]))
-
-    result = integrate_peaks_rbf_ssn(
-        peak_dict=peak_dict,
-        peaks_obj=peaks,             
+    run_zone_axis_search(
+        merged_h5_filename=merged_h5_filename,
+        peaks_h5_filename=peaks_h5_filename,
+        instrument=instrument,
+        output_h5_filename=output_h5_filename,
+        a=a,
+        b=b,
+        c=c,
         alpha=alpha,
-        sigmas=sigma_list,
+        beta=beta,
         gamma=gamma,
-        nominal_sigma=nominal_sigma,
-        max_peaks=max_peaks,
-        show_progress=show_progress,
-        all_R=all_R,                 
-        sample_offset=sample_offset,
-        ki_vec=ki_vec_val,
-        anisotropic=anisotropic,
-        fit_mosaicity=fit_mosaicity,
-        border_width=border_width,
-        chunk_size=chunk_size,
-        create_visualizations=create_visualizations,
-        file_prefix=filename,
-        max_workers=max_workers,
+        space_group=space_group,
+        d_min=d_min,
+        sigma=sigma,
+        vector_tolerance=vector_tolerance,
+        border_frac=border_frac,
+        min_intensity=min_intensity,
+        hough_grid_resolution=hough_grid_resolution,
+        n_hough=n_hough,
+        davenport_angle_tol=davenport_angle_tol,
+        top_k_rays=top_k_rays,
+        max_uvw=max_uvw,
+        L_max=L_max,
+        top_k=top_k,
+        num_runs=num_runs,
+        output_hough=output_hough,
+        batch_size=batch_size,
     )
-
-    print(f"Saving RBF integrated peaks to {output_filename}")
-    with h5py.File(output_filename, "w") as f:
-        f["peaks/h"] = result.h
-        f["peaks/k"] = result.k
-        f["peaks/l"] = result.l
-        f["peaks/lambda"] = result.wavelength
-        f["peaks/intensity"] = result.intensity
-        f["peaks/sigma"] = result.sigma 
-        f["peaks/two_theta"] = result.tt
-        f["peaks/azimuthal"] = result.az
-        f["peaks/bank"] = result.bank
-        f["peaks/run_index"] = result.run_id
-        
-        copy_keys = [
-            "sample/a", "sample/b", "sample/c", 
-            "sample/alpha", "sample/beta", "sample/gamma",
-            "sample/space_group", "sample/U", "sample/B", 
-            "sample/offset", "beam/ki_vec", "instrument/wavelength"
-        ]
-        
-        with h5py.File(integration_peaks_filename, "r") as f_in:
-            for key in copy_keys:
-                if key in f_in:
-                    f_in.copy(f_in[key], f, key)
-                    
-            for k in ["goniometer/axes", "goniometer/names", "detector_calibration"]:
-                if k in f_in:
-                    f_in.copy(f_in[k], f, k)
 
 @app.command()
 def index_images(

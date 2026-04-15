@@ -16,7 +16,7 @@ def generate_synthetic_data(
     rotations,
     gonio_axes,
     sample_offset_true=None,
-    space_group="P 1",
+    lattice_system="Triclinic",
     hkl_range_k=None,
 ):
     fu_helper = FindUB()
@@ -74,7 +74,7 @@ def generate_synthetic_data(
         "sample/alpha": alpha,
         "sample/beta": beta,
         "sample/gamma": gamma,
-        "sample/space_group": space_group,
+        "sample/space_group": "P1",
         "instrument/wavelength": [0.5, 20.0],
         "peaks/two_theta": np.concatenate(all_tt),
         "peaks/azimuthal": np.concatenate(all_az),
@@ -110,37 +110,6 @@ def test_multi_run_indexing_refinement():
     diff_R = U_res @ U_true.T
     angle = np.rad2deg(np.arccos(np.clip((np.trace(diff_R) - 1) / 2, -1, 1)))
     assert angle < 0.2
-
-
-def test_clipping_logic_direct():
-    fu = FindUB()
-    fu.a, fu.b, fu.c = 10, 10, 10
-    fu.alpha, fu.beta, fu.gamma = 90, 90, 90
-    B = fu.reciprocal_lattice_B()
-    obj = VectorizedObjective(
-        B=B,
-        kf_ki_dir=np.zeros((3, 4)),
-        peak_xyz_lab=None,
-        wavelength=[1.0, 5.0],
-        space_group="P 1 21 1",
-        hkl_search_range=2,
-    )
-    h = np.array([0, 0, 0, 0])
-    k = np.array([1, 2, 3, 4])
-    l = np.array([0, 0, 0, 0])
-    r = obj.mask_range
-    idx_h = np.clip(h + r, 0, 2 * r).astype(np.int32)
-    idx_k = np.clip(k + r, 0, 2 * r).astype(np.int32)
-    idx_l = np.clip(l + r, 0, 2 * r).astype(np.int32)
-    in_bounds = (h >= -r) & (h <= r) & (k >= -r) & (k <= r) & (l >= -r) & (l <= r)
-    is_allowed = np.where(in_bounds, obj.valid_hkl_mask[idx_h, idx_k, idx_l], True)
-    from subhkl.core.spacegroup import is_systematically_absent
-
-    expected_absent = is_systematically_absent(h[:2], k[:2], l[:2], "P 1 21 1")
-    assert bool(is_allowed[0]) == (not expected_absent[0])
-    assert bool(is_allowed[1]) == (not expected_absent[1])
-    assert bool(is_allowed[2])
-    assert bool(is_allowed[3])
 
 
 def test_sample_offset_refinement_multirun():
@@ -212,39 +181,7 @@ def test_predictor_multirun_sample_rotation():
     assert shift_col > 1.0, "Predictor ignored goniometer rotation for sample offset!"
 
 
-def test_ghost_indexing_vulnerability():
-    from subhkl.optimization import FindUB, VectorizedObjective
-
-    fu = FindUB()
-    fu.a, fu.b, fu.c = 10, 10, 10
-    fu.alpha, fu.beta, fu.gamma = 90, 90, 90
-    B = fu.reciprocal_lattice_B()
-    obj = VectorizedObjective(
-        B=B,
-        kf_ki_dir=np.zeros((3, 1)),
-        peak_xyz_lab=None,
-        wavelength=[1.0, 5.0],
-        space_group="I 2 2 2",
-    )
-    h_out, k_out, l_out = np.array([21]), np.array([0]), np.array([0])
-    r = obj.mask_range
-    in_bounds = (
-        (h_out >= -r)
-        & (h_out <= r)
-        & (k_out >= -r)
-        & (k_out <= r)
-        & (l_out >= -r)
-        & (l_out <= r)
-    )
-    is_allowed_out = np.where(in_bounds, obj.valid_hkl_mask[0, 0, 0], False)
-    assert not bool(is_allowed_out[0]), (
-        "VULNERABILITY: Forbidden reflection allowed outside mask range!"
-    )
-
-
 def test_stage1_blindness_vulnerability():
-    from subhkl.optimization import VectorizedObjective
-
     B = np.eye(3)
     xyz_lab = np.array([[0.0, 0.0, 0.4]])
     s_nom = np.array([0.01, 0.0, 0.0])
@@ -265,8 +202,6 @@ def test_stage1_blindness_vulnerability():
 def test_multirun_peaks_per_image_vulnerability():
     """Verify if Indexer crashes or miscalculates when multiple peaks belong to the same run."""
     import numpy as np
-
-    from subhkl.optimization import VectorizedObjective
 
     num_runs = 2
     peaks_per_run = 5

@@ -8,9 +8,6 @@ from subhkl.config import beamlines
 from subhkl.instrument.goniometer import Goniometer
 from subhkl.search.sparse_rbf import SparseRBFPeakFinder
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 
 @dataclass(frozen=True)
 class Wavelength:
@@ -113,7 +110,7 @@ def prepare_harvest_tasks(
             chunk_size=harvest_peaks_kwargs.get("chunk_size", 128),
             show_steps=harvest_peaks_kwargs.get("show_steps", False),
             auto_tune_alpha=harvest_peaks_kwargs.get("auto_tune_alpha", False),
-            candidate_alphas=harvest_peaks_kwargs.get("candidate_alphas", None)
+            candidate_alphas=harvest_peaks_kwargs.get("candidate_alphas", None),
         )
         batch_coords = alg.find_peaks_batch(img_stack)
         precomputed_peaks = {k: c for k, c in zip(img_keys, batch_coords, strict=False)}
@@ -220,7 +217,6 @@ def prepare_predict_tasks(
     ki_vec: Optional[np.ndarray] = None,
     R_all: Optional[np.ndarray] = None,
 ) -> List[Tuple[Any, ...]]:
-    ims = image_data.ims
     bank_mapping = image_data.bank_mapping
     tasks = []
 
@@ -254,6 +250,7 @@ def prepare_predict_tasks(
         )
     return tasks
 
+
 def prepare_integrate_tasks(
     image: ImageData,
     filename: str,
@@ -271,7 +268,6 @@ def prepare_integrate_tasks(
     file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
-
     found_peaks_xyz = None
     found_peaks_bank = None
     found_peaks_run = None

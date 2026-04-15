@@ -572,21 +572,7 @@ def run_metrics(
     d_min: float | None = None,
     per_run: bool = False,
 ):
-    """
-    CLI command to compute and display indexing quality metrics.
-    Compares HKL accuracy internally (file1), or spatial matching between file1 (predicted) and file2 (observed).
-    """
-
-    # Call the metrics computation function
-    if hasattr(file2, "default"): file2 = file2.default
-    if hasattr(instrument, "default"): instrument = instrument.default
-    if hasattr(d_min, "default"): d_min = d_min.default
-    if hasattr(per_run, "default"): per_run = per_run.default
-    if hasattr(ki_vec, "default"): ki_vec = ki_vec.default
-
-    ki_vec_arr = None
-    if ki_vec is not None:
-        ki_vec_arr = np.array([float(x.strip()) for x in ki_vec.split(",")])
+    from subhkl.instrument.metrics import compute_metrics
 
     # No need to call apply_detector_calibration here because metrics.py
     # dynamically shifts coordinates using the detector_calibration group.
@@ -599,14 +585,12 @@ def run_metrics(
         ki_vec_override=ki_vec_arr
     )
 
-    # Handle errors
     if "error_message" in result:
         print(result["error_message"])
         if result["error_message"].startswith("Exception"):
             print("METRICS: 9.99 9.99 9.99 9.99 9.99 9.99")
         return
 
-    # Print filter message if present
     if "filter_message" in result:
         print(f"METRICS: {result['filter_message']}")
 
@@ -633,7 +617,6 @@ def run_peak_predictor(
     wavel_max: float | None = None,
     max_workers: int = 16,
 ):
-
     apply_detector_calibration(indexed_hdf5_filename, instrument)
 
     with h5py.File(indexed_hdf5_filename, "r") as f_idx:
@@ -917,7 +900,6 @@ def run_integrator(
     found_peaks_file: str | None = None,
     max_workers: int = 16,
 ):
-
     apply_detector_calibration(integration_peaks_filename, instrument)
 
     peak_dict = {}
@@ -1109,7 +1091,6 @@ def run_merge_images(input_pattern: str,
     except ValueError as e:
         print(f"ERROR: Invalid space group '{space_group}': {e}")
         raise typer.Exit(code=1)
-
     import glob
 
     if " " in input_pattern:
