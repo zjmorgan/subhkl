@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   lint:
-    name: Linting + formating
+    name: Linting + formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,19 +27,16 @@ jobs:
         run: uv sync
       - name: Run linting
         run: |
-          uv run ruff format --check
+          uv run ruff format --diff
           uv run ruff check
 
   test-unit:
-    name: Unit tests (${{ matrix.backend }})
+    name: Unit tests
     strategy:
       matrix:
         python-version: ["3.12"]
         os:
           - ubuntu-latest
-        backend:
-          - numpy
-          - jax
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -49,14 +46,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies (NumPy backend)
-        if: matrix.backend == 'numpy'
+      - name: Install dependencies
         run: uv sync
-      - name: Install dependencies (JAX backend)
-        if: matrix.backend == 'jax'
-        run: uv sync --extra jax
-      - name: Verify backend
-        run: |
-          uv run python -c "import subhkl; print(f'Backend: {subhkl.OPTIMIZATION_BACKEND}'); assert subhkl.OPTIMIZATION_BACKEND == '${{ matrix.backend }}', f'Expected ${{ matrix.backend }}, got {subhkl.OPTIMIZATION_BACKEND}'"
       - name: Run tests
         run: uv run pytest -v -m "not slow and not integration"

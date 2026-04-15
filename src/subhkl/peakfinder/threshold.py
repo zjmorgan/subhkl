@@ -316,16 +316,16 @@ class ThresholdingPeakFinder:
 
         if self.show_steps:
             plt.imshow(im, norm=self.show_scale, cmap="binary")
-            
+
             if len(refined_centers) > 0:
                 # Plot X (col) vs Y (row). refined_centers is stored as [row, col]
                 plt.scatter(
-                    refined_centers[:, 1], 
+                    refined_centers[:, 1],
                     refined_centers[:, 0],
                     edgecolors="red",
                     facecolors="none",
                 )
-            
+
             plt.title("Peaks")
             plt.show()
             plt.savefig("peaks.png")

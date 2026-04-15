@@ -1,21 +1,7 @@
 import numpy as np
-import pytest
 import scipy.linalg
 
 from subhkl import optimization
-
-
-def test_backend_flags_and_require_jax():
-    # Module exposes HAS_JAX and OPTIMIZATION_BACKEND
-    assert isinstance(optimization.HAS_JAX, bool)
-    assert optimization.OPTIMIZATION_BACKEND in ("jax", "numpy")
-
-    # require_jax should raise only when JAX is not available
-    if optimization.HAS_JAX:
-        optimization.require_jax()
-    else:
-        with pytest.raises(ImportError):
-            optimization.require_jax()
 
 
 def test_param_mapping_roundtrip():

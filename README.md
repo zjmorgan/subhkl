@@ -1,27 +1,5 @@
 # subhkl
-Solving crystal orientation from Laue diffraction images
-
-## Physics and Conventions
-
-This project uses the **Laue Equation** relating Miller indices $(h, k, l)$ to the scattering vector $Q$ in the laboratory frame:
-
-$$Q_l = 2\pi R \cdot U \cdot B \cdot \mathbf{h}$$
-
-where:
-- **$\mathbf{h}$**: Miller indices vector $\begin{pmatrix} h \\ k \\ l \end{pmatrix}$.
-- **$B$**: Reciprocal lattice matrix (Cartesian system). Transforms Miller indices to reciprocal space units ($1/\text{\AA}$ if $2\pi$ is not absorbed).
-- **$U$**: Orientation matrix (Sample to Cartesian). Transforms reciprocal lattice to the goniometer/sample frame.
-- **$R$**: Goniometer rotation matrix (Lab to Sample). Calculated from goniometer axes and angles using Mantid's `SetGoniometer` convention ($R = R_{\text{omega}} R_{\text{chi}} R_{\text{phi}}$).
-
-The scattering vector $Q$ is defined by the change in wavevector:
-$$Q = k_f - k_i = \frac{2\pi}{\lambda} (\hat{k}_f - \hat{k}_i)$$
-
-where $\hat{k}_f$ and $\hat{k}_i$ are unit vectors along the scattered and incident beam directions, respectively.
-
-### Coordinate Systems
-- **Lab Frame**: $Z$ is along the incident beam, $Y$ is vertically upward.
-- **Sample Frame**: Attached to the innermost goniometer axis.
-- **Angles**: $2\theta$ is the scattering angle, $\phi$ is the azimuthal angle.
+Solving crystal orientation from 2D Laue diffraction images
 
 ---
 
@@ -59,66 +37,36 @@ uv pip install -e ".[test]"  # with uv
 python -m pip install -e ".[test]"  # with pip
 ```
 
-### Installing optional JAX dependencies
+### Installing accelerated versions
 
-JAX is an optional dependency used for GPU-accelerated optimization algorithms. The package automatically uses JAX when available, falling back to NumPy otherwise.
+We use JAX is to enable GPU-accelerated optimization algorithms. Subhkl uses the CPU version of JAX by default, but can be installed
+with support for NVIDIA or AMD GPUs.
 
 **Installation options:**
 
 ```bash
-# Standard installation (NumPy backend only - no GPU)
+# CPU-only JAX acceleration (faster, but no GPU)
 pip install subhkl
 
-# CPU-only JAX acceleration (faster, but no GPU)
-pip install subhkl[jax]
-
 # NVIDIA GPU support (CUDA 12.x)
-pip install subhkl[jax-cuda12]
-
-# NVIDIA GPU support (CUDA 11.x - for older systems)
-pip install subhkl[jax-cuda11]
+pip install subhkl[cuda12]
 
 # AMD GPU support (ROCm)
-pip install subhkl[jax-rocm]
+pip install subhkl[rocm]
 ```
 
 **For development (editable install):**
 
 ```bash
-# NumPy backend
+# CPU JAX version
 uv pip install -e .
 
-# JAX CPU
-uv pip install -e ".[jax]"
+# CUDA 12
+uv pip install -e ".[cuda12]"
 
-# JAX with CUDA 12
-uv pip install -e ".[jax-cuda12]"
-
-# JAX with CUDA 11
-uv pip install -e ".[jax-cuda11]"
-
-# JAX with ROCm (AMD)
-uv pip install -e ".[jax-rocm]"
+# ROCm (AMD)
+uv pip install -e ".[rocm]"
 ```
-
-**Backend detection:**
-
-The optimization backend is automatically selected at import time. You can check which backend is being used:
-
-```python
-import subhkl
-
-print(f"Backend: {subhkl.OPTIMIZATION_BACKEND}")  # "jax" or "numpy"
-print(f"JAX available: {subhkl.HAS_JAX}")  # True or False
-
-# VectorizedObjective automatically uses the best available backend
-objective = subhkl.VectorizedObjective(...)  # JIT-compiled if JAX available
-```
-
-**Performance notes:**
-- **NumPy backend**: Works everywhere, no GPU required, good for small-scale problems
-- **JAX CPU**: ~2-5x faster than NumPy due to JIT compilation, no GPU required
-- **JAX GPU (CUDA/ROCm)**: ~10-100x faster for large-scale optimization, requires compatible GPU
 
 ## Running with docker
 
@@ -131,7 +79,7 @@ docker build -t subhkl .
 Running:
 
 ```
-docker run -it --rm --name=subhkl subhkl
+docker run -it --rm --name=subhkl --gpus all subhkl
 ```
 
 subhkl will be available for import inside of Python in the container.
@@ -167,40 +115,28 @@ rs.concat(mtzs).hkl_to_asu().write_mtz("mesolite_202405/meso.mtz")
 which creates a single `.mtz` file `mesolite_202405/meso.mtz` that contains
 all reflections.
 
-## Sparse RBF Peak Finder
+## Physics and Conventions
 
-The **Sparse RBF (Radial Basis Function)** peak finder is an advanced algorithm designed to resolve overlapping peaks ("necklaces") and dense clusters that standard segmentation methods (like Watershed) often fail to separate. It treats peak finding as a function approximation problem, reconstructing the image as a sparse sum of Gaussian atoms using an iterative pursuit strategy.
+This project uses the **Laue Equation** to relate Miller indices $(h, k, l)$ to the scattering vector $Q$:
 
-### Key Features
-* **Adaptive Resolution:** Dynamically adds peaks only where they significantly improve the fit.
-* **Joint Relaxation:** Once a peak is found, its position and width are jointly optimized with all other peaks, allowing overlapping spots to "slide" apart naturally.
-* **Parallel Acceleration:** Uses JAX to run fully parallelized pursuit on all detector banks simultaneously.
+$$Q_l = 2\pi R \cdot U \cdot B \cdot \mathbf{h}$$
 
-### Parameters
+where:
+- **$\mathbf{h}$**: Miller indices vector $\begin{pmatrix} h \\ k \\ l \end{pmatrix}$.
+- **$B$**: Reciprocal lattice matrix (Cartesian system). Transforms Miller indices to reciprocal space units ($1/\text{\AA}$ if $2\pi$ is not absorbed).
+- **$U$**: Orientation matrix (Sample to Cartesian). Transforms reciprocal lattice to the goniometer/sample frame.
+- **$R$**: Goniometer rotation matrix (Lab to Sample). Calculated from goniometer axes and angles using Mantid's `SetGoniometer` convention ($R = R_{\text{omega}} R_{\text{chi}} R_{\text{phi}}$).
 
-| Parameter | Default | Description | Tuning Advice |
-| :--- | :--- | :--- | :--- |
-| `--sparse-rbf-alpha` | `0.02` | **Sparsity Penalty.** The minimum relative intensity (0.0-1.0) required for a peak to be kept. | **Critical Knob.** Set to `0.05` to ignore everything below 5% brightness. Set to `0.001` to catch very faint peaks. If you get 0 peaks, lower this value. |
-| `--sparse-rbf-min-sigma` | `1.0` | Minimum peak width (pixels). | Set to the physical point-spread function (PSF) size. If peaks are sharp (single pixel), set to `0.5`. |
-| `--sparse-rbf-max-sigma` | `10.0` | Maximum peak width (pixels). | Prevent the algorithm from fitting large background gradients as giant peaks. |
-| `--sparse-rbf-tile-rows` | `2` | Number of spatial tiles (rows) to split the image into. | `2` (making a 2x2 grid) is a good default. Increase to `4` for large images (2k+) to improve GPU parallelism and speed. |
-| `--sparse-rbf-tile-cols` | `2` | Number of spatial tiles (cols) to split the image into. | `2` (making a 2x2 grid) is a good default. Increase to `4` for large images (2k+) to improve GPU parallelism and speed. |
-| `--sparse-rbf-max-peaks` | `500` | Maximum number of peaks to find *per bank*. | Increase if you expect very dense diffraction patterns. |
+The scattering vector $Q$ is defined by the change in wavevector:
+$$Q = k_f - k_i = \frac{2\pi}{\lambda} (\hat{k}_f - \hat{k}_i)$$
 
-### Usage Example
+where $\hat{k}_f$ and $\hat{k}_i$ are unit vectors along the scattered and incident beam directions, respectively.
 
-```bash
-# Standard run for dense patterns
-python -m subhkl.io.parser finder data.h5 MANDI \
-    --finder-algorithm sparse_rbf \
-    --sparse-rbf-alpha 0.02 \
-    --sparse-rbf-tile-rows 4 \
-    --sparse-rbf-tile-cols 4
+### Coordinate Systems
+- **Lab Frame**: $Z$ is along the incident beam, $Y$ is vertically upward.
+- **Sample Frame**: Attached to the innermost goniometer axis.
+- **Angles**: $2\theta$ is the scattering angle, $\phi$ is the azimuthal angle.
 
-# Debugging: Visualize the pursuit process
-python -m subhkl.io.parser finder data.h5 MANDI \
-    --finder-algorithm sparse_rbf \
-    --show-steps
 ## Developer Guide
 
 ### Running Tests
