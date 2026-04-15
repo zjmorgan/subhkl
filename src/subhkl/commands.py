@@ -9,6 +9,7 @@ from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.io.export import ImageStackMerger, MTZExporter
 
+
 def run_index(
     hdf5_peaks_filename: str | None = None,
     output_peaks_filename: str | None = None,
@@ -366,6 +367,7 @@ def run_metrics(
     per_run: bool = False,
 ):
     from subhkl.instrument.metrics import compute_metrics
+
     result = compute_metrics(
         filename=filename,
         found_peaks_file=found_peaks_file,
@@ -452,6 +454,7 @@ def run_peak_predictor(
 
     if offsets is not None:
         from subhkl.instrument.goniometer import calc_goniometer_rotation_matrix
+
         print(f"Applying refined goniometer offsets from indexer: {offsets}")
         if (
             peaks.goniometer.angles_raw is not None
@@ -854,6 +857,7 @@ def run_reduce(
 
 def run_merge_images(input_pattern: str, output_filename: str):
     import glob
+
     if " " in input_pattern:
         h5_files = []
         for p in input_pattern.split():
