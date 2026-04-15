@@ -1,89 +1,18 @@
-import numpy as np
-import scipy.special
-import jax
-import jax.numpy as jnp
-from jax import jit, vmap, lax
 from functools import partial
-import jax.scipy.optimize
-import jax.scipy.signal
-import jax.scipy.special
+
+import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
-from subhkl.utils.shim import (
-    HAS_JAX,
-    jax,
-    jit,
-    jnp,
-    jnp_update_add,
-    jnp_update_set,
-    lax,
-    vmap,
-)
+# Import JAX with fallback from utils (centralized)
+from jax import jit
+from jax import lax
+from jax import vmap
+import jax
+import jax.numpy as jnp
 
-if HAS_JAX:
-    import jax.scipy.optimize
-    import jax.scipy.signal
-
-# auxiliary functions
-@partial(jit, static_argnames=['window_size'])
-def jax_median_2d(img, window_size):
-    """
-    Args:
-        img: [photons/Pixel]
-        window_size: [Pixel^0.5]
-    Returns:
-        [photons/Pixel]
-    """
-    pad_w = window_size // 2  # [Pixel^0.5]
-    padded = jnp.pad(img, pad_w, mode='reflect')  # [photons/Pixel]
-    im_4d = padded[None, None, :, :]  # [photons/Pixel]
-
-    patches = lax.conv_general_dilated_patches(
-        im_4d,
-        filter_shape=(window_size, window_size),
-        window_strides=(1, 1),
-        padding='VALID',
-        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-    )
-    return jnp.median(patches[0], axis=0)  # [photons/Pixel]
-
-@jit
-def jax_gaussian_blur_2d(img):
-    """
-    Args:
-        img: [photons/Pixel]
-    Returns:
-        [photons/Pixel]
-    """
-    sigma = 3.0  # [Pixel^0.5]
-    radius = int(4.0 * sigma + 0.5)  # [Pixel^0.5]
-    x = jnp.arange(-radius, radius + 1)  # [Pixel^0.5]
-    k_1d = jnp.exp(-0.5 * (x / sigma) ** 2)  # [-]
-    k_1d = k_1d / jnp.sum(k_1d)  # [-]
-
-    k_col = k_1d[:, None]  # [-]
-    k_row = k_1d[None, :]  # [-]
-
-    padded = jnp.pad(img, radius, mode='reflect')  # [photons/Pixel]
-    temp = jax.scipy.signal.correlate2d(padded, k_col, mode='valid')  # [photons/Pixel]
-    blurred = jax.scipy.signal.correlate2d(temp, k_row, mode='valid')  # [photons/Pixel]
-    return blurred  # [photons/Pixel]
-
-@partial(jit, static_argnames=['filter_size'])
-def compute_bg_batch(imgs, filter_size):
-    """
-    Args:
-        imgs: [photons/Pixel]
-        filter_size: [Pixel^0.5]
-    Returns:
-        [photons/Pixel]
-    """
-    def process_one(img):
-        med = jax_median_2d(img, filter_size)  # [photons/Pixel]
-        blur = jax_gaussian_blur_2d(med)  # [photons/Pixel]
-        return jnp.maximum(blur, 1e-3)  # [photons/Pixel]
-    return lax.map(process_one, imgs)  # [photons/Pixel]
+import jax.scipy.optimize
+import jax.scipy.signal
 
 
 class SparseRBFPeakFinder:
@@ -532,8 +461,8 @@ class SparseRBFPeakFinder:
             dummy_peak = jnp.array([0.0, 0.0, 0.0, 1.0])
             new_peak = jnp.where(is_strong, new_peak, dummy_peak)
             
-            params = jnp_update_set(params, idx, new_peak)
-            active_mask = jnp_update_set(active_mask, idx, is_strong)
+            params = params.at[idx].set(new_peak)
+            active_mask = active_mask.at[idx].set(is_strong)
 
             def run_opt(operand):
                 p, a_mask = operand
