@@ -141,7 +141,9 @@ class TestMandiMesoliteSingleRun:
         print("[3/5] Validating metrics...")
         metrics = compute_metrics(indexer_output)
         median_ang_err_deg = metrics["median_ang_err"]
-        assert median_ang_err_deg < 0.3, f"Indexing accuracy too low: {median_ang_err_deg} deg"
+        assert median_ang_err_deg < 0.3, (
+            f"Indexing accuracy too low: {median_ang_err_deg} deg"
+        )
 
         print("[4/5] Running peak predictor...")
         peak_predictor(
@@ -151,7 +153,9 @@ class TestMandiMesoliteSingleRun:
             integration_peaks_filename=predictor_output,
             d_min=1.35,
         )
-        assert os.path.exists(predictor_output), "Predictor failed to create output file"
+        assert os.path.exists(predictor_output), (
+            "Predictor failed to create output file"
+        )
 
         print("[5/5] Running integrator...")
         integrator(
@@ -161,7 +165,9 @@ class TestMandiMesoliteSingleRun:
             output_filename=integrator_output,
             **INTEGRATOR_PARAMS,
         )
-        assert os.path.exists(integrator_output), "Integrator failed to create output file"
+        assert os.path.exists(integrator_output), (
+            "Integrator failed to create output file"
+        )
 
         print("[6/6] Exporting to MTZ...")
         mtz_exporter(
@@ -180,6 +186,7 @@ class TestMandiMesoliteSingleRun:
         print("\n✓ Complete workflow finished successfully")
         print(f"  Total reflections: {total_reflections}")
         print(f"  Output files in: {temp_output_dir}")
+
 
 # Mark the test class for pytest markers
 pytestmark = pytest.mark.integration
