@@ -3,7 +3,7 @@ from typing import Annotated
 import typer
 import h5py
 
-from subhkl.io.commands import (
+from subhkl.commands import (
     run_index,
     run_finder,
     run_finder_merger,
