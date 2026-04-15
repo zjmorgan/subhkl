@@ -905,11 +905,9 @@ def run_zone_axis_search(
     import h5py
     import numpy as np
     import jax.numpy as jnp
-    from subhkl.config import beamlines, reduction_settings
+    from subhkl.config import reduction_settings
     from subhkl.optimization import FindUB, VectorizedObjective
     from subhkl.search.prior import HoughPrior
-    from subhkl.core.crystallography import generate_reflections
-    from subhkl.core.spacegroup import get_centering
 
     print(f"Loading data from {merged_h5_filename}...")
     with h5py.File(merged_h5_filename, 'r') as f_in:
@@ -948,10 +946,6 @@ def run_zone_axis_search(
     prior_engine = HoughPrior(B_mat, np.array(R_stack), ki_vec=np.array([0.0, 0.0, 1.0]))
 
     print(f"Loading empirical rays from {peaks_h5_filename}...")
-    
-    # 1. Use the Peaks API to handle instrument geometry mapping
-    from subhkl.integration.api import Peaks
-    peaks_api = Peaks(merged_h5_filename, instrument)
 
     with h5py.File(peaks_h5_filename, 'r') as f_peaks:
         peaks_xyz = f_peaks["peaks/xyz"][()]
@@ -1061,7 +1055,7 @@ def run_zone_axis_search(
     if quats is None or len(quats) == 0:
         return
 
-    print(f"Filtering Prior through Exact Physics Forward-Model...")
+    print("Filtering Prior through Exact Physics Forward-Model...")
 
     ray_objective = VectorizedObjective(
         B=B_mat,
