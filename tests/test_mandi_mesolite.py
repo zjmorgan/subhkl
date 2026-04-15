@@ -19,11 +19,13 @@ import h5py
 import pytest
 
 from subhkl.io.parser import (
-    finder,
-    indexer,
-    integrator,
-    mtz_exporter,
-    peak_predictor,
+    indexer
+)
+from subhkl.commands import (
+    run_finder as finder,
+    run_integrator as integrator,
+    run_mtz_exporter as mtz_exporter,
+    run_peak_predictor as peak_predictor
 )
 from subhkl.instrument.metrics import compute_metrics
 
