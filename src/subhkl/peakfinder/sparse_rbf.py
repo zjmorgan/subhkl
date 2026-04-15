@@ -2,7 +2,6 @@ import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
-# Import JAX with fallback from utils (centralized)
 from jax import jit
 from jax import lax
 from jax import vmap
@@ -517,7 +516,6 @@ class SparseRBFPeakFinder:
         loss_code,
         do_merge,
     ):
-
         local_bg_med = jnp.maximum(jnp.median(patch_bg), 1e-3)  # [photons/Pixel]
         local_noise_floor = jnp.sqrt(local_bg_med)  # [photons^0.5 / Pixel^0.5]
 
@@ -1291,7 +1289,6 @@ val_and_grad_fn = jit(
 def optimize_global_crystal(
     patches, bgs, drs, dcs, P_mats, distances, fit_mosaicity=False
 ):
-
     # 1. Dynamically size the optimizer state based on the configuration
     if fit_mosaicity:
         scales = np.array([1e-3] * 7)
@@ -1372,7 +1369,6 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
         chunk_size=1024,
         show_steps=False,
     ):
-
         # 1. Initialize parent with safe dummy pixel values to keep it functional
         # (in case you ever call super().find_peaks_batch)
         super().__init__(
