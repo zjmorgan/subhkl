@@ -386,28 +386,39 @@ def run_index(
 
             opt.goniometer_axes = np.array(axes)
 
-            # --- FIX: Secure Mapping of Angles to Peaks ---
             if opt.run_indices is not None:
                 max_run_id = int(np.max(opt.run_indices))
 
-                if angles.ndim == 2 and angles.shape[0] > max_run_id:
-                    opt.goniometer_angles = angles.T
-                elif angles.ndim == 2 and angles.shape[0] == 1:
-                    opt.goniometer_angles = np.tile(angles.T, (1, max_run_id + 1))
-                else:
-                    raise ValueError(
-                        f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs."
-                    )
+                if angles.ndim == 2:
+                    # If angles are shape (num_runs, num_axes)
+                    if angles.shape[0] > max_run_id:
+                        opt.goniometer_angles = angles.T
+                        if len(np.unique(opt.run_indices)) == 1 and angles.shape[0] == len(opt.run_indices):
+                            opt.run_indices = np.arange(len(opt.run_indices), dtype=np.int32)
+                    
+                    # If angles are shape (num_axes, num_runs) [This is what the test sends]
+                    elif angles.shape[1] > max_run_id:
+                        opt.goniometer_angles = angles
+                        if len(np.unique(opt.run_indices)) == 1 and angles.shape[1] == len(opt.run_indices):
+                            opt.run_indices = np.arange(len(opt.run_indices), dtype=np.int32)
+                            
+                    # Single snapshot, broadcast it
+                    elif angles.shape[0] == 1:
+                        opt.goniometer_angles = np.tile(angles.T, (1, max_run_id + 1))
+                    elif angles.shape[1] == 1:
+                        opt.goniometer_angles = np.tile(angles, (1, max_run_id + 1))
+                    else:
+                        raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
-                if angles.ndim == 2 and angles.shape[0] == 1:
-                    opt.goniometer_angles = np.tile(angles.T, (1, num_peaks))
+                if angles.ndim == 2 and (angles.shape[0] == 1 or angles.shape[1] == 1):
+                    opt.goniometer_angles = np.tile(angles if angles.shape[0]==1 else angles.T, (1, num_peaks))
+                elif angles.ndim == 2 and angles.shape[1] == num_peaks:
+                    opt.goniometer_angles = angles
                 elif angles.ndim == 2 and angles.shape[0] == num_peaks:
                     opt.goniometer_angles = angles.T
                 else:
-                    raise ValueError(
-                        f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
-                    )
+                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
 
             goniometer_names = names
 

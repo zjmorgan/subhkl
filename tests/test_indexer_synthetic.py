@@ -105,6 +105,7 @@ def test_synthetic_indexing(tmp_path):
     # Mock the physical detector geometry conversion
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
+        patch("subhkl.commands.Peaks") as mock_peaks,  # <-- Added missing mock
         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
@@ -125,10 +126,13 @@ def test_synthetic_indexing(tmp_path):
             loss_method="gaussian",
         )
 
-    # Capture output to check for median error
-    f = io.StringIO()
-    with redirect_stdout(f):
-        metrics(indexer_h5, instrument="MANDI")
+        # CRITICAL FIX: compute_metrics is now inside the patch context!
+        import io
+        from contextlib import redirect_stdout
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            metrics(indexer_h5, instrument="MANDI")
 
     output = f.getvalue()
     print(output)
