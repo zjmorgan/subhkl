@@ -384,14 +384,19 @@ def peak_predictor(
     space_group: str | None = None,
     wavel_min: float | None = None,
     wavel_max: float | None = None,
-    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector"),
     max_workers: int = 16,
 ):
     run_peak_predictor(
         filename,
         instrument,
-        wavelength_min=wavel_min,
-        wavelength_max=wavel_max,
+        indexed_hdf5_filename,
+        integration_peaks_filename,
+        d_min=d_min,
+        wavel_min=wavel_min,
+        wavel_max=wavel_max,
+        space_group=space_group,
+        max_workers=max_workers,
+        create_visualizations=create_visualizations,
     )
 
 
