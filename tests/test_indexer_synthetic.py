@@ -104,7 +104,7 @@ def test_synthetic_indexing(tmp_path):
 
     # Mock the physical detector geometry conversion
     with (
-        patch("subhkl.instruments.detector.Detector") as mock_detector,
+        patch("subhkl.commands.Detector") as mock_detector,
         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
