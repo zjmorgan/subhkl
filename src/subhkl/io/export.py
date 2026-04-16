@@ -173,7 +173,8 @@ class MTZExporter:
             self.gamma = float(np.array(f["sample/gamma"]))
 
             if space_group is None:
-                space_group = str(f["sample/space_group"])
+                sg = f["sample/space_group"]
+                space_group = sg.decode("utf-8") if isinstance(sg, bytes) else str(sg)
 
             self.h = np.array(f["peaks/h"])
             self.k = np.array(f["peaks/k"])
