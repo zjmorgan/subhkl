@@ -7,7 +7,7 @@ try:
     from subhkl.io.command_line_parser import indexer
 except ImportError:
     from subhkl.io.parser import indexer
-    
+
 from subhkl.instrument.metrics import compute_metrics
 
 
@@ -131,10 +131,10 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
         f["bank_ids"] = np.array([1], dtype=np.int32)
 
     # 2. Mock the physical geometry conversion and Run Indexer
-    with patch("subhkl.instrument.detector.Detector") as mock_detector, \
-         patch("subhkl.commands.Peaks") as mock_peaks, \
-         patch.dict("subhkl.config.beamlines", {"DUMMY": {"1": {}}}):
-
+    with (
+        patch("subhkl.instrument.detector.Detector") as mock_detector,
+        patch.dict("subhkl.config.beamlines", {"DUMMY": {"1": {}}}),
+    ):
         # Configure the mock to return the synthetic math instead of attempting real conversions
         mock_det_instance = MagicMock()
         mock_det_instance.pixel_to_lab.return_value = xyz

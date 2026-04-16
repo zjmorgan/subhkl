@@ -72,7 +72,9 @@ def test_finder_cli_integration(tmp_path, algorithm):
     assert output_h5.exists(), f"Finder failed to create output file for {algorithm}."
 
     with h5py.File(output_h5, "r") as f:
-        assert "peaks/pixel_r" in f and "peaks/pixel_c" in f, f"pixel coordinates missing from output for {algorithm}."
+        assert "peaks/pixel_r" in f and "peaks/pixel_c" in f, (
+            f"pixel coordinates missing from output for {algorithm}."
+        )
         rows = f["peaks/pixel_r"][()]
 
         # All algorithms should easily identify this strong, isolated peak

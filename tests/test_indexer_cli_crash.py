@@ -63,7 +63,6 @@ def test_indexer_run_gap_crash(tmp_path):
 
     # I'll use the 'InvalidSG' bug. It IS a bug.
     # The CLI should validate the SG before starting optimization.
-    import typer
 
     with pytest.raises(ValueError):
         indexer(

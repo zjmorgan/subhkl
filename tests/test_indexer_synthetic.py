@@ -62,7 +62,7 @@ def create_synthetic_finder(filename):
         f["peaks/intensity"] = np.ones(len(xyz))
         f["peaks/sigma"] = np.ones(len(xyz)) * 0.1
         f["peaks/radius"] = np.zeros(len(xyz))
-        
+
         # --- NEW: Dummy pixel and bank mapping for physical reconstruction ---
         f["peaks/pixel_r"] = np.zeros(len(xyz))
         f["peaks/pixel_c"] = np.zeros(len(xyz))
@@ -89,9 +89,10 @@ def test_synthetic_indexing(tmp_path):
     finder_h5 = os.path.join(tmp_path, "synthetic_finder.h5")
     indexer_h5 = os.path.join(tmp_path, "synthetic_indexer.h5")
     dummy_nexus = os.path.join(tmp_path, "dummy.nxs")
-    
+
     # Create empty dummy nexus file
-    with open(dummy_nexus, "w") as f: pass
+    with open(dummy_nexus, "w") as f:
+        pass
 
     create_synthetic_finder(finder_h5)
 
@@ -102,10 +103,10 @@ def test_synthetic_indexing(tmp_path):
         az_mock = f["peaks/azimuthal"][()]
 
     # Mock the physical detector geometry conversion
-    with patch("subhkl.commands.Detector") as mock_detector, \
-         patch("subhkl.commands.Peaks") as mock_peaks, \
-         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}):
-
+    with (
+        patch("subhkl.commands.Detector") as mock_detector,
+        patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}),
+    ):
         mock_det_instance = MagicMock()
         mock_det_instance.pixel_to_lab.return_value = xyz_mock
         mock_det_instance.pixel_to_angles.return_value = (tt_mock, az_mock)

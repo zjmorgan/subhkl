@@ -10,7 +10,7 @@ def test_init_sample_offset_rotation():
     B = np.eye(3)
     num_peaks = 2
     kf_ki_dir = np.random.normal(size=(3, num_peaks))
-    
+
     # Peaks at (0, 0, 0.2) in lab frame
     # Transposed to (3, N) to match standard VectorizedObjective formatting
     peak_xyz_lab = np.tile(np.array([0, 0, 0.2]), (num_peaks, 1)).T
@@ -24,12 +24,12 @@ def test_init_sample_offset_rotation():
 
     # Sample offset in Sample Frame: (0.01, 0, 0)
     # In Lab Frame (R @ s): (0, 0, -0.01)
-    # Note: Passed as a list to safely bypass internal `if sample_nominal:` 
+    # Note: Passed as a list to safely bypass internal `if sample_nominal:`
     # checks which trigger numpy ambiguity errors.
     sample_nominal = [0.01, 0.0, 0.0]
 
     print("\nInitializing Objective with Sample Frame offset...")
-    
+
     obj = VectorizedObjective(
         B=B,
         kf_ki_dir=kf_ki_dir,
