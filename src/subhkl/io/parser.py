@@ -487,8 +487,9 @@ def merge_images(
     space_group: str = typer.Argument(..., help="Space group (e.g. 'P 1')"),
 ):
     try:
-        run_merge_images(input_pattern, output_filename,
-                         a, b, c, alpha, beta, gamma, space_group)
+        run_merge_images(
+            input_pattern, output_filename, a, b, c, alpha, beta, gamma, space_group
+        )
 
     except ValueError as e:
         print(str(e))

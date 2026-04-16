@@ -399,13 +399,22 @@ def run_index(
                         angles = angles.T
                     else:
                         # Ambiguous fallback
-                        if angles.shape[0] == max_run_id + 1 or angles.shape[0] == num_peaks:
+                        if (
+                            angles.shape[0] == max_run_id + 1
+                            or angles.shape[0] == num_peaks
+                        ):
                             angles = angles.T
 
-                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
+                num_angles_provided = (
+                    angles.shape[1] if angles.ndim == 2 else len(angles)
+                )
 
                 # 2. Auto-expand run_indices if we have exactly 1 angle per peak but flat indices
-                if num_angles_provided == num_peaks and max_run_id == 0 and num_peaks > 1:
+                if (
+                    num_angles_provided == num_peaks
+                    and max_run_id == 0
+                    and num_peaks > 1
+                ):
                     opt.run_indices = np.arange(num_peaks, dtype=np.int32)
                     max_run_id = num_peaks - 1
 
@@ -415,22 +424,28 @@ def run_index(
                 elif num_angles_provided == 1:
                     opt.goniometer_angles = np.tile(angles, (1, max_run_id + 1))
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
+                    raise ValueError(
+                        f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs."
+                    )
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 num_axes = len(opt.goniometer_axes)
-                
+
                 if angles.ndim == 2 and angles.shape[1] == num_axes:
                     angles = angles.T
-                    
-                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
-                
+
+                num_angles_provided = (
+                    angles.shape[1] if angles.ndim == 2 else len(angles)
+                )
+
                 if num_angles_provided == num_peaks:
                     opt.goniometer_angles = angles
                 elif num_angles_provided == 1:
                     opt.goniometer_angles = np.tile(angles, (1, num_peaks))
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
+                    raise ValueError(
+                        f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
+                    )
 
             goniometer_names = names
 
