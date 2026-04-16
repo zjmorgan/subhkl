@@ -173,9 +173,9 @@ class MTZExporter:
             self.gamma = float(np.array(f["sample/gamma"]))
 
             if space_group is None:
-                sg = f['sample/space_group'][()]
+                sg = f["sample/space_group"][()]
                 if isinstance(sg, bytes):
-                    space_group = sg.decode('utf-8')
+                    space_group = sg.decode("utf-8")
                 else:
                     space_group = sg
 
