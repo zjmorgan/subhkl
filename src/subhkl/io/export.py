@@ -164,7 +164,6 @@ class FinderConcatenateMerger(BaseConcatenateMerger):
 
 class MTZExporter:
     def __init__(self, peaks_file, space_group=None):
-
         with h5py.File(peaks_file) as f:
             self.a = float(np.array(f["sample/a"]))
             self.b = float(np.array(f["sample/b"]))
