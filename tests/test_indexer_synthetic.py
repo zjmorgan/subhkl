@@ -1,6 +1,4 @@
 import os
-import io
-from contextlib import redirect_stdout
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -105,7 +103,7 @@ def test_synthetic_indexing(tmp_path):
     # Mock the physical detector geometry conversion
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
-        patch("subhkl.commands.Peaks") as mock_peaks,  # <-- Added missing mock
+        patch("subhkl.commands.Peaks") as mock_peaks,  # noqa: F841
         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()

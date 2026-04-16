@@ -478,9 +478,18 @@ def merge_images(
         typer.Argument(help="Glob pattern for reduced .h5 files (e.g. 'reduced/*.h5')"),
     ],
     output_filename: Annotated[str, typer.Argument(help="Output master .h5 file")],
+    a: float = typer.Argument(..., help="Unit cell parameter a"),
+    b: float = typer.Argument(..., help="Unit cell parameter b"),
+    c: float = typer.Argument(..., help="Unit cell parameter c"),
+    alpha: float = typer.Argument(..., help="Unit cell parameter alpha"),
+    beta: float = typer.Argument(..., help="Unit cell parameter beta"),
+    gamma: float = typer.Argument(..., help="Unit cell parameter gamma"),
+    space_group: str = typer.Argument(..., help="Space group (e.g. 'P 1')"),
 ):
     try:
-        run_merge_images(input_pattern, output_filename)
+        run_merge_images(input_pattern, output_filename,
+                         a, b, c, alpha, beta, gamma, space_group)
+
     except ValueError as e:
         print(str(e))
         raise typer.Exit(code=1)

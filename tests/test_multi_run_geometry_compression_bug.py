@@ -32,8 +32,16 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
 
     hkls = np.array(
         [
-            [1, 0, -2], [0, 1, -2], [1, 1, -2], [2, 0, -2], [0, 2, -2],
-            [1, 0, -3], [0, 1, -3], [1, 1, -3], [2, 1, -3], [1, 2, -3],
+            [1, 0, -2],
+            [0, 1, -2],
+            [1, 1, -2],
+            [2, 0, -2],
+            [0, 2, -2],
+            [1, 0, -3],
+            [0, 1, -3],
+            [1, 1, -3],
+            [2, 1, -3],
+            [1, 2, -3],
         ]
     )
 
@@ -58,7 +66,7 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
             kf_hat = (lamb_val / (2.0 * np.pi)) * Q + ki_hat
 
             xyz.append(kf_hat)
-            run_indices.append(i) # Use distinct run indices for all 4 runs
+            run_indices.append(i)  # Use distinct run indices for all 4 runs
 
     xyz = np.array(xyz)
     run_indices = np.array(run_indices)
@@ -96,33 +104,48 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     # 2. Mock the physical geometry conversion and Run Indexer
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
-        patch("subhkl.commands.Peaks") as mock_peaks,
+        patch("subhkl.commands.Peaks") as mock_peaks, # noqa: F841
         patch.dict("subhkl.config.config.beamlines", {"DUMMY": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
         mock_det_instance.pixel_to_lab.return_value = xyz
-        mock_det_instance.pixel_to_angles.return_value = (np.zeros(num_total), np.zeros(num_total))
+        mock_det_instance.pixel_to_angles.return_value = (
+            np.zeros(num_total),
+            np.zeros(num_total),
+        )
         mock_detector.return_value = mock_det_instance
 
         indexer(
             peaks_h5_filename=str(peaks_h5),
             output_peaks_filename=str(output_h5),
-            a=a, b=b, c=c, alpha=alpha, beta=beta, gamma=gamma,
-            space_group="P 1", strategy_name="DE",
-            population_size=1000, gens=1000, n_runs=1, seed=42, sigma_init=3.14,
-            instrument_name="DUMMY", original_nexus_filename=str(dummy_nexus),
+            a=a,
+            b=b,
+            c=c,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            space_group="P 1",
+            strategy_name="DE",
+            population_size=1000,
+            gens=1000,
+            n_runs=1,
+            seed=42,
+            sigma_init=3.14,
+            instrument_name="DUMMY",
+            original_nexus_filename=str(dummy_nexus),
         )
 
     # 3. Assert the fix!
     # If the bug exists, R will have shape (4, 3, 3) (one per run)
     # If the bug is fixed, R will have shape (40, 3, 3) (one per peak)
     with h5py.File(output_h5, "r") as f:
-        output_r_stack = f['goniometer/R'][()]
-        
+        output_r_stack = f["goniometer/R"][()]
+
         # The number of rotation matrices should exactly match the number of peaks
-        assert output_r_stack.shape[0] == num_total, \
+        assert output_r_stack.shape[0] == num_total, (
             f"Fix failed! R stack shape {output_r_stack.shape} does not match peak count {num_total}."
-        
+        )
+
         # It should also correctly identify 4 unique rotation states
-        unique_runs = len(np.unique(f['peaks/run_index'][()]))
+        unique_runs = len(np.unique(f["peaks/run_index"][()]))
         assert unique_runs == 4, f"Expected 4 runs, got {unique_runs}"
