@@ -949,7 +949,7 @@ def run_rbf_integrator(
     apply_detector_calibration(integration_peaks_filename, instrument)
 
     import h5py
-    from subhkl.peakfinder.sparse_rbf import integrate_peaks_rbf_ssn
+    from subhkl.search.sparse_rbf import integrate_peaks_rbf_ssn
 
     sigma_list = [float(k.strip()) for k in sigmas.split(",")]
     print(f"Starting Dense Sparse RBF Integration on {filename}")
