@@ -369,7 +369,7 @@ def metrics(
         instrument=instrument,
         d_min=d_min,
         per_run=per_run,
-        ki_vec_override=ki_vec_parsed,
+        ki_vec=ki_vec_parsed,
     )
 
 
