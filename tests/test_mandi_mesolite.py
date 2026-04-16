@@ -55,7 +55,7 @@ INTEGRATOR_PARAMS = {
 # Indexer parameters with explicit values for all typer.Option parameters
 # to avoid OptionInfo type errors when calling functions directly
 INDEXER_DEFAULTS = {
-    "instrument": "MANDI",
+    "instrument_name": "MANDI",
     "strategy_name": "DE",
     "n_runs": 10,
     "population_size": 1000,
