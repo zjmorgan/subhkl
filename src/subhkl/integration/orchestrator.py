@@ -191,14 +191,6 @@ def prepare_harvest_tasks(
     return tasks, precomputed_peaks
 
 
-from typing import Any, List, Optional, Tuple
-
-import numpy as np
-
-from subhkl.config import beamlines
-from subhkl.io.loader import ImageData
-
-
 def prepare_predict_tasks(
     image_data: ImageData,
     instrument: str,
@@ -235,17 +227,17 @@ def prepare_predict_tasks(
 
         tasks.append(
             (
-                img_key,            # The HDF5 array index (e.g., 0, 1, 2)
-                bank_id,            # The physical name (e.g., 52, 53)
-                det_config,         # Geometry dict from beamlines.json
+                img_key,  # The HDF5 array index (e.g., 0, 1, 2)
+                bank_id,  # The physical name (e.g., 52, 53)
+                det_config,  # Geometry dict from beamlines.json
                 unit_cell_params,
-                RUB,                # The full RUB stack
+                RUB,  # The full RUB stack
                 wavelength_min,
                 wavelength_max,
                 sample_offset,
                 ki_vec,
-                R_all,              # The full R_all stack
-                img_index,          # The sequential index for matrix extraction
+                R_all,  # The full R_all stack
+                img_index,  # The sequential index for matrix extraction
             )
         )
     return tasks

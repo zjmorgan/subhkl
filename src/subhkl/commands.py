@@ -9,6 +9,9 @@ from subhkl.integration import Peaks
 from subhkl.optimization import FindUB
 from subhkl.io.export import ImageStackMerger, MTZExporter
 
+from typing import List
+
+
 def apply_detector_calibration(hdf5_filename: str, instrument: str):
     """
     Reads refined detector metrology from an indexer/prediction file (if present)
@@ -16,6 +19,7 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
     tasks natively use the calibrated geometry.
     """
     from subhkl.config import beamlines
+    import os
 
     if not os.path.exists(hdf5_filename):
         return
@@ -28,12 +32,19 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
             for bank_key in calib_grp.keys():
                 bank_id = bank_key.replace("bank_", "")
                 if instrument in beamlines and bank_id in beamlines[instrument]:
-                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key]["center"][()].tolist()
-                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key]["uhat"][()].tolist()
-                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key]["vhat"][()].tolist()
+                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key][
+                        "center"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key][
+                        "uhat"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key][
+                        "vhat"
+                    ][()].tolist()
                     count += 1
             if count > 0:
                 print(f"Successfully applied calibration to {count} detector panels.")
+
 
 def run_index(
     peaks_h5_filename: str,
@@ -84,7 +95,7 @@ def run_index(
     input_data: dict | None = None,
 ):
     input_data = input_data or {}
-    
+
     if detector_modes is None:
         detector_modes = ["independent"]
     if detector_global_rot_axis is None:
@@ -93,29 +104,47 @@ def run_index(
     # --- INJECT BOOTSTRAP PHYSICS DIRECTLY ---
     if bootstrap_filename:
         apply_detector_calibration(bootstrap_filename, instrument_name)
-        with h5py.File(bootstrap_filename, 'r') as b_f:
-            if "sample/a" in b_f: a = b_f["sample/a"][()]
-            if "sample/b" in b_f: b = b_f["sample/b"][()]
-            if "sample/c" in b_f: c = b_f["sample/c"][()]
-            if "sample/alpha" in b_f: alpha = b_f["sample/alpha"][()]
-            if "sample/beta" in b_f: beta = b_f["sample/beta"][()]
-            if "sample/gamma" in b_f: gamma = b_f["sample/gamma"][()]
+        with h5py.File(bootstrap_filename, "r") as b_f:
+            if "sample/a" in b_f:
+                a = b_f["sample/a"][()]
+            if "sample/b" in b_f:
+                b = b_f["sample/b"][()]
+            if "sample/c" in b_f:
+                c = b_f["sample/c"][()]
+            if "sample/alpha" in b_f:
+                alpha = b_f["sample/alpha"][()]
+            if "sample/beta" in b_f:
+                beta = b_f["sample/beta"][()]
+            if "sample/gamma" in b_f:
+                gamma = b_f["sample/gamma"][()]
 
     print(f"Loading peaks from: {peaks_h5_filename}")
     with h5py.File(peaks_h5_filename, "r") as f:
-        if a is None: a = f["sample/a"][()] if "sample/a" in f else None
-        if b is None: b = f["sample/b"][()] if "sample/b" in f else None
-        if c is None: c = f["sample/c"][()] if "sample/c" in f else None
-        if alpha is None: alpha = f["sample/alpha"][()] if "sample/alpha" in f else None
-        if beta is None: beta = f["sample/beta"][()] if "sample/beta" in f else None
-        if gamma is None: gamma = f["sample/gamma"][()] if "sample/gamma" in f else None
-        
+        if a is None:
+            a = f["sample/a"][()] if "sample/a" in f else None
+        if b is None:
+            b = f["sample/b"][()] if "sample/b" in f else None
+        if c is None:
+            c = f["sample/c"][()] if "sample/c" in f else None
+        if alpha is None:
+            alpha = f["sample/alpha"][()] if "sample/alpha" in f else None
+        if beta is None:
+            beta = f["sample/beta"][()] if "sample/beta" in f else None
+        if gamma is None:
+            gamma = f["sample/gamma"][()] if "sample/gamma" in f else None
+
         if space_group is None:
             file_sg = f["sample/space_group"][()] if "sample/space_group" in f else None
-            space_group = file_sg.decode('utf-8') if isinstance(file_sg, bytes) else file_sg
-        
+            space_group = (
+                file_sg.decode("utf-8") if isinstance(file_sg, bytes) else file_sg
+            )
+
         if None in (a, b, c, alpha, beta, gamma, space_group):
-            raise ValueError("Unit cell parameters (a,b,c,alpha,beta,gamma) and Space Group must be provided via CLI or exist in the input file.")
+            raise ValueError(
+                "Unit cell parameters (a,b,c,alpha,beta,gamma) and Space Group must be provided via CLI or exist in the input file."
+            )
+
+        from subhkl.core.spacegroup import get_space_group_object
 
         try:
             get_space_group_object(space_group)
@@ -125,25 +154,46 @@ def run_index(
         if wavelength_min is None or wavelength_max is None:
             if "instrument/wavelength" in f:
                 wl = f["instrument/wavelength"][()]
-                if wavelength_min is None: wavelength_min = float(wl[0])
-                if wavelength_max is None: wavelength_max = float(wl[1])
+                if wavelength_min is None:
+                    wavelength_min = float(wl[0])
+                if wavelength_max is None:
+                    wavelength_max = float(wl[1])
             else:
-                raise ValueError("Wavelength min/max not provided and not found in input file.")
+                raise ValueError(
+                    "Wavelength min/max not provided and not found in input file."
+                )
 
         keys_to_load = [
-            "peaks/intensity", "peaks/sigma", "peaks/radius",
-            "goniometer/R", "goniometer/axes", "goniometer/angles", "goniometer/names", 
-            "files", "file_offsets", "peaks/run_index", "peaks/image_index", 
-            "bank", "bank_ids", "sample/offset", "beam/ki_vec",
-            "peaks/pixel_r", "peaks/pixel_c" 
+            "peaks/intensity",
+            "peaks/sigma",
+            "peaks/radius",
+            "goniometer/R",
+            "goniometer/axes",
+            "goniometer/angles",
+            "goniometer/names",
+            "files",
+            "file_offsets",
+            "peaks/run_index",
+            "peaks/image_index",
+            "bank",
+            "bank_ids",
+            "sample/offset",
+            "beam/ki_vec",
+            "peaks/pixel_r",
+            "peaks/pixel_c",
         ]
         for k in keys_to_load:
-            if k in f: input_data[k] = f[k][()]
+            if k in f:
+                input_data[k] = f[k][()]
 
         if ki_vec is not None:
             ki_vec_val = np.array(ki_vec)
         else:
-            ki_vec_val = f["beam/ki_vec"][()] if "beam/ki_vec" in f else np.array([0.0, 0.0, 1.0])
+            ki_vec_val = (
+                f["beam/ki_vec"][()]
+                if "beam/ki_vec" in f
+                else np.array([0.0, 0.0, 1.0])
+            )
 
         detector_params = None
         peak_pixel_coords = None
@@ -151,33 +201,41 @@ def run_index(
 
         if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
             print("Reconstructing physical geometry from pixels for optimization...")
-            if not instrument_name or not original_nexus_filename: 
-                raise ValueError("ERROR: Finder file contains pixels. You must provide --instrument and --nexus to rebuild geometry.")
-                
+            if not instrument_name or not original_nexus_filename:
+                raise ValueError(
+                    "ERROR: Finder file contains pixels. You must provide --instrument and --nexus to rebuild geometry."
+                )
+
             pixel_r = f["peaks/pixel_r"][()]
             pixel_c = f["peaks/pixel_c"][()]
-            
+
             bank_array = None
-            if "bank" in f: bank_array = f["bank"][()]
-            elif "peaks/bank" in f: bank_array = f["peaks/bank"][()]
+            if "bank" in f:
+                bank_array = f["bank"][()]
+            elif "peaks/bank" in f:
+                bank_array = f["peaks/bank"][()]
             elif "bank_ids" in f and "peaks/image_index" in f:
                 b_ids = f["bank_ids"][()]
                 img_idx = f["peaks/image_index"][()]
                 bank_array = np.array([b_ids[int(idx)] for idx in img_idx])
             else:
-                bank_array = f["peaks/image_index"][()] 
-                
+                bank_array = f["peaks/image_index"][()]
+
             peaks_obj = Peaks(original_nexus_filename, instrument_name)
             from subhkl.config import beamlines
             from subhkl.instrument.detector import Detector
-            
+
             if refine_detector:
                 all_physical_banks = [int(k) for k in beamlines[instrument_name].keys()]
-                target_banks = refine_detector_banks if refine_detector_banks else sorted(all_physical_banks)
+                target_banks = (
+                    refine_detector_banks
+                    if refine_detector_banks
+                    else sorted(all_physical_banks)
+                )
 
                 centers, uhats, vhats, m, n, pw, ph = [], [], [], [], [], [], []
                 bank_to_idx = {}
-                
+
                 for idx, b_id in enumerate(target_banks):
                     try:
                         det = peaks_obj.get_detector(b_id)
@@ -193,70 +251,86 @@ def run_index(
                         print(f"WARNING: Could not load geometry for bank {b_id}: {e}")
 
                 detector_params = {
-                    'centers': centers, 'uhats': uhats, 'vhats': vhats,
-                    'm': m, 'n': n, 'pw': pw, 'ph': ph,
-                    'modes': detector_modes,
-                    'radial_bound': detector_radial_bound_frac,
-                    'global_rot_bound_deg': detector_global_rot_bound_deg,
-                    'global_rot_axis': np.array(detector_global_rot_axis),
-                    'global_trans_bound_meters': detector_global_trans_bound_meters
+                    "centers": centers,
+                    "uhats": uhats,
+                    "vhats": vhats,
+                    "m": m,
+                    "n": n,
+                    "pw": pw,
+                    "ph": ph,
+                    "modes": detector_modes,
+                    "radial_bound": detector_radial_bound_frac,
+                    "global_rot_bound_deg": detector_global_rot_bound_deg,
+                    "global_rot_axis": np.array(detector_global_rot_axis),
+                    "global_trans_bound_meters": detector_global_trans_bound_meters,
                 }
-            
+
             xyz_out = np.zeros((len(pixel_r), 3))
             tt_out = np.zeros(len(pixel_r))
             az_out = np.zeros(len(pixel_r))
-            
+
             u_offsets = np.zeros(len(pixel_r))
             v_offsets = np.zeros(len(pixel_r))
             bank_indices = np.zeros(len(pixel_r), dtype=np.int32)
-            
+
             for phys_bank in np.unique(bank_array):
                 mask = bank_array == phys_bank
-                if not np.any(mask): continue
-                    
+                if not np.any(mask):
+                    continue
+
                 try:
                     det_config = beamlines[instrument_name][str(int(phys_bank))]
                     det = Detector(det_config)
-                    
+
                     xyz_p = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
                     xyz_out[mask] = xyz_p
-                    
+
                     tt_out[mask], az_out[mask] = det.pixel_to_angles(
                         pixel_r[mask], pixel_c[mask], ki_vec=ki_vec_val
                     )
-                    
+
                     if refine_detector and int(phys_bank) in bank_to_idx:
                         bank_indices[mask] = bank_to_idx[int(phys_bank)]
                         u_offsets[mask] = np.dot(xyz_p - det.center, det.uhat)
                         v_offsets[mask] = np.dot(xyz_p - det.center, det.vhat)
-                        
+
                 except KeyError as e:
-                    print(f"Warning: Could not rebuild geometry for bank {phys_bank}: {e}")
-                    
+                    print(
+                        f"Warning: Could not rebuild geometry for bank {phys_bank}: {e}"
+                    )
+
             input_data["peaks/xyz"] = xyz_out
             input_data["peaks/two_theta"] = tt_out
             input_data["peaks/azimuthal"] = az_out
-            
+
             if refine_detector:
                 peak_pixel_coords = {
-                    'u_offsets': u_offsets.tolist(),
-                    'v_offsets': v_offsets.tolist(),
-                    'bank_indices': bank_indices.tolist()
+                    "u_offsets": u_offsets.tolist(),
+                    "v_offsets": v_offsets.tolist(),
+                    "bank_indices": bank_indices.tolist(),
                 }
         else:
-            raise ValueError("ERROR: Input file does not contain peaks/pixel_r and peaks/pixel_c. Cannot perform physically sound indexing.")
+            raise ValueError(
+                "ERROR: Input file does not contain peaks/pixel_r and peaks/pixel_c. Cannot perform physically sound indexing."
+            )
 
     if "peaks/image_index" in input_data:
         input_data["peaks/run_index"] = input_data["peaks/image_index"]
 
     # --- INJECT SECOND PHASE OF BOOTSTRAP PHYSICS ---
     if bootstrap_filename:
-        with h5py.File(bootstrap_filename, 'r') as b_f:
-            if "sample/offset" in b_f: input_data["sample/offset"] = b_f["sample/offset"][()]
-            if "beam/ki_vec" in b_f: ki_vec_val = b_f["beam/ki_vec"][()]
+        with h5py.File(bootstrap_filename, "r") as b_f:
+            if "sample/offset" in b_f:
+                input_data["sample/offset"] = b_f["sample/offset"][()]
+            if "beam/ki_vec" in b_f:
+                ki_vec_val = b_f["beam/ki_vec"][()]
 
     input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
-    input_data["sample/alpha"], input_data["sample/beta"], input_data["sample/gamma"] = alpha, beta, gamma
+    (
+        input_data["sample/alpha"],
+        input_data["sample/beta"],
+        input_data["sample/gamma"],
+    ) = alpha, beta, gamma
     input_data["sample/space_group"] = space_group
     input_data["instrument/wavelength"] = [float(wavelength_min), float(wavelength_max)]
     input_data["beam/ki_vec"] = ki_vec_val
@@ -265,36 +339,50 @@ def run_index(
     opt.wavelength = [float(wavelength_min), float(wavelength_max)]
 
     if bootstrap_filename:
-        with h5py.File(bootstrap_filename, 'r') as b_f:
-            if "optimization/goniometer_offsets" in b_f: 
+        with h5py.File(bootstrap_filename, "r") as b_f:
+            if "optimization/goniometer_offsets" in b_f:
                 opt.goniometer_offsets = b_f["optimization/goniometer_offsets"][()]
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
     print(f"Settings per run: Population Size={population_size}, Generations={gens}")
-    if freeze_orientation: print("ORIENTATION LOCKED: U Matrix will not be refined.")
-    if refine_lattice: print(f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds.")
-    if refine_sample: print(f"Refining sample offset with {1000 * sample_bound_meters} mm bounds.")
-    if refine_beam: print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
+    if freeze_orientation:
+        print("ORIENTATION LOCKED: U Matrix will not be refined.")
+    if refine_lattice:
+        print(f"Refining lattice parameters with {lattice_bound_frac * 100}% bounds.")
+    if refine_sample:
+        print(f"Refining sample offset with {1000 * sample_bound_meters} mm bounds.")
+    if refine_beam:
+        print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
     goniometer_names = None
     if refine_goniometer:
         if original_nexus_filename and instrument_name:
-            print(f"Refining goniometer angles from geometry file with {goniometer_bound_deg} deg bounds.")
+            print(
+                f"Refining goniometer angles from geometry file with {goniometer_bound_deg} deg bounds."
+            )
 
             is_merged = False
-            with h5py.File(original_nexus_filename, 'r') as f_check:
+            with h5py.File(original_nexus_filename, "r") as f_check:
                 if "images" in f_check and "goniometer/axes" in f_check:
                     is_merged = True
                     axes = f_check["goniometer/axes"][()]
                     angles = f_check["goniometer/angles"][()]
-                    names = [n.decode('utf-8') for n in f_check["goniometer/names"][()]] if "goniometer/names" in f_check else None
+                    names = (
+                        [n.decode("utf-8") for n in f_check["goniometer/names"][()]]
+                        if "goniometer/names" in f_check
+                        else None
+                    )
 
             if not is_merged:
-                axes, angles, names = get_rotation_data_from_nexus(original_nexus_filename, instrument_name)
+                axes, angles, names = get_rotation_data_from_nexus(
+                    original_nexus_filename, instrument_name
+                )
 
             if len(axes) == 0:
-                raise ValueError("ERROR: Could not extract goniometer axes from the provided nexus file.")
+                raise ValueError(
+                    "ERROR: Could not extract goniometer axes from the provided nexus file."
+                )
 
             opt.goniometer_axes = np.array(axes)
 
@@ -307,7 +395,9 @@ def run_index(
                 elif angles.ndim == 2 and angles.shape[0] == 1:
                     opt.goniometer_angles = np.tile(angles.T, (1, max_run_id + 1))
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
+                    raise ValueError(
+                        f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs."
+                    )
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 if angles.ndim == 2 and angles.shape[0] == 1:
@@ -315,15 +405,21 @@ def run_index(
                 elif angles.ndim == 2 and angles.shape[0] == num_peaks:
                     opt.goniometer_angles = angles.T
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
+                    raise ValueError(
+                        f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
+                    )
 
             goniometer_names = names
 
         elif opt.goniometer_axes is not None:
-            print(f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds.")
+            print(
+                f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
+            )
             goniometer_names = opt.goniometer_names
         else:
-            print("WARNING: refine_goniometer requested but goniometer data not found. Skipping.")
+            print(
+                "WARNING: refine_goniometer requested but goniometer data not found. Skipping."
+            )
             refine_goniometer = False
 
     init_params = None
@@ -331,7 +427,7 @@ def run_index(
         init_params = opt.get_bootstrap_params(
             refine_goniometer_axes=refine_goniometer_axes,
             bootstrap_filename=bootstrap_filename,
-            freeze_orientation=freeze_orientation
+            freeze_orientation=freeze_orientation,
         )
 
     num, hkl, lamda, U = opt.minimize(
@@ -367,11 +463,24 @@ def run_index(
     opt.reciprocal_lattice_B()
 
     copy_keys = [
-        "sample/space_group", "instrument/wavelength", "peaks/intensity",
-        "peaks/sigma", "peaks/radius", "goniometer/R", "goniometer/axes", 
-        "goniometer/angles", "goniometer/names", "files", "file_offsets", 
-        "peaks/run_index", "peaks/image_index", "bank", "sample/offset", 
-        "beam/ki_vec", "peaks/pixel_r", "peaks/pixel_c"
+        "sample/space_group",
+        "instrument/wavelength",
+        "peaks/intensity",
+        "peaks/sigma",
+        "peaks/radius",
+        "goniometer/R",
+        "goniometer/axes",
+        "goniometer/angles",
+        "goniometer/names",
+        "files",
+        "file_offsets",
+        "peaks/run_index",
+        "peaks/image_index",
+        "bank",
+        "sample/offset",
+        "beam/ki_vec",
+        "peaks/pixel_r",
+        "peaks/pixel_c",
     ]
 
     copied_data = {}
@@ -390,13 +499,17 @@ def run_index(
             f[key] = value
 
         def safe_write(grp, name, data):
-            if name in grp: del grp[name]
+            if name in grp:
+                del grp[name]
             grp[name] = data
 
         safe_write(f, "goniometer/R", opt.R)
-        if opt.goniometer_offsets is not None: safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
-        if opt.sample_offset is not None: safe_write(f, "sample/offset", opt.sample_offset)
-        if opt.ki_vec is not None: safe_write(f, "beam/ki_vec", opt.ki_vec)
+        if opt.goniometer_offsets is not None:
+            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
+        if opt.sample_offset is not None:
+            safe_write(f, "sample/offset", opt.sample_offset)
+        if opt.ki_vec is not None:
+            safe_write(f, "beam/ki_vec", opt.ki_vec)
 
         safe_write(f, "sample/a", opt.a)
         safe_write(f, "sample/b", opt.b)
@@ -421,14 +534,18 @@ def run_index(
             f["optimization/best_params"] = opt.x
 
         import json
-        flags = {
-            "refine_lattice": refine_lattice, "refine_goniometer": refine_goniometer,
-            "refine_sample": refine_sample, "refine_beam": refine_beam,
-            "refine_detector": refine_detector, "freeze_orientation": freeze_orientation,
-        }
-        f.create_dataset("optimization/flags", data=json.dumps(flags).encode('utf-8'))
 
-        if refine_detector and hasattr(opt, 'calibrated_centers'):
+        flags = {
+            "refine_lattice": refine_lattice,
+            "refine_goniometer": refine_goniometer,
+            "refine_sample": refine_sample,
+            "refine_beam": refine_beam,
+            "refine_detector": refine_detector,
+            "freeze_orientation": freeze_orientation,
+        }
+        f.create_dataset("optimization/flags", data=json.dumps(flags).encode("utf-8"))
+
+        if refine_detector and hasattr(opt, "calibrated_centers"):
             for b_idx, b_id in enumerate(target_banks):
                 grp_name = f"detector_calibration/bank_{b_id}"
                 f.create_group(grp_name)
@@ -436,6 +553,7 @@ def run_index(
                 f[f"{grp_name}/uhat"] = opt.calibrated_uhats[b_idx]
                 f[f"{grp_name}/vhat"] = opt.calibrated_vhats[b_idx]
     print("Done.")
+
 
 def run_finder(
     filename: str,
@@ -565,11 +683,12 @@ def run_finder(
 
 
 def run_metrics(
-    filename: str,
-    found_peaks_file: str | None = None,
+    file1: str,
+    file2: str | None = None,
     instrument: str | None = None,
     d_min: float | None = None,
     per_run: bool = False,
+    ki_vec: List[float] | np.ndarray = None,
 ):
     from subhkl.instrument.metrics import compute_metrics
 
@@ -581,7 +700,7 @@ def run_metrics(
         instrument=instrument,
         d_min=d_min,
         per_run=per_run,
-        ki_vec_override=ki_vec_arr
+        ki_vec_override=ki_vec,
     )
 
     if "error_message" in result:
@@ -603,6 +722,9 @@ def run_metrics(
     if per_run and "per_run_errors" in result:
         print("\nPER-RUN MEDIAN ANGULAR ERROR (deg) - Sorted by error:")
         for r, err, count in result["per_run_errors"]:
+            status = "BAD" if err > 1.0 else "OK"
+            print(f"  Run {r:4d}: {err:6.3f} ({count:4d} peaks) [{status}]")
+
 
 def run_peak_predictor(
     filename: str,
@@ -749,6 +871,7 @@ def run_peak_predictor(
         with h5py.File(indexed_hdf5_filename, "r") as f_in:
             if "detector_calibration" in f_in:
                 f_in.copy("detector_calibration", f)
+
 
 def run_rbf_integrator(
     filename: str,
@@ -1073,24 +1196,24 @@ def run_reduce(
     print(f"Saved {n_images} banks to {output_filename}")
 
 
-def run_merge_images(input_pattern: str,
-                     output_filename: str,
-                     a: float,
-                     b: float,
-                     c: float,
-                     alpha: float,
-                     beta: float,
-                     gamma: float,
-                     space_group: str,
-                     ):
+def run_merge_images(
+    input_pattern: str,
+    output_filename: str,
+    a: float,
+    b: float,
+    c: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    space_group: str,
+):
     from subhkl.core.spacegroup import get_space_group_object
+    import glob
 
     try:
         get_space_group_object(space_group)
     except ValueError as e:
-        print(f"ERROR: Invalid space group '{space_group}': {e}")
-        raise typer.Exit(code=1)
-    import glob
+        raise ValueError(f"ERROR: Invalid space group '{space_group}': {e}")
 
     if " " in input_pattern:
         h5_files = []
@@ -1115,10 +1238,9 @@ def run_merge_images(input_pattern: str,
         f["sample/alpha"] = alpha
         f["sample/beta"] = beta
         f["sample/gamma"] = gamma
-        f["sample/space_group"] = space_group.encode('utf-8')
+        f["sample/space_group"] = space_group.encode("utf-8")
 
     print(f"Successfully created {output_filename} with unit cell info embedded.")
-
 
 
 def run_zone_axis_search(
@@ -1126,15 +1248,8 @@ def run_zone_axis_search(
     peaks_h5_filename: str,
     instrument: str,
     output_h5_filename: str,
-    a: float,
-    b: float,
-    c: float,
-    alpha: float,
-    beta: float,
-    gamma: float,
-    space_group: str,
+    space_group: str = None,
     d_min: float = 1.0,
-    sigma: float = 2.0,
     vector_tolerance: float = 0.15,
     border_frac: float = 0.1,
     min_intensity: float = 50.0,
@@ -1172,6 +1287,16 @@ def run_zone_axis_search(
             [calc_goniometer_rotation_matrix(ax, ang) for ang in goniometer_angles]
         )
         file_offsets = f_in["file_offsets"][()]
+
+        a = float(f_in["sample/a"][()])
+        b = float(f_in["sample/b"][()])
+        c = float(f_in["sample/c"][()])
+        alpha = float(f_in["sample/alpha"][()])
+        beta = float(f_in["sample/beta"][()])
+        gamma = float(f_in["sample/gamma"][()])
+
+        if space_group is None:
+            space_group = f_in["sample/space_group"][()].decode("utf-8")
 
     # Dynamically slice the arrays based on the requested number of runs
     if num_runs > 0:

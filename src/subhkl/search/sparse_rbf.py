@@ -1750,7 +1750,10 @@ def _render_run_unrolled_plot(args):
     if plt.get_backend().lower() != "agg":
         plt.switch_backend("Agg")
 
-    plot_unrolled_detector(peaks, images, detectors, out_name=out_name, instrument=instrument)
+    plot_unrolled_detector(
+        peaks, images, detectors, out_name=out_name, instrument=instrument
+    )
+
 
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
@@ -1881,15 +1884,27 @@ def _render_and_save_rbf_plot(args):
     fig.savefig(out_name, bbox_inches="tight", dpi=150, pad_inches=0.2)
     plt.close(fig)
 
-def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
-                            alpha: float, gamma: float, max_peaks: int, show_progress: bool,
-                            all_R: np.ndarray = None, sample_offset: np.ndarray = None,
-                            ki_vec: np.ndarray = None, nominal_sigma: float = 2.0, anisotropic: bool = False,
-                            fit_mosaicity: bool = False,
-                            border_width: int = 0, chunk_size: int = 1024,
-                            create_visualizations: bool = False,
-                            file_prefix: str = None,
-                            max_workers: int = None):
+
+def integrate_peaks_rbf_ssn(
+    peak_dict: Dict,
+    peaks_obj,
+    sigmas: List[float],
+    alpha: float,
+    gamma: float,
+    max_peaks: int,
+    show_progress: bool,
+    all_R: np.ndarray = None,
+    sample_offset: np.ndarray = None,
+    ki_vec: np.ndarray = None,
+    nominal_sigma: float = 2.0,
+    anisotropic: bool = False,
+    fit_mosaicity: bool = False,
+    border_width: int = 0,
+    chunk_size: int = 1024,
+    create_visualizations: bool = False,
+    file_prefix: str = None,
+    max_workers: int = None,
+):
     """
     Args:
         peak_dict: Dictionary containing peak arrays
@@ -2296,7 +2311,15 @@ def integrate_peaks_rbf_ssn(peak_dict: Dict, peaks_obj, sigmas: List[float],
                 ki_vec=ki_vec,
             )
 
-            run_tasks.append((out_name, run_peaks, data['images'], data['detectors'], peaks_obj.instrument))
+            run_tasks.append(
+                (
+                    out_name,
+                    run_peaks,
+                    data["images"],
+                    data["detectors"],
+                    peaks_obj.instrument,
+                )
+            )
 
         if max_workers is None:
             max_workers = os.cpu_count()

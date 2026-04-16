@@ -303,45 +303,49 @@ class Peaks:
 
     def write_hdf5(self, output_filename, detector_peaks, instrument_wavelength):
         """
-        Directly writes finder peaks to HDF5. 
-        NOTE: 'xyz', 'two_theta', and 'azimuthal' are intentionally excluded to force downstream tools 
+        Directly writes finder peaks to HDF5.
+        NOTE: 'xyz', 'two_theta', and 'azimuthal' are intentionally excluded to force downstream tools
         to rebuild physical coordinates dynamically using the detector config.
         """
         with h5py.File(output_filename, "w") as f:
             # Physics metadata
             f.attrs["instrument"] = self.instrument
             f["instrument/wavelength"] = instrument_wavelength
-            
+
             # Gonio Metadata
             if detector_peaks.R and any(r is not None for r in detector_peaks.R):
                 f["goniometer/R"] = np.array(detector_peaks.R)
             if detector_peaks.gonio_axes is not None:
                 f["goniometer/axes"] = detector_peaks.gonio_axes
-            if detector_peaks.gonio_angles and any(a is not None for a in detector_peaks.gonio_angles):
+            if detector_peaks.gonio_angles and any(
+                a is not None for a in detector_peaks.gonio_angles
+            ):
                 f["goniometer/angles"] = np.array(detector_peaks.gonio_angles)
             if detector_peaks.gonio_names is not None:
                 dt = h5py.string_dtype(encoding="utf-8")
-                f.create_dataset("goniometer/names", data=detector_peaks.gonio_names, dtype=dt)
+                f.create_dataset(
+                    "goniometer/names", data=detector_peaks.gonio_names, dtype=dt
+                )
 
             # Peak Data
             f["peaks/intensity"] = detector_peaks.intensity
             f["peaks/sigma"] = detector_peaks.sigma
             f["peaks/radius"] = detector_peaks.radii
-            
+
             # Use pixel coordinates exclusively
             f["peaks/pixel_r"] = detector_peaks.peak_rows
             f["peaks/pixel_c"] = detector_peaks.peak_cols
-                
+
             f["bank"] = detector_peaks.bank
             f["peaks/image_index"] = detector_peaks.image_index
             f["peaks/run_index"] = detector_peaks.run_id
 
     def _assemble_detector_peaks(
-        self, 
-        results_by_key, 
-        precomputed_peaks=None, 
+        self,
+        results_by_key,
+        precomputed_peaks=None,
         visualize=False,
-        max_workers=None, 
+        max_workers=None,
         instrument_label=None,
         file_prefix=None,
     ):
@@ -356,7 +360,7 @@ class Peaks:
         intensity: list[float] = []
         sigma: list[float] = []
         radii: list[float] = []
-        xyz_out: list[list[float]] = [] 
+        xyz_out: list[list[float]] = []
         banks: list[int] = []
         image_indices: list[int] = []
         run_ids: list[int] = []
@@ -449,14 +453,16 @@ class Peaks:
 
                 out_name = os.path.join(base_dir, f"{data['label']}-found.png")
 
-                run_tasks.append((
-                    run_peaks, 
-                    data['images'], 
-                    data['detectors'], 
-                    data['finder_peaks'], 
-                    out_name,
-                    instrument_label
-                ))
+                run_tasks.append(
+                    (
+                        run_peaks,
+                        data["images"],
+                        data["detectors"],
+                        data["finder_peaks"],
+                        out_name,
+                        instrument_label,
+                    )
+                )
 
             if max_workers is None:
                 max_workers = os.cpu_count()
@@ -464,15 +470,24 @@ class Peaks:
             max_workers = min(max_workers, len(run_tasks))
 
             ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
+            with ProcessPoolExecutor(
+                mp_context=ctx, max_workers=max_workers
+            ) as executor:
                 # Use submit instead of map to guarantee exceptions aren't swallowed
-                futures = {executor.submit(_safe_plot_wrapper, t): t[4] for t in run_tasks}
-                for future in tqdm(as_completed(futures), total=len(futures), desc="Rendering Finder Unrolled Plots"):
+                futures = {
+                    executor.submit(_safe_plot_wrapper, t): t[4] for t in run_tasks
+                }
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="Rendering Finder Unrolled Plots",
+                ):
                     try:
                         out_path = future.result()
-                        # print(f"Saved: {out_path}") # Optional debug print
-                    except Exception as e:
+                        tqdm.write(f"Saved: {out_path}")
+                    except Exception:
                         import traceback
+
                         print(f"Visualization failed for {futures[future]}:")
                         traceback.print_exc()
 

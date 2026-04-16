@@ -2,11 +2,11 @@
 from typing import Annotated
 import typer
 import h5py
+import os
 
 from subhkl.commands import (
     run_index,
     run_finder,
-    run_rbf_integrator,
     run_metrics,
     run_peak_predictor,
     run_integrator,
@@ -16,13 +16,9 @@ from subhkl.commands import (
     run_zone_axis_search,
 )
 
-from subhkl.io.export import FinderConcatenateMerger, ImageStackMerger, MTZExporter
-from subhkl.integration import Peaks
-from subhkl.instrument.metrics import compute_metrics
-from subhkl.optimization import FindUB
-from subhkl.core.spacegroup import get_space_group_object
 
 app = typer.Typer()
+
 
 def apply_detector_calibration(hdf5_filename: str, instrument: str):
     """
@@ -43,14 +39,22 @@ def apply_detector_calibration(hdf5_filename: str, instrument: str):
             for bank_key in calib_grp.keys():
                 bank_id = bank_key.replace("bank_", "")
                 if instrument in beamlines and bank_id in beamlines[instrument]:
-                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key]["center"][()].tolist()
-                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key]["uhat"][()].tolist()
-                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key]["vhat"][()].tolist()
+                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key][
+                        "center"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key][
+                        "uhat"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key][
+                        "vhat"
+                    ][()].tolist()
                     count += 1
             if count > 0:
                 print(f"Successfully applied calibration to {count} detector panels.")
 
+
 app = typer.Typer()
+
 
 @app.command()
 def finder(
@@ -139,46 +143,6 @@ def finder(
         max_workers=max_workers,
     )
 
-    input_data["sample/a"], input_data["sample/b"], input_data["sample/c"] = a, b, c
-    (
-        input_data["sample/alpha"],
-        input_data["sample/beta"],
-        input_data["sample/gamma"],
-    ) = alpha, beta, gamma
-    input_data["sample/space_group"] = sg_to_use
-    input_data["instrument/wavelength"] = [float(wavelength_min), float(wavelength_max)]
-
-    gonio_axes_list = (
-        [x.strip() for x in refine_goniometer_axes.split(",")]
-        if refine_goniometer_axes
-        else None
-    )
-
-    run_index(
-        input_data=input_data,
-        output_peaks_filename=output_peaks_filename,
-        strategy_name=strategy_name,
-        population_size=population_size,
-        gens=gens,
-        sigma_init=sigma_init,
-        n_runs=n_runs,
-        seed=seed,
-        refine_lattice=refine_lattice,
-        lattice_bound_frac=lattice_bound_frac,
-        bootstrap_filename=bootstrap_filename,
-        refine_goniometer=refine_goniometer,
-        refine_goniometer_axes=gonio_axes_list,
-        goniometer_bound_deg=goniometer_bound_deg,
-        refine_sample=refine_sample,
-        sample_bound_meters=sample_bound_meters,
-        refine_beam=refine_beam,
-        beam_bound_deg=beam_bound_deg,
-        nexus_filename=original_nexus_filename,
-        instrument_name=instrument_name,
-        batch_size=batch_size,
-        wavelength_min=input_data["instrument/wavelength"][0],
-        wavelength_max=input_data["instrument/wavelength"][1],
-    )
 
 @app.command()
 def indexer(
@@ -187,41 +151,95 @@ def indexer(
     a: Annotated[float | None, typer.Option(help="Unit cell parameter a")] = None,
     b: Annotated[float | None, typer.Option(help="Unit cell parameter b")] = None,
     c: Annotated[float | None, typer.Option(help="Unit cell parameter c")] = None,
-    alpha: Annotated[float | None, typer.Option(help="Unit cell parameter alpha")] = None,
+    alpha: Annotated[
+        float | None, typer.Option(help="Unit cell parameter alpha")
+    ] = None,
     beta: Annotated[float | None, typer.Option(help="Unit cell parameter beta")] = None,
-    gamma: Annotated[float | None, typer.Option(help="Unit cell parameter gamma")] = None,
-    space_group: Annotated[str | None, typer.Option(help="Space group (e.g. 'P 1')")] = None,
+    gamma: Annotated[
+        float | None, typer.Option(help="Unit cell parameter gamma")
+    ] = None,
+    space_group: Annotated[
+        str | None, typer.Option(help="Space group (e.g. 'P 1')")
+    ] = None,
     wavelength_min: Annotated[float | None, typer.Option("--wavelength-min")] = None,
     wavelength_max: Annotated[float | None, typer.Option("--wavelength-max")] = None,
-    ki_vec: Annotated[str | None, typer.Option("--ki-vec", help="Override incident beam vector (e.g., '0,0,1' or '0,0,-1')")] = None,
-    original_nexus_filename: Annotated[str | None, typer.Option("--nexus", help="Original nexus file for instrument definitions")] = None,
+    ki_vec: Annotated[
+        str | None,
+        typer.Option(
+            "--ki-vec", help="Override incident beam vector (e.g., '0,0,1' or '0,0,-1')"
+        ),
+    ] = None,
+    original_nexus_filename: Annotated[
+        str | None,
+        typer.Option("--nexus", help="Original nexus file for instrument definitions"),
+    ] = None,
     instrument_name: Annotated[str | None, typer.Option("--instrument")] = None,
     strategy_name: Annotated[str, typer.Option("--strategy")] = "DE",
     sigma_init: Annotated[float | None, typer.Option("--sigma-init")] = None,
     n_runs: Annotated[int, typer.Option("--n-runs", "-n")] = 1,
-    population_size: Annotated[int, typer.Option("--population-size", "--popsize")] = 1000,
+    population_size: Annotated[
+        int, typer.Option("--population-size", "--popsize")
+    ] = 1000,
     gens: Annotated[int, typer.Option("--gens")] = 100,
     seed: Annotated[int, typer.Option("--seed")] = 0,
     tolerance_deg: Annotated[float, typer.Option("--tolerance-deg")] = 0.1,
-    freeze_orientation: Annotated[bool, typer.Option("--freeze-orientation", help="Lock the U matrix to its initial state.")] = False,
+    freeze_orientation: Annotated[
+        bool,
+        typer.Option(
+            "--freeze-orientation", help="Lock the U matrix to its initial state."
+        ),
+    ] = False,
     refine_lattice: Annotated[bool, typer.Option("--refine-lattice")] = False,
     lattice_bound_frac: Annotated[float, typer.Option("--lattice-bound-frac")] = 0.05,
     refine_goniometer: Annotated[bool, typer.Option("--refine-goniometer")] = False,
-    refine_goniometer_axes: Annotated[str | None, typer.Option("--refine-goniometer-axes")] = None,
-    goniometer_bound_deg: Annotated[float, typer.Option("--goniometer-bound-deg")] = 5.0,
+    refine_goniometer_axes: Annotated[
+        str | None, typer.Option("--refine-goniometer-axes")
+    ] = None,
+    goniometer_bound_deg: Annotated[
+        float, typer.Option("--goniometer-bound-deg")
+    ] = 5.0,
     refine_sample: Annotated[bool, typer.Option("--refine-sample")] = False,
-    sample_bound_meters: Annotated[float, typer.Option("--sample-bound-meters")] = 0.005,
+    sample_bound_meters: Annotated[
+        float, typer.Option("--sample-bound-meters")
+    ] = 0.005,
     refine_beam: Annotated[bool, typer.Option("--refine-beam")] = False,
     beam_bound_deg: Annotated[float, typer.Option("--beam-bound-deg")] = 1.0,
     refine_detector: Annotated[bool, typer.Option("--refine-detector")] = False,
-    refine_detector_banks: Annotated[str | None, typer.Option("--refine-detector-banks", help="Comma-separated bank IDs to refine")] = None,
-    detector_modes: Annotated[str, typer.Option("--detector-modes", help="Comma-separated list of refinement modes (e.g. radial,global_rot,independent)")] = "independent",
-    detector_trans_bound_meters: Annotated[float, typer.Option("--detector-trans-bound-meters")] = 0.005,
-    detector_rot_bound_deg: Annotated[float, typer.Option("--detector-rot-bound-deg")] = 1.0,
-    detector_global_rot_bound_deg: Annotated[float, typer.Option("--detector-global-rot-bound-deg")] = 2.0,
-    detector_global_rot_axis: Annotated[str, typer.Option("--detector-global-rot-axis", help="Axis vector for global_rot_axis mode (e.g. 0,1,0)")] = "0,1,0",
-    detector_global_trans_bound_meters: Annotated[float, typer.Option("--detector-global-trans-bound-meters")] = 0.01,
-    detector_radial_bound_frac: Annotated[float, typer.Option("--detector-radial-bound-frac")] = 0.05,
+    refine_detector_banks: Annotated[
+        str | None,
+        typer.Option(
+            "--refine-detector-banks", help="Comma-separated bank IDs to refine"
+        ),
+    ] = None,
+    detector_modes: Annotated[
+        str,
+        typer.Option(
+            "--detector-modes",
+            help="Comma-separated list of refinement modes (e.g. radial,global_rot,independent)",
+        ),
+    ] = "independent",
+    detector_trans_bound_meters: Annotated[
+        float, typer.Option("--detector-trans-bound-meters")
+    ] = 0.005,
+    detector_rot_bound_deg: Annotated[
+        float, typer.Option("--detector-rot-bound-deg")
+    ] = 1.0,
+    detector_global_rot_bound_deg: Annotated[
+        float, typer.Option("--detector-global-rot-bound-deg")
+    ] = 2.0,
+    detector_global_rot_axis: Annotated[
+        str,
+        typer.Option(
+            "--detector-global-rot-axis",
+            help="Axis vector for global_rot_axis mode (e.g. 0,1,0)",
+        ),
+    ] = "0,1,0",
+    detector_global_trans_bound_meters: Annotated[
+        float, typer.Option("--detector-global-trans-bound-meters")
+    ] = 0.01,
+    detector_radial_bound_frac: Annotated[
+        float, typer.Option("--detector-radial-bound-frac")
+    ] = 0.05,
     bootstrap_filename: Annotated[str | None, typer.Option("--bootstrap")] = None,
     batch_size: Annotated[int | None, typer.Option("--batch-size")] = None,
     loss_method: Annotated[str, typer.Option("--loss-method")] = "cosine",
@@ -231,17 +249,40 @@ def indexer(
 
     # 1. Safely Parse Comma-Separated Strings into Python Lists
     ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
-    gonio_axes_parsed = [x.strip() for x in refine_goniometer_axes.split(",")] if refine_goniometer_axes else None
-    det_banks_parsed = [int(x.strip()) for x in refine_detector_banks.split(",")] if refine_detector_banks else None
-    det_modes_parsed = [x.strip().lower() for x in detector_modes.split(",")] if detector_modes else ["independent"]
-    global_rot_axis_parsed = [float(x.strip()) for x in detector_global_rot_axis.split(",")] if detector_global_rot_axis else [0.0, 1.0, 0.0]
+    gonio_axes_parsed = (
+        [x.strip() for x in refine_goniometer_axes.split(",")]
+        if refine_goniometer_axes
+        else None
+    )
+    det_banks_parsed = (
+        [int(x.strip()) for x in refine_detector_banks.split(",")]
+        if refine_detector_banks
+        else None
+    )
+    det_modes_parsed = (
+        [x.strip().lower() for x in detector_modes.split(",")]
+        if detector_modes
+        else ["independent"]
+    )
+    global_rot_axis_parsed = (
+        [float(x.strip()) for x in detector_global_rot_axis.split(",")]
+        if detector_global_rot_axis
+        else [0.0, 1.0, 0.0]
+    )
 
     # 2. Hand off to Core Logic
     run_index(
         peaks_h5_filename=peaks_h5_filename,
         output_peaks_filename=output_peaks_filename,
-        a=a, b=b, c=c, alpha=alpha, beta=beta, gamma=gamma, space_group=space_group,
-        wavelength_min=wavelength_min, wavelength_max=wavelength_max,
+        a=a,
+        b=b,
+        c=c,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        space_group=space_group,
+        wavelength_min=wavelength_min,
+        wavelength_max=wavelength_max,
         ki_vec=ki_vec_parsed,
         original_nexus_filename=original_nexus_filename,
         instrument_name=instrument_name,
@@ -275,46 +316,61 @@ def indexer(
         batch_size=batch_size,
         loss_method=loss_method,
         d_min=d_min,
-        d_max=d_max
+        d_max=d_max,
     )
+
 
 @app.command()
 def metrics(
-    file1: str = typer.Argument(..., help="Primary file (e.g., indexer.h5 or predictor.h5)"),
-    file2: str | None = typer.Option(
-        None,
-        "--file2",
-        help="Optional secondary file to match against (e.g., finder.h5).",
-    ),
-    instrument: str | None = typer.Option(
-        None,
-        "--instrument",
-        help="Instrument name (required if using file2 or predictor outputs).",
-    ),
-    d_min: float = typer.Option(
-        None,
-        "--d-min",
-        help="Optional minimum d-spacing filter for metrics calculation.",
-    ),
-    per_run: bool = typer.Option(
-        False,
-        "--per-run",
-        help="Calculate and display metrics for each run/image.",
-    ),
-    ki_vec: str = typer.Option(None, "--ki-vec", help="Override incident beam vector (e.g. '0,0,-1')"),
+    file1: Annotated[
+        str, typer.Argument(help="Primary file (e.g., indexer.h5 or predictor.h5)")
+    ],
+    file2: Annotated[
+        str | None,
+        typer.Option(
+            "--file2",
+            help="Optional secondary file to match against (e.g., finder.h5).",
+        ),
+    ] = None,
+    instrument: Annotated[
+        str | None,
+        typer.Option(
+            "--instrument",
+            help="Instrument name (required if using file2 or predictor outputs).",
+        ),
+    ] = None,
+    d_min: Annotated[
+        float | None,
+        typer.Option(
+            "--d-min", help="Optional minimum d-spacing filter for metrics calculation."
+        ),
+    ] = None,
+    per_run: Annotated[
+        bool,
+        typer.Option(
+            "--per-run", help="Calculate and display metrics for each run/image."
+        ),
+    ] = False,
+    ki_vec: Annotated[
+        str | None,
+        typer.Option(
+            "--ki-vec", help="Override incident beam vector (e.g., '0,0,1' or '0,0,-1')"
+        ),
+    ] = None,
 ):
     """
     CLI command to compute and display indexing quality metrics.
     Compares HKL accuracy internally (file1), or spatial matching between file1 (predicted) and file2 (observed).
     """
-    # dynamically shifts coordinates using the detector_calibration group.
-    result = run_metrics(
+    ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
+
+    run_metrics(
         file1=file1,
         file2=file2,
         instrument=instrument,
         d_min=d_min,
         per_run=per_run,
-        ki_vec_override=ki_vec_arr
+        ki_vec_override=ki_vec_parsed,
     )
 
 
@@ -335,12 +391,8 @@ def peak_predictor(
     run_peak_predictor(
         filename,
         instrument,
-        wavelength_min=wavelength[0],
-        wavelength_max=wavelength[1],
-    )
-
-    print(
-        f"Predicting peaks for {len(peaks.image.ims)} images using solution from {indexed_hdf5_filename}"
+        wavelength_min=wavel_min,
+        wavelength_max=wavel_max,
     )
 
 
@@ -391,11 +443,14 @@ def integrator(
         max_workers,
     )
 
+
 @app.command()
 def mtz_exporter(
     indexed_h5_filename: str,
     output_mtz_filename: str,
-    space_group: str = typer.Option(None, help="Optional. Loaded from indexer h5 if missing."),
+    space_group: str = typer.Option(
+        None, help="Optional. Loaded from indexer h5 if missing."
+    ),
 ):
     run_mtz_exporter(indexed_h5_filename, output_mtz_filename, space_group)
 
@@ -431,6 +486,7 @@ def merge_images(
         print(str(e))
         raise typer.Exit(code=1)
 
+
 @app.command()
 def zone_axis_search(
     merged_h5_filename: str,
@@ -438,9 +494,10 @@ def zone_axis_search(
     instrument: str,
     output_h5_filename: str,
     d_min: float = 1.0,
-    sigma: Annotated[
-        float, typer.Option(help="(Legacy) Replaced by vector_tolerance.")
-    ] = 2.0,
+    space_group: Annotated[
+        str,
+        typer.Option(help="(Optional) Space group for zone-axis search"),
+    ] = None,
     vector_tolerance: Annotated[
         float,
         typer.Option(
@@ -496,15 +553,8 @@ def zone_axis_search(
         peaks_h5_filename=peaks_h5_filename,
         instrument=instrument,
         output_h5_filename=output_h5_filename,
-        a=a,
-        b=b,
-        c=c,
-        alpha=alpha,
-        beta=beta,
-        gamma=gamma,
         space_group=space_group,
         d_min=d_min,
-        sigma=sigma,
         vector_tolerance=vector_tolerance,
         border_frac=border_frac,
         min_intensity=min_intensity,
@@ -519,6 +569,7 @@ def zone_axis_search(
         output_hough=output_hough,
         batch_size=batch_size,
     )
+
 
 if __name__ == "__main__":
     app()
