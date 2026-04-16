@@ -173,7 +173,7 @@ class MTZExporter:
             self.gamma = float(np.array(f["sample/gamma"]))
 
             if space_group is None:
-                space_group = f["sample/space_group"]
+                space_group = str(f["sample/space_group"])
 
             self.h = np.array(f["peaks/h"])
             self.k = np.array(f["peaks/k"])
