@@ -9,61 +9,8 @@ import scipy.linalg
 from subhkl.instrument.detector import scattering_vector_from_angles
 from subhkl.core.spacegroup import get_space_group_object
 
-from subhkl.utils.shim import (
-    CMA_ES,
-    HAS_JAX,
-    OPTIMIZATION_BACKEND,
-    PSO,
-    DifferentialEvolution,
-    Mesh,
-    NamedSharding,
-    P,
-    jax,
-    lax,
-    jnp,
-    jnp_update_add,
-    jnp_update_set,
-    jscipy_linalg,
-)
-
-if HAS_JAX:
-    jax.config.update("jax_enable_x64", True)
-
-__all__ = ["OPTIMIZATION_BACKEND"]
-
-try:
-    from tqdm import trange
-except ImportError:
-    trange = None
-
-
-def require_jax():
-    if not HAS_JAX:
-        raise ImportError(
-            "JAX and evosax are required for this functionality. "
-            'Install with: pip install -e ".[jax]" or pip install jax jaxlib evosax'
-        )
-
-
-def _inverse_map_param(value, bound):
-    if bound < 1e-12:
-        return 0.5
-    norm = (value + bound) / (2.0 * bound)
-    return np.clip(norm, 0.0, 1.0)
-
-
 def _forward_map_param(norm, bound):
     return norm * 2.0 * bound - bound
-
-
-def _inverse_map_lattice(value, nominal, frac_bound):
-    delta = np.abs(nominal) * frac_bound
-    min_val = nominal - delta
-    max_val = nominal + delta
-    if (max_val - min_val) < 1e-12:
-        return 0.5
-    norm = (value - min_val) / (max_val - min_val)
-    return np.clip(norm, 0.0, 1.0)
 
 
 def _forward_map_lattice(norm, nominal, frac_bound):
