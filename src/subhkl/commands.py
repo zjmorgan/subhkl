@@ -719,6 +719,22 @@ def run_finder(
         instrument_wavelength=[peaks.wavelength.min, peaks.wavelength.max],
     )
 
+    # copy over cell params
+    copy_keys = [
+        "sample/a",
+        "sample/b",
+        "sample/c",
+        "sample/alpha",
+        "sample/beta",
+        "sample/gamma",
+        "sample/space_group",
+    ]
+
+    with h5py.File(output_filename, "a") as f:
+        with h5py.File(filename, "r") as f_in:
+            for key in copy_keys:
+                if key in f_in:
+                    f_in.copy(f_in[key], f, key)
 
 def run_metrics(
     file1: str,
