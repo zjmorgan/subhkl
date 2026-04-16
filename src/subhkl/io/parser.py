@@ -6,6 +6,7 @@ import os
 
 from subhkl.commands import (
     run_index,
+    run_rbf_integrator,
     run_finder,
     run_metrics,
     run_peak_predictor,
@@ -316,6 +317,78 @@ def indexer(
         loss_method=loss_method,
         d_min=d_min,
         d_max=d_max,
+    )
+
+
+@app.command()
+def rbf_integrator(
+    filename: Annotated[str, typer.Argument(help="Merged HDF5 image stack")],
+    instrument: Annotated[str, typer.Argument(help="Instrument name")],
+    integration_peaks_filename: Annotated[
+        str, typer.Argument(help="Predicted peaks HDF5 file")
+    ],
+    output_filename: Annotated[
+        str, typer.Argument(help="Output integrated peaks HDF5 file")
+    ],
+    alpha: Annotated[
+        float, typer.Option("--alpha", help="Peak over background threshold (Z-score)")
+    ] = 1.0,
+    gamma: Annotated[
+        float, typer.Option("--gamma", help="Besov space weight exponent")
+    ] = 1.0,
+    sigmas: Annotated[str, typer.Option(help="Unstretched peak radii")] = "1.0,2.0,4.0",
+    nominal_sigma: Annotated[
+        float,
+        typer.Option(
+            help="The typical peak radius, used as a fallback for weak reflections"
+        ),
+    ] = 1.0,
+    anisotropic: Annotated[
+        bool, typer.Option(help="Integrate anisotropic quasi-Laue peaks")
+    ] = False,
+    fit_mosaicity: Annotated[
+        bool,
+        typer.Option(
+            help="Whether to fit the mosaicity separately from sample dimensions to explain peak shape. Only use in non-spherical detector geometries."
+        ),
+    ] = False,
+    max_peaks: Annotated[
+        int,
+        typer.Option(
+            "--max-peaks", help="Maximum peaks per panel (used for JAX matrix padding)"
+        ),
+    ] = 500,
+    rel_border_width: Annotated[
+        float, typer.Option(help="Border width in fraction of image size")
+    ] = 0.0,
+    show_progress: Annotated[bool, typer.Option("--show-progress")] = True,
+    create_visualizations: bool = False,
+    chunk_size: int = 256,
+    max_workers: Annotated[
+        int | None, typer.Option(help="Maximum number of CPU tasks for visualization.")
+    ] = None,
+):
+    """
+    Integrates predicted peaks using the Dense Sparse RBF network approach on GPU.
+    Calculates intensities and rigorous I/SIGI via Fisher Information matrix SVD.
+    """
+    run_rbf_integrator(
+        filename=filename,
+        instrument=instrument,
+        integration_peaks_filename=integration_peaks_filename,
+        output_filename=output_filename,
+        alpha=alpha,
+        gamma=gamma,
+        sigmas=sigmas,
+        nominal_sigma=nominal_sigma,
+        anisotropic=anisotropic,
+        fit_mosaicity=fit_mosaicity,
+        max_peaks=max_peaks,
+        rel_border_width=rel_border_width,
+        show_progress=show_progress,
+        create_visualizations=create_visualizations,
+        chunk_size=chunk_size,
+        max_workers=max_workers,
     )
 
 
