@@ -100,15 +100,35 @@ def process_single_image(
 
     # 2. Setup Mask
     if mask_file is not None:
-        mask_im = np.array(PIL.Image.open(mask_file))
-        if erosion:
-            radius = max(1, int(min(mask_im.shape) * erosion))
-            kernel = np.ones((radius, radius), dtype=np.uint8)
-            mask = cv2.erode(mask_im, kernel).astype(bool)
-        else:
-            mask = mask_im.astype(bool)
+        mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
+
+    if erosion:
+        radius = max(1, int(min(mask.shape) * erosion))
+        kernel = np.ones((radius, radius), dtype=np.uint8)
+        mask = cv2.erode(
+            mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
+        ).astype(bool)
+
+    # ==========================================
+    # 2.5 STRICTLY ENFORCE MASK ON CANDIDATES
+    # ==========================================
+    valid_indices = []
+    for idx, (r, c) in enumerate(centers):
+        r_int, c_int = int(r), int(c)
+        # Only keep centers that fall inside the image bounds AND the true mask
+        if (
+            0 <= r_int < mask.shape[0]
+            and 0 <= c_int < mask.shape[1]
+            and mask[r_int, c_int]
+        ):
+            valid_indices.append(idx)
+
+    # Slice the arrays to drop forbidden peaks
+    centers = centers[valid_indices]
+    i = i[valid_indices]
+    j = j[valid_indices]
 
     # 3. Integration Setup (Sigma Override)
     # Rebuild integrator from params to avoid sharing state
@@ -402,15 +422,19 @@ def integrate_single_bank(
     # --- INTEGRATION ---
     mask_file, mask_erosion = (
         integration_params.get("integration_mask_file"),
-        integration_params.get("integration_mask_rel_erosion_radius", 0.05),
+        integration_params.get("integration_mask_rel_erosion_radius", None),
     )
     if mask_file is not None:
-        mask_im = np.array(PIL.Image.open(mask_file))
-        radius = max(1, int(min(mask_im.shape) * mask_erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
-        mask = cv2.erode(mask_im, kernel).astype(bool)
+        mask = np.array(PIL.Image.open(mask_file))
     else:
-        mask = np.full(image.shape, True)
+        mask = np.full(image.shape, 1, dtype=np.uint8)
+
+    if mask_erosion:
+        radius = max(1, int(min(mask.shape) * mask_erosion))
+        kernel = np.ones((radius, radius), dtype=np.uint8)
+        mask = cv2.erode(
+            mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
+        ).astype(bool)
 
     integrator = PeakIntegrator.build_from_dictionary(integration_params.copy())
     if integration_params.get("region_growth_minimum_sigma") is not None:
