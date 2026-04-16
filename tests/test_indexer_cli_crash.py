@@ -65,7 +65,7 @@ def test_indexer_run_gap_crash(tmp_path):
     # The CLI should validate the SG before starting optimization.
     import typer
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(ValueError):
         indexer(
             peaks_h5_filename=str(peaks_h5),
             output_peaks_filename=str(output_h5),

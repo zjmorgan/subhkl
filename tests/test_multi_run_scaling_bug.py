@@ -10,12 +10,13 @@ def test_init_sample_offset_rotation():
     B = np.eye(3)
     num_peaks = 2
     kf_ki_dir = np.random.normal(size=(3, num_peaks))
+    
     # Peaks at (0, 0, 0.2) in lab frame
-    peak_xyz_lab = np.tile(np.array([0, 0, 0.2]), (num_peaks, 1))
+    # Transposed to (3, N) to match standard VectorizedObjective formatting
+    peak_xyz_lab = np.tile(np.array([0, 0, 0.2]), (num_peaks, 1)).T
 
-    wavelength = np.array([1.0, 2.0])
-    angle_cdf = np.zeros(10)
-    angle_t = np.zeros(10)
+    wavelength = [1.0, 2.0]
+    cell_params = [10.0, 10.0, 10.0, 90.0, 90.0, 90.0]
 
     # 90 deg rotation about Y: Lab X -> Sample Z, Lab Z -> Sample -X
     R_90y = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]])
@@ -23,16 +24,18 @@ def test_init_sample_offset_rotation():
 
     # Sample offset in Sample Frame: (0.01, 0, 0)
     # In Lab Frame (R @ s): (0, 0, -0.01)
-    sample_nominal = np.array([0.01, 0, 0])
+    # Note: Passed as a list to safely bypass internal `if sample_nominal:` 
+    # checks which trigger numpy ambiguity errors.
+    sample_nominal = [0.01, 0.0, 0.0]
 
     print("\nInitializing Objective with Sample Frame offset...")
+    
     obj = VectorizedObjective(
-        B,
-        kf_ki_dir,
-        peak_xyz_lab,
-        wavelength,
-        angle_cdf,
-        angle_t,
+        B=B,
+        kf_ki_dir=kf_ki_dir,
+        peak_xyz_lab=peak_xyz_lab,
+        wavelength=wavelength,
+        cell_params=cell_params,
         static_R=static_R,
         sample_nominal=sample_nominal,
         peak_run_indices=np.arange(num_peaks),

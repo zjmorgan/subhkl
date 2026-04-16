@@ -1,8 +1,10 @@
 import os
-
+import io
+from contextlib import redirect_stdout
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
+from unittest.mock import patch, MagicMock
 
 from subhkl.commands import run_index as index, run_metrics as metrics
 
@@ -60,6 +62,14 @@ def create_synthetic_finder(filename):
         f["peaks/intensity"] = np.ones(len(xyz))
         f["peaks/sigma"] = np.ones(len(xyz)) * 0.1
         f["peaks/radius"] = np.zeros(len(xyz))
+        
+        # --- NEW: Dummy pixel and bank mapping for physical reconstruction ---
+        f["peaks/pixel_r"] = np.zeros(len(xyz))
+        f["peaks/pixel_c"] = np.zeros(len(xyz))
+        f["peaks/image_index"] = run_idx
+        f["bank"] = np.ones(len(xyz), dtype=np.int32)
+        f["bank_ids"] = np.array([1], dtype=np.int32)
+
         f["goniometer/R"] = R0[None, ...]
         f["goniometer/axes"] = np.array([[0, 1, 0, 1], [0, 0, 1, 1], [0, 1, 0, 1]])
         f["goniometer/angles"] = np.zeros((1, 3))
@@ -78,56 +88,43 @@ def create_synthetic_finder(filename):
 def test_synthetic_indexing(tmp_path):
     finder_h5 = os.path.join(tmp_path, "synthetic_finder.h5")
     indexer_h5 = os.path.join(tmp_path, "synthetic_indexer.h5")
+    dummy_nexus = os.path.join(tmp_path, "dummy.nxs")
+    
+    # Create empty dummy nexus file
+    with open(dummy_nexus, "w") as f: pass
 
     create_synthetic_finder(finder_h5)
 
-    # Load input data
-    input_data = {}
+    # Extract the synthetic coordinates to feed to the mock
     with h5py.File(finder_h5, "r") as f:
-        keys_to_load = [
-            "peaks/two_theta",
-            "peaks/azimuthal",
-            "peaks/intensity",
-            "peaks/sigma",
-            "peaks/radius",
-            "peaks/xyz",
-            "goniometer/R",
-            "goniometer/axes",
-            "goniometer/angles",
-            "goniometer/names",
-            "peaks/run_index",
-            "instrument/wavelength",
-        ]
-        for k in keys_to_load:
-            if k in f:
-                input_data[k] = f[k][()]
-        input_data["sample/a"] = f["sample/a"][()]
-        input_data["sample/b"] = f["sample/b"][()]
-        input_data["sample/c"] = f["sample/c"][()]
-        input_data["sample/alpha"] = f["sample/alpha"][()]
-        input_data["sample/beta"] = f["sample/beta"][()]
-        input_data["sample/gamma"] = f["sample/gamma"][()]
-        input_data["sample/space_group"] = f["sample/space_group"][()]
-        input_data["instrument"] = f.attrs["instrument"]
+        xyz_mock = f["peaks/xyz"][()]
+        tt_mock = f["peaks/two_theta"][()]
+        az_mock = f["peaks/azimuthal"][()]
 
-    # Run indexer
-    # Use small popsize for fast test
-    index(
-        input_data=input_data,
-        output_peaks_filename=indexer_h5,
-        n_runs=1,
-        population_size=200,
-        gens=50,
-        tolerance_deg=0.5,
-        loss_method="gaussian",
-        instrument_name="MANDI",
-    )
+    # Mock the physical detector geometry conversion
+    with patch("subhkl.commands.Detector") as mock_detector, \
+         patch("subhkl.commands.Peaks") as mock_peaks, \
+         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}):
 
-    # Run metrics
+        mock_det_instance = MagicMock()
+        mock_det_instance.pixel_to_lab.return_value = xyz_mock
+        mock_det_instance.pixel_to_angles.return_value = (tt_mock, az_mock)
+        mock_detector.return_value = mock_det_instance
+
+        # Run indexer using standard positional file arguments
+        index(
+            peaks_h5_filename=finder_h5,
+            output_peaks_filename=indexer_h5,
+            original_nexus_filename=dummy_nexus,
+            instrument_name="MANDI",
+            n_runs=1,
+            population_size=200,
+            gens=50,
+            tolerance_deg=0.5,
+            loss_method="gaussian",
+        )
+
     # Capture output to check for median error
-    import io
-    from contextlib import redirect_stdout
-
     f = io.StringIO()
     with redirect_stdout(f):
         metrics(indexer_h5, instrument="MANDI")
