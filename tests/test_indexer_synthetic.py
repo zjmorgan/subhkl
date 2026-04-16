@@ -99,17 +99,25 @@ def test_synthetic_indexing(tmp_path):
         xyz_mock = f["peaks/xyz"][()]
         tt_mock = f["peaks/two_theta"][()]
         az_mock = f["peaks/azimuthal"][()]
+        run_idx_mock = f["peaks/run_index"][()]
 
-    # Mock the physical detector geometry conversion
+    # Mock the physical detector geometry conversion AND the metrics extraction
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
         patch("subhkl.commands.Peaks") as mock_peaks,  # noqa: F841
+        patch(
+            "subhkl.instrument.metrics.extract_xyz_from_file"
+        ) as mock_extract,  # <-- Intercept metrics!
         patch.dict("subhkl.config.beamlines", {"MANDI": {"1": {}}}),
     ):
+        # Configure Indexer Mock
         mock_det_instance = MagicMock()
         mock_det_instance.pixel_to_lab.return_value = xyz_mock
         mock_det_instance.pixel_to_angles.return_value = (tt_mock, az_mock)
         mock_detector.return_value = mock_det_instance
+
+        # Configure Metrics Mock
+        mock_extract.return_value = (xyz_mock, run_idx_mock)
 
         # Run indexer using standard positional file arguments
         index(
@@ -124,7 +132,6 @@ def test_synthetic_indexing(tmp_path):
             loss_method="gaussian",
         )
 
-        # CRITICAL FIX: compute_metrics is now inside the patch context!
         import io
         from contextlib import redirect_stdout
 
