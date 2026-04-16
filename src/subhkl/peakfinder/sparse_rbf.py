@@ -5,20 +5,14 @@ from scipy.spatial.distance import pdist, squareform
 from tqdm import tqdm
 
 # Import JAX with fallback from utils (centralized)
-from subhkl.utils.shim import (
-    HAS_JAX,
-    jax,
-    jit,
-    jnp,
-    jnp_update_add,
-    jnp_update_set,
-    lax,
-    vmap,
-)
+from jax import jit
+from jax import lax
+from jax import vmap
+import jax
+import jax.numpy as jnp
 
-if HAS_JAX:
-    import jax.scipy.optimize
-    import jax.scipy.signal
+import jax.scipy.optimize
+import jax.scipy.signal
 
 
 class SparseRBFPeakFinder:
@@ -45,11 +39,6 @@ class SparseRBFPeakFinder:
         show_steps: bool = False,
         show_scale: str = "linear",
     ):
-        if not HAS_JAX:
-            raise ImportError(
-                "JAX is required for SparseRBFPeakFinder. "
-                'Install with: pip install -e ".[jax]" or pip install jax jaxlib'
-            )
         self.alpha = alpha
         self.gamma = gamma
         self.ref_sigma = 1.0  # Reference unit (1 pixel)
@@ -175,7 +164,7 @@ class SparseRBFPeakFinder:
             is_strong = best_score > self.alpha
             new_peak = jnp.where(is_strong, new_peak, jnp.zeros(4))
 
-            params = jnp_update_set(params, idx, new_peak)
+            params = params.at[idx].set(new_peak)
 
             def run_opt(p):
                 p_raw = self._to_unconstrained(p, *bounds)
@@ -210,12 +199,8 @@ class SparseRBFPeakFinder:
         self, window_with_halo, seeds, Win_H, Win_W, Halo_P, Refine_P
     ):
         seeds_halo_shifted = seeds.copy()
-        seeds_halo_shifted = jnp_update_add(
-            seeds_halo_shifted, (slice(None), 1), Halo_P
-        )
-        seeds_halo_shifted = jnp_update_add(
-            seeds_halo_shifted, (slice(None), 2), Halo_P
-        )
+        seeds_halo_shifted = seeds_halo_shifted.at[(slice(None), 1)].add(Halo_P)
+        seeds_halo_shifted = seeds_halo_shifted.at[(slice(None), 2)].add(Halo_P)
 
         half_p = Refine_P // 2
 
@@ -235,8 +220,8 @@ class SparseRBFPeakFinder:
             shift_r = (r_c - half_p) - Halo_P
             shift_c = (c_c - half_p) - Halo_P
 
-            res = jnp_update_add(res, (slice(None), 1), shift_r)
-            res = jnp_update_add(res, (slice(None), 2), shift_c)
+            res = res.at[(slice(None), 1)].add(shift_r)
+            res = res.at[(slice(None), 2)].add(shift_c)
 
             # Filter invalid results (weak or diverged)
             # We use the intensity check here; full Besov check happens in Merge
