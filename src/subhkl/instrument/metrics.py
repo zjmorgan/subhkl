@@ -44,7 +44,7 @@ def resolve_indices(f_handle):
 
 
 def extract_xyz_from_file(file_path, instrument=None):
-    """Safely extracts physical XYZ lab coordinates from a file, applying calibrations if present."""
+    """Safely extracts physical XYZ lab coordinates from a file by dynamically converting pixels, applying calibrations if present."""
     with h5py.File(file_path, "r") as f:
         run_idx = resolve_indices(f)
 
@@ -69,48 +69,48 @@ def extract_xyz_from_file(file_path, instrument=None):
                     "vhat": calib_grp[b_key]["vhat"][()],
                 }
 
-        # 1. Coordinate array reconstruction (Finder or Integrator)
-        if "peaks/xyz" in f or ("peaks/pixel_r" in f and "peaks/pixel_c" in f):
-            has_pixels = "peaks/pixel_r" in f and "peaks/pixel_c" in f
-            has_xyz = "peaks/xyz" in f
+        # 1. Coordinate array reconstruction (Finder, Indexer, Integrator)
+        if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
+            if instrument is None:
+                print("Warning: Instrument not provided. Cannot compute physical coordinates from pixels.")
+                return None, None
 
-            if has_xyz:
-                xyz = f["peaks/xyz"][()]
-            else:
-                xyz = np.zeros((len(f["peaks/pixel_r"][()]), 3))
+            pixel_r = f["peaks/pixel_r"][()]
+            pixel_c = f["peaks/pixel_c"][()]
+            xyz = np.zeros((len(pixel_r), 3))
 
             if run_idx is None:
                 run_idx = np.zeros(len(xyz))
             if bank_array is None:
                 bank_array = run_idx
 
-            if instrument is not None and has_pixels:
-                new_xyz = np.copy(xyz)
-                pixel_r, pixel_c = f["peaks/pixel_r"][()], f["peaks/pixel_c"][()]
+            for phys_bank in np.unique(bank_array):
+                bank_str = f"bank_{int(phys_bank)}"
+                mask = bank_array == phys_bank
+                if not np.any(mask):
+                    continue
 
-                for phys_bank in np.unique(bank_array):
-                    bank_str = f"bank_{int(phys_bank)}"
-                    mask = bank_array == phys_bank
-                    if not np.any(mask):
-                        continue
+                try:
+                    det_config = beamlines[instrument][str(int(phys_bank))]
+                    det = Detector(det_config)
 
-                    try:
-                        det_config = beamlines[instrument][str(int(phys_bank))]
-                        det = Detector(det_config)
+                    if bank_str in calibration_dict:
+                        det.center = calibration_dict[bank_str]["center"]
+                        det.uhat = calibration_dict[bank_str]["uhat"]
+                        det.vhat = calibration_dict[bank_str]["vhat"]
 
-                        if bank_str in calibration_dict:
-                            det.center = calibration_dict[bank_str]["center"]
-                            det.uhat = calibration_dict[bank_str]["uhat"]
-                            det.vhat = calibration_dict[bank_str]["vhat"]
+                    xyz[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
+                except KeyError:
+                    pass
 
-                        new_xyz[mask] = det.pixel_to_lab(pixel_r[mask], pixel_c[mask])
-                    except KeyError:
-                        pass
-                return new_xyz, run_idx
             return xyz, run_idx
 
         # 2. Bank/Pixel format (Predictor output)
         if "banks" in f:
+            if instrument is None:
+                print("Warning: Instrument not provided. Cannot compute physical coordinates from prediction pixels.")
+                return None, None
+
             xyz_list, run_list = [], []
             bank_ids = f["bank_ids"][()] if "bank_ids" in f else None
 
@@ -143,7 +143,6 @@ def extract_xyz_from_file(file_path, instrument=None):
                 return np.vstack(xyz_list), np.array(run_list)
 
     return None, None
-
 
 def compute_metrics(
     file1: str,
