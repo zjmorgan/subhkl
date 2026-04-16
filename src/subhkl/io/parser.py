@@ -246,7 +246,6 @@ def indexer(
     d_min: Annotated[float | None, typer.Option("--d-min")] = None,
     d_max: Annotated[float | None, typer.Option("--d-max")] = None,
 ) -> None:
-
     # 1. Safely Parse Comma-Separated Strings into Python Lists
     ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
     gonio_axes_parsed = (
