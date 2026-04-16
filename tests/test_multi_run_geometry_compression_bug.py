@@ -104,7 +104,7 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     # 2. Mock the physical geometry conversion and Run Indexer
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
-        patch("subhkl.commands.Peaks") as mock_peaks, # noqa: F841
+        patch("subhkl.commands.Peaks") as mock_peaks,  # noqa: F841
         patch.dict("subhkl.config.config.beamlines", {"DUMMY": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
