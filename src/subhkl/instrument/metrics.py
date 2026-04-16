@@ -72,7 +72,9 @@ def extract_xyz_from_file(file_path, instrument=None):
         # 1. Coordinate array reconstruction (Finder, Indexer, Integrator)
         if "peaks/pixel_r" in f and "peaks/pixel_c" in f:
             if instrument is None:
-                print("Warning: Instrument not provided. Cannot compute physical coordinates from pixels.")
+                print(
+                    "Warning: Instrument not provided. Cannot compute physical coordinates from pixels."
+                )
                 return None, None
 
             pixel_r = f["peaks/pixel_r"][()]
@@ -108,7 +110,9 @@ def extract_xyz_from_file(file_path, instrument=None):
         # 2. Bank/Pixel format (Predictor output)
         if "banks" in f:
             if instrument is None:
-                print("Warning: Instrument not provided. Cannot compute physical coordinates from prediction pixels.")
+                print(
+                    "Warning: Instrument not provided. Cannot compute physical coordinates from prediction pixels."
+                )
                 return None, None
 
             xyz_list, run_list = [], []
@@ -143,6 +147,7 @@ def extract_xyz_from_file(file_path, instrument=None):
                 return np.vstack(xyz_list), np.array(run_list)
 
     return None, None
+
 
 def compute_metrics(
     file1: str,
