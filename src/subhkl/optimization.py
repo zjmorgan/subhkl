@@ -2,12 +2,24 @@ import os
 import warnings
 from functools import partial
 
-import h5py
+
+import jax
+import jax.numpy as jnp
+import jax.lax as lax
+import jax.scipy.linalg as jscipy_linalg
+from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
+
 import numpy as np
+import h5py
 import scipy.linalg
 
 from subhkl.instrument.detector import scattering_vector_from_angles
 from subhkl.core.spacegroup import get_space_group_object
+
+try:
+    from tqdm import trange
+except ImportError:
+    trange = None
 
 def _forward_map_param(norm, bound):
     return norm * 2.0 * bound - bound
@@ -492,8 +504,8 @@ class VectorizedObjective:
             ty = _forward_map_param(x[:, idx + 1], bound_rad)
             idx += 2
             ki_vec = jnp.tile(self.beam_nominal[None, :], (x.shape[0], 1))
-            ki_vec = jnp_update_add(ki_vec, (slice(None), 0), tx)
-            ki_vec = jnp_update_add(ki_vec, (slice(None), 1), ty)
+            ki_vec = ki_vec.at[(slice(None), 0)].add(tx)
+            ki_vec = ki_vec.at[(slice(None), 1)].add(ty)
             ki_vec = ki_vec / jnp.linalg.norm(ki_vec, axis=1, keepdims=True)
         else:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
@@ -501,11 +513,7 @@ class VectorizedObjective:
         if self.refine_goniometer:
             gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
             if self.num_active_gonio > 0:
-                gonio_norm = jnp_update_set(
-                    gonio_norm,
-                    (slice(None), self.gonio_mask),
-                    x[:, idx : idx + self.num_active_gonio],
-                )
+                gonio_norm = gonio_norm.at[(slice(None), self.gonio_mask)].set(x[:, idx : idx + self.num_active_gonio])
                 idx += self.num_active_gonio
 
             offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
@@ -1027,8 +1035,6 @@ class FindUB:
         freeze_orientation: bool = False,
         **kwargs,
     ):
-        require_jax()
-
         if goniometer_axes is None and self.goniometer_axes is not None:
             goniometer_axes = self.goniometer_axes
         if goniometer_angles is None and self.goniometer_angles is not None:
@@ -1305,8 +1311,6 @@ class FindUB:
                     )
             return state
 
-        mesh = Mesh(np.array(jax.devices()), ("i")) if HAS_JAX else None
-
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
             x, state_ask = strategy.ask(rng_ask, state, es_params)
@@ -1315,11 +1319,6 @@ class FindUB:
             else:
                 x_valid = jnp.concatenate(
                     [x[:, :3], jnp.clip(x[:, 3:], 0.0, 1.0)], axis=1
-                )
-
-            if mesh:
-                x_valid = jax.lax.with_sharding_constraint(
-                    x_valid, NamedSharding(mesh, P("i"))
                 )
 
             state_tell, metrics = strategy.tell(
