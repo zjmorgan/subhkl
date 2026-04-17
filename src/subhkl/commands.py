@@ -356,89 +356,75 @@ def run_index(
         print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
     goniometer_names = None
-    if refine_goniometer:
-        if original_nexus_filename and instrument_name:
-            print(
-                f"Refining goniometer angles from geometry file with {goniometer_bound_deg} deg bounds."
+
+    if original_nexus_filename and instrument_name:
+        is_merged = False
+        with h5py.File(original_nexus_filename, "r") as f_check:
+            if "images" in f_check and "goniometer/axes" in f_check:
+                is_merged = True
+                axes = f_check["goniometer/axes"][()]
+                angles = f_check["goniometer/angles"][()]
+                names = (
+                    [n.decode("utf-8") for n in f_check["goniometer/names"][()]]
+                    if "goniometer/names" in f_check
+                    else None
+                )
+
+        if not is_merged:
+            # This forces the pipeline to read the UPDATED reduction_settings.json
+            axes, angles, names = get_rotation_data_from_nexus(
+                original_nexus_filename, instrument_name
             )
 
-            is_merged = False
-            with h5py.File(original_nexus_filename, "r") as f_check:
-                if "images" in f_check and "goniometer/axes" in f_check:
-                    is_merged = True
-                    axes = f_check["goniometer/axes"][()]
-                    angles = f_check["goniometer/angles"][()]
-                    names = (
-                        [n.decode("utf-8") for n in f_check["goniometer/names"][()]]
-                        if "goniometer/names" in f_check
-                        else None
-                    )
-
-            if not is_merged:
-                axes, angles, names = get_rotation_data_from_nexus(
-                    original_nexus_filename, instrument_name
-                )
-
-            if len(axes) == 0:
-                raise ValueError(
-                    "ERROR: Could not extract goniometer axes from the provided nexus file."
-                )
-
+        if len(axes) > 0:
             opt.goniometer_axes = np.array(axes)
             angles = np.array(angles)
             if angles.ndim == 1:
                 angles = angles.reshape(-1, 1)
 
             opt.goniometer_angles = angles
+            goniometer_names = names
             if names is not None:
                 opt.goniometer_names = names
 
+            # 1. Overwrite the stale baked axes/angles from finder.h5
             input_data["goniometer/axes"] = opt.goniometer_axes
             input_data["goniometer/angles"] = opt.goniometer_angles
             if names is not None:
                 input_data["goniometer/names"] = [n.encode('utf-8') for n in names]
 
+            # This forces JAX VectorizedObjective to build the R matrix dynamically from the new JSON axes.
+            opt.R = None
+            if "goniometer/R" in input_data:
+                del input_data["goniometer/R"]
+
+            # --- RUN/PEAK MAPPING LOGIC ---
             if opt.run_indices is not None:
                 max_run_id = int(np.max(opt.run_indices))
                 num_peaks = len(opt.run_indices)
                 num_axes = len(opt.goniometer_axes)
 
-                # 1. Force the angles matrix to be (num_axes, num_runs/peaks)
                 if angles.ndim == 2:
                     if angles.shape[0] == num_axes:
-                        pass  # Already correct
+                        pass
                     elif angles.shape[1] == num_axes:
                         angles = angles.T
                     else:
-                        # Ambiguous fallback
-                        if (
-                            angles.shape[0] == max_run_id + 1
-                            or angles.shape[0] == num_peaks
-                        ):
+                        if angles.shape[0] == max_run_id + 1 or angles.shape[0] == num_peaks:
                             angles = angles.T
 
-                num_angles_provided = (
-                    angles.shape[1] if angles.ndim == 2 else len(angles)
-                )
+                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
 
-                # 2. Auto-expand run_indices if we have exactly 1 angle per peak but flat indices
-                if (
-                    num_angles_provided == num_peaks
-                    and max_run_id == 0
-                    and num_peaks > 1
-                ):
+                if num_angles_provided == num_peaks and max_run_id == 0 and num_peaks > 1:
                     opt.run_indices = np.arange(num_peaks, dtype=np.int32)
                     max_run_id = num_peaks - 1
 
-                # 3. Assign the mapped angles
                 if num_angles_provided > max_run_id:
                     opt.goniometer_angles = angles
                 elif num_angles_provided == 1:
                     opt.goniometer_angles = np.tile(angles, (1, max_run_id + 1))
                 else:
-                    raise ValueError(
-                        f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs."
-                    )
+                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 num_axes = len(opt.goniometer_axes)
@@ -446,31 +432,22 @@ def run_index(
                 if angles.ndim == 2 and angles.shape[1] == num_axes:
                     angles = angles.T
 
-                num_angles_provided = (
-                    angles.shape[1] if angles.ndim == 2 else len(angles)
-                )
+                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
 
                 if num_angles_provided == num_peaks:
                     opt.goniometer_angles = angles
                 elif num_angles_provided == 1:
                     opt.goniometer_angles = np.tile(angles, (1, num_peaks))
                 else:
-                    raise ValueError(
-                        f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
-                    )
+                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
 
-            goniometer_names = names
-
-        elif opt.goniometer_axes is not None:
-            print(
-                f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
-            )
-            goniometer_names = opt.goniometer_names
-        else:
-            print(
-                "WARNING: refine_goniometer requested but goniometer data not found. Skipping."
-            )
-            refine_goniometer = False
+    # Apply the console messages appropriately
+    if refine_goniometer:
+        print(f"Refining goniometer angles from fresh JSON/Nexus with {goniometer_bound_deg} deg bounds.")
+    elif opt.goniometer_axes is not None:
+        print("Using fresh kinematics from JSON (no refinement).")
+    else:
+        print("WARNING: No goniometer data found.")
 
     init_params = None
     if bootstrap_filename:
