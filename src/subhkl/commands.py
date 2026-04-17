@@ -554,12 +554,18 @@ def run_index(
             grp[name] = data
 
         safe_write(f, "goniometer/R", opt.R)
+
         if opt.goniometer_offsets is not None:
-            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
-        if opt.sample_offset is not None:
-            safe_write(f, "sample/offset", opt.sample_offset)
-        if opt.ki_vec is not None:
-            safe_write(f, "beam/ki_vec", opt.ki_vec)
+            grp_name = "optimization/goniometer_offsets"
+            if grp_name in f:
+                del f[grp_name]
+            
+            if isinstance(opt.goniometer_offsets, dict):
+                grp = f.create_group(grp_name)
+                for k, v in opt.goniometer_offsets.items():
+                    grp[k] = v
+            else:
+                f[grp_name] = opt.goniometer_offsets
 
         safe_write(f, "sample/a", opt.a)
         safe_write(f, "sample/b", opt.b)
@@ -827,11 +833,14 @@ def run_peak_predictor(
         U = f_idx["sample/U"][()]
         B = f_idx["sample/B"][()]
 
-        offsets = (
-            f_idx["optimization/goniometer_offsets"][()]
-            if "optimization/goniometer_offsets" in f_idx
-            else None
-        )
+        offsets = None
+        if "optimization/goniometer_offsets" in f_idx:
+            off_data = f_idx["optimization/goniometer_offsets"]
+            if isinstance(off_data, h5py.Group):
+                offsets = {k: off_data[k][()] for k in off_data.keys()}
+            else:
+                offsets = off_data[()]
+
         sample_offset = (
             f_idx["sample/offset"][()] if "sample/offset" in f_idx else np.zeros(3)
         )
@@ -858,37 +867,32 @@ def run_peak_predictor(
             peaks.goniometer.angles_raw is not None
             and peaks.goniometer.axes_raw is not None
         ):
-            # --- REPLACED BLOCK START ---
-            
-            # 1. Build the motor map based on the axis names to handle 1:n linkages
-            motor_map = []
-            if peaks.goniometer.names_raw is not None:
-                unique_motors = []
-                for name in peaks.goniometer.names_raw:
-                    if name not in unique_motors:
-                        unique_motors.append(name)
-                    motor_map.append(unique_motors.index(name))
+            # --- SAFE NAMED MAPPING ---
+            if isinstance(offsets, dict) and peaks.goniometer.names_raw is not None:
+                mapped_offsets = np.array([
+                    offsets.get(name, 0.0) for name in peaks.goniometer.names_raw
+                ])
             else:
-                motor_map = list(range(len(peaks.goniometer.axes_raw)))
-                
-            # 2. Extract the motor offset for each specific physical axis
-            mapped_offsets = np.array([offsets[motor_map[i]] for i in range(len(motor_map))])
-            
-            # 3. Add the mapped offsets (107, 5) + (1, 5) -> (107, 5)
+                # Legacy array fallback
+                motor_map = []
+                if peaks.goniometer.names_raw is not None:
+                    unique_motors = []
+                    for name in peaks.goniometer.names_raw:
+                        if name not in unique_motors:
+                            unique_motors.append(name)
+                        motor_map.append(unique_motors.index(name))
+                else:
+                    motor_map = list(range(len(peaks.goniometer.axes_raw)))
+                mapped_offsets = np.array([offsets[motor_map[i]] for i in range(len(motor_map))])
+
             angles_refined = peaks.goniometer.angles_raw + mapped_offsets[None, :]
-            
-            # --- REPLACED BLOCK END ---
-            
+
             all_R = np.stack(
                 [
                     calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
                     for ang in angles_refined
                 ]
             )
-        else:
-            print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
-    else:
-        print("Using nominal R stack directly from raw images (no offsets applied).")
 
     UB = U @ B
     if all_R.ndim == 3:

@@ -952,11 +952,13 @@ class FindUB:
                 if "beam/ki_vec" in f
                 else np.array([0.0, 0.0, 1.0])
             )
-            b_gonio_offsets = (
-                f["optimization/goniometer_offsets"][()]
-                if "optimization/goniometer_offsets" in f
-                else None
-            )
+            b_gonio_offsets = None
+            if "optimization/goniometer_offsets" in f:
+                off_data = f["optimization/goniometer_offsets"]
+                if isinstance(off_data, h5py.Group):
+                    b_gonio_offsets = {k: off_data[k][()] for k in off_data.keys()}
+                else:
+                    b_gonio_offsets = off_data[()]
 
             if "sample/U" in f:
                 U_initial = f["sample/U"][()]
@@ -999,13 +1001,14 @@ class FindUB:
             new_params.append(np.full(2, 0.5))
 
         if b_gonio_offsets is not None:
-            self.base_gonio_offset = b_gonio_offsets
-        else:
-            self.base_gonio_offset = (
-                np.zeros(len(self.goniometer_axes))
-                if self.goniometer_axes is not None
-                else None
-            )
+            if isinstance(b_gonio_offsets, dict) and self.goniometer_names is not None:
+                unique_motors = []
+                for name in self.goniometer_names:
+                    if name not in unique_motors:
+                        unique_motors.append(name)
+                self.base_gonio_offset = np.array([b_gonio_offsets.get(name, 0.0) for name in unique_motors])
+            else:
+                self.base_gonio_offset = b_gonio_offsets
 
         if refine_goniometer:
             active_mask = [True] * len(self.goniometer_axes)
@@ -1442,7 +1445,17 @@ class FindUB:
         self.sample_offset = np.array(s_total_batch[0])
         self.ki_vec = np.array(ki_vec_batch[0]).flatten()
         if offsets_total_batch is not None:
-            self.goniometer_offsets = np.array(offsets_total_batch[0])
+            raw_offsets = np.array(offsets_total_batch[0])
+            if self.goniometer_names is not None:
+                unique_motors = []
+                for name in self.goniometer_names:
+                    if name not in unique_motors:
+                        unique_motors.append(name)
+                self.goniometer_offsets = {
+                    name: float(val) for name, val in zip(unique_motors, raw_offsets)
+                }
+            else:
+                self.goniometer_offsets = raw_offsets
         if R_batch is not None:
             self.R = np.array(R_batch[0])
 
