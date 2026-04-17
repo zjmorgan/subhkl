@@ -28,7 +28,7 @@
         "DeltaTheta": 0.0420,
         "Processes": 8
     },
-    "IMAGINE-X": {
+    "CG4D": {
         "Facility": "HFIR",
         "Name": "IMAGINE-X",
         "InstrumentName": "IMAGINE-X",
