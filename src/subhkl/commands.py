@@ -858,7 +858,27 @@ def run_peak_predictor(
             peaks.goniometer.angles_raw is not None
             and peaks.goniometer.axes_raw is not None
         ):
-            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
+            # --- REPLACED BLOCK START ---
+            
+            # 1. Build the motor map based on the axis names to handle 1:n linkages
+            motor_map = []
+            if peaks.goniometer.names_raw is not None:
+                unique_motors = []
+                for name in peaks.goniometer.names_raw:
+                    if name not in unique_motors:
+                        unique_motors.append(name)
+                    motor_map.append(unique_motors.index(name))
+            else:
+                motor_map = list(range(len(peaks.goniometer.axes_raw)))
+                
+            # 2. Extract the motor offset for each specific physical axis
+            mapped_offsets = np.array([offsets[motor_map[i]] for i in range(len(motor_map))])
+            
+            # 3. Add the mapped offsets (107, 5) + (1, 5) -> (107, 5)
+            angles_refined = peaks.goniometer.angles_raw + mapped_offsets[None, :]
+            
+            # --- REPLACED BLOCK END ---
+            
             all_R = np.stack(
                 [
                     calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
@@ -1529,12 +1549,28 @@ def run_zone_axis_search(
 
     print("Filtering Prior through Exact Physics Forward-Model...")
 
+    # Retrieve names to build the map for the objective function
+    axis_names = None
+    with h5py.File(merged_h5_filename, "r") as f_in:
+        if "goniometer/names" in f_in:
+            axis_names = [n.decode("utf-8") for n in f_in["goniometer/names"][()]]
+
+    motor_map = None
+    if axis_names is not None:
+        unique_motors = []
+        motor_map = []
+        for name in axis_names:
+            if name not in unique_motors:
+                unique_motors.append(name)
+            motor_map.append(unique_motors.index(name))
+
     ray_objective = VectorizedObjective(
         B=B_mat,
         kf_ki_dir=q_lab_all,
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
         cell_params=[a, b, c, alpha, beta, gamma],
+        motor_map=motor_map,
         # 4. The Magic Link:
         # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
         # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.
