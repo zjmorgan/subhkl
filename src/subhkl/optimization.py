@@ -340,7 +340,7 @@ class VectorizedObjective:
             self.num_motors = jnp.max(self.motor_map) + 1 if self.num_gonio_axes > 0 else 0
 
             angles = jnp.array(goniometer_angles)
-            if angles.ndim == 2 and angles.shape[0] != self.num_motors:
+            if angles.ndim == 2 and angles.shape[0] != self.num_gonio_axes:
                 angles = angles.T
             self.gonio_angles = angles
 
