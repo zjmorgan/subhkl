@@ -385,6 +385,9 @@ def run_index(
                 )
 
             opt.goniometer_axes = np.array(axes)
+            angles = np.array(angles)
+            if angles.ndim == 1:
+                angles = angles.reshape(-1, 1)
 
             if opt.run_indices is not None:
                 max_run_id = int(np.max(opt.run_indices))
