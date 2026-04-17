@@ -528,7 +528,6 @@ class VectorizedObjective:
             offsets_delta = _forward_map_param(gonio_norm, self.goniometer_bound_deg)
             offsets_total = self.gonio_nominal_offsets + offsets_delta
 
-            angles_deg = offsets_total[:, :, None] + self.gonio_angles[None, :, :]
             S, M = offsets_total.shape[0], self.gonio_angles.shape[1]
             R = jnp.eye(3)[None, None, ...].repeat(S, axis=0).repeat(M, axis=1)
             deg2rad = jnp.pi / 180.0
@@ -536,28 +535,33 @@ class VectorizedObjective:
             for i in range(self.num_gonio_axes):
                 motor_idx = self.motor_map[i]
                 direction = self.gonio_axes[i][0:3]
-                theta = self.gonio_axes[i][3] * angles_deg[:, motor_idx, :] * deg2rad
+
+                # Add the motor offset to the specific axis angle here ---
+                # offsets_total is (S, M) -> offsets_total[:, motor_idx] is (S,)
+                # gonio_angles is (N, P) -> gonio_angles[i, :] is (P,)
+                # Reshape and broadcast to (S, P)
+                current_axis_angle = self.gonio_angles[i, :][None, :] + offsets_total[:, motor_idx][:, None]
+
+                theta = self.gonio_axes[i][3] * current_axis_angle * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
                 R = jnp.matmul(R, Ri)
-                
         elif self.gonio_axes is not None:
             offsets_total = self.gonio_nominal_offsets[None, :].repeat(
                 x.shape[0], axis=0
             )
-            angles_deg = offsets_total[:, :, None] + self.gonio_angles[None, :, :]
             S, M = offsets_total.shape[0], self.gonio_angles.shape[1]
             R = jnp.eye(3)[None, None, ...].repeat(S, axis=0).repeat(M, axis=1)
             deg2rad = jnp.pi / 180.0
-            
+
             for i in range(self.num_gonio_axes):
                 motor_idx = self.motor_map[i]
                 direction = self.gonio_axes[i][0:3]
-                theta = self.gonio_axes[i][3] * angles_deg[:, motor_idx, :] * deg2rad
+
+                current_axis_angle = self.gonio_angles[i, :][None, :] + offsets_total[:, motor_idx][:, None]
+
+                theta = self.gonio_axes[i][3] * current_axis_angle * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
                 R = jnp.matmul(R, Ri)
-        else:
-            offsets_total = None
-            R = None
 
         if self.refine_detector:
             det_params = x[:, idx : idx + self.num_det_params]
