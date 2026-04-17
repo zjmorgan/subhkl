@@ -389,6 +389,15 @@ def run_index(
             if angles.ndim == 1:
                 angles = angles.reshape(-1, 1)
 
+            opt.goniometer_angles = angles
+            if names is not None:
+                opt.goniometer_names = names
+
+            input_data["goniometer/axes"] = opt.goniometer_axes
+            input_data["goniometer/angles"] = opt.goniometer_angles
+            if names is not None:
+                input_data["goniometer/names"] = [n.encode('utf-8') for n in names]
+
             if opt.run_indices is not None:
                 max_run_id = int(np.max(opt.run_indices))
                 num_peaks = len(opt.run_indices)
