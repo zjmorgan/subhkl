@@ -160,3 +160,80 @@ def test_1_to_n_goniometer_mapping(tmp_path):
         # a 4-parameter search space across 5 physical rotation matrices.
         indexed_count = np.sum(hkl_out != 0)
         assert indexed_count > 0, "Optimization crashed or failed to index any peaks during 1:n refinement."
+
+def test_mock_instrument_1_to_n_mapping(tmp_path):
+    peaks_h5 = tmp_path / "mock_peaks.h5"
+    output_h5 = tmp_path / "mock_indexed.h5"
+    dummy_nexus = tmp_path / "mock_dummy.nxs"
+
+    # Define a completely fake instrument with a weird 1:n mapping
+    # Motor A drives Axis 1 and Axis 3. Motor B drives Axis 2.
+    mock_instrument_def = {
+        "MOCK_KAPPA": {
+            "Goniometer": {
+                "Motor_A#part1": [1, 0, 0, 1],
+                "Motor_B":       [0, 1, 0, 1],
+                "Motor_A#part2": [0, 0, 1, -1]
+            }
+        }
+    }
+
+    # 1. Create a Mock NeXus File with only Motor A and Motor B
+    with h5py.File(dummy_nexus, "w") as f:
+        f.create_dataset("entry/DASlogs/Motor_A/average_value", data=[15.0])
+        f.create_dataset("entry/DASlogs/Motor_B/average_value", data=[45.0])
+
+    # 2. Generate trivial synthetic data
+    num_peaks = 10
+    xyz = np.random.normal(size=(num_peaks, 3))
+    xyz /= np.linalg.norm(xyz, axis=1, keepdims=True)
+
+    with h5py.File(peaks_h5, "w") as f:
+        f["sample/a"], f["sample/b"], f["sample/c"] = 10, 10, 10
+        f["sample/alpha"], f["sample/beta"], f["sample/gamma"] = 90, 90, 90
+        f["sample/space_group"] = "P 1"
+        f["instrument/wavelength"] = [1.0, 2.0]
+
+        f["peaks/two_theta"] = np.zeros(num_peaks)
+        f["peaks/azimuthal"] = np.zeros(num_peaks)
+        f["peaks/intensity"] = np.ones(num_peaks)
+        f["peaks/sigma"] = np.ones(num_peaks) * 0.1
+        f["peaks/radius"] = np.zeros(num_peaks)
+        f["peaks/run_index"] = np.zeros(num_peaks, dtype=np.int32)
+        f["peaks/xyz"] = xyz
+
+        f["peaks/pixel_r"] = np.zeros(num_peaks)
+        f["peaks/pixel_c"] = np.zeros(num_peaks)
+        f["peaks/image_index"] = np.zeros(num_peaks, dtype=np.int32)
+        f["bank"] = np.ones(num_peaks, dtype=np.int32)
+        f["bank_ids"] = np.array([1], dtype=np.int32)
+
+    # 3. Run the Indexer, injecting the MOCK_KAPPA definition
+    with (
+        patch("subhkl.instrument.detector.Detector") as mock_detector,
+        patch("subhkl.commands.Peaks") as mock_peaks,
+        patch.dict("subhkl.instrument.goniometer.reduction_settings", mock_instrument_def),
+        patch.dict("subhkl.commands.reduction_settings", mock_instrument_def),
+        patch.dict("subhkl.config.beamlines", {"MOCK_KAPPA": {"1": {}}}),
+    ):
+        mock_det_instance = MagicMock()
+        mock_det_instance.pixel_to_lab.return_value = xyz
+        mock_det_instance.pixel_to_angles.return_value = (np.zeros(num_peaks), np.zeros(num_peaks))
+        mock_detector.return_value = mock_det_instance
+
+        indexer(
+            peaks_h5_filename=str(peaks_h5),
+            output_peaks_filename=str(output_h5),
+            a=10, b=10, c=10, alpha=90, beta=90, gamma=90,
+            space_group="P 1", strategy_name="DE",
+            population_size=10, gens=2, n_runs=1,  # Tiny run just to test compilation
+            refine_goniometer=True,
+            instrument_name="MOCK_KAPPA", original_nexus_filename=str(dummy_nexus),
+        )
+
+    # 4. Verify the optimization compiled and processed the 1:n map successfully
+    with h5py.File(output_h5, "r") as f:
+        # The output file should have successfully stored all 3 axes,
+        # even though they were driven by only 2 parameters during refinement.
+        assert f["goniometer/axes"].shape[0] == 3
+        assert list(f["goniometer/names"][()]) == [b"Motor_A", b"Motor_B", b"Motor_A"]
