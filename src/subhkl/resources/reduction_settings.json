@@ -28,15 +28,15 @@
         "DeltaTheta": 0.0420,
         "Processes": 8
     },
-    "IMAGINEX": {
+    "IMAGINE-X": {
         "Facility": "HFIR",
         "Name": "IMAGINE-X",
         "InstrumentName": "IMAGINE-X",
         "FancyName": "IMAGINE-X",
         "Wavelength": [2, 10],
         "Goniometer": {
-            "CG4D:Mot:DGONRa": [0, 1, 0, 1],
-            "CG4D:Mot:chi": [0, 0, 1, 1],
+            "CG4D:Mot:phi": [0, 1, 0, -1],
+            "CG4D:Mot:kappa": [0, 0, 1, 1],
             "CG4D:Mot:omega": [0, 1, 0, 1]
 
         },
