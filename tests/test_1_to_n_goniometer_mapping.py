@@ -213,7 +213,6 @@ def test_mock_instrument_1_to_n_mapping(tmp_path):
         patch("subhkl.instrument.detector.Detector") as mock_detector,
         patch("subhkl.commands.Peaks") as mock_peaks,
         patch.dict("subhkl.instrument.goniometer.reduction_settings", mock_instrument_def),
-        patch.dict("subhkl.commands.reduction_settings", mock_instrument_def),
         patch.dict("subhkl.config.beamlines", {"MOCK_KAPPA": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
