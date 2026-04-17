@@ -199,6 +199,7 @@ class VectorizedObjective:
         refine_lattice=False,
         lattice_bound_frac=0.05,
         lattice_system="Triclinic",
+        motor_map=None,
         goniometer_axes=None,
         goniometer_angles=None,
         refine_goniometer=False,
@@ -332,12 +333,16 @@ class VectorizedObjective:
             if axes.ndim == 2 and axes.shape[1] == 3:
                 axes = jnp.concatenate([axes, jnp.ones((axes.shape[0], 1))], axis=1)
             self.gonio_axes = axes
+            self.num_gonio_axes = self.gonio_axes.shape[0]
+
+            # Register the 1:n mapping
+            self.motor_map = jnp.array(motor_map, dtype=jnp.int32) if motor_map is not None else jnp.arange(self.num_gonio_axes)
+            self.num_motors = jnp.max(self.motor_map) + 1 if self.num_gonio_axes > 0 else 0
 
             angles = jnp.array(goniometer_angles)
-            if angles.ndim == 2 and angles.shape[0] != self.gonio_axes.shape[0]:
+            if angles.ndim == 2 and angles.shape[0] != self.num_motors:
                 angles = angles.T
             self.gonio_angles = angles
-            self.num_gonio_axes = self.gonio_axes.shape[0]
 
             if self.gonio_angles.shape[1] == num_peaks:
                 self.peak_run_indices = jnp.arange(num_peaks, dtype=jnp.int32)
@@ -345,17 +350,18 @@ class VectorizedObjective:
             self.gonio_mask = (
                 np.array(goniometer_refine_mask, dtype=bool)
                 if goniometer_refine_mask is not None
-                else np.ones(self.num_gonio_axes, dtype=bool)
+                else np.ones(self.num_motors, dtype=bool)
             )
             self.num_active_gonio = np.sum(self.gonio_mask)
             self.gonio_nominal_offsets = (
                 jnp.array(goniometer_nominal_offsets)
                 if goniometer_nominal_offsets is not None
-                else jnp.zeros(self.num_gonio_axes)
+                else jnp.zeros(self.num_motors)
             )
         else:
             self.gonio_axes = None
             self.num_gonio_axes = 0
+            self.num_motors = 0
 
         wavelength = jnp.array(wavelength)
         self.wl_min_val = wavelength[0]
@@ -512,7 +518,7 @@ class VectorizedObjective:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
 
         if self.refine_goniometer:
-            gonio_norm = jnp.full((x.shape[0], self.num_gonio_axes), 0.5)
+            gonio_norm = jnp.full((x.shape[0], self.num_motors), 0.5)
             if self.num_active_gonio > 0:
                 gonio_norm = gonio_norm.at[(slice(None), self.gonio_mask)].set(
                     x[:, idx : idx + self.num_active_gonio]
@@ -528,10 +534,12 @@ class VectorizedObjective:
             deg2rad = jnp.pi / 180.0
 
             for i in range(self.num_gonio_axes):
+                motor_idx = self.motor_map[i]
                 direction = self.gonio_axes[i][0:3]
-                theta = self.gonio_axes[i][3] * angles_deg[:, i, :] * deg2rad
+                theta = self.gonio_axes[i][3] * angles_deg[:, motor_idx, :] * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
                 R = jnp.matmul(R, Ri)
+                
         elif self.gonio_axes is not None:
             offsets_total = self.gonio_nominal_offsets[None, :].repeat(
                 x.shape[0], axis=0
@@ -540,9 +548,11 @@ class VectorizedObjective:
             S, M = offsets_total.shape[0], self.gonio_angles.shape[1]
             R = jnp.eye(3)[None, None, ...].repeat(S, axis=0).repeat(M, axis=1)
             deg2rad = jnp.pi / 180.0
+            
             for i in range(self.num_gonio_axes):
+                motor_idx = self.motor_map[i]
                 direction = self.gonio_axes[i][0:3]
-                theta = self.gonio_axes[i][3] * angles_deg[:, i, :] * deg2rad
+                theta = self.gonio_axes[i][3] * angles_deg[:, motor_idx, :] * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
                 R = jnp.matmul(R, Ri)
         else:
@@ -1109,16 +1119,30 @@ class FindUB:
             ):
                 self.run_indices = np.arange(num_obs, dtype=np.int32)
 
+        # 1. Build the motor map to support 1:n axis-to-motor relationships
+        motor_map = None
+        unique_motors = []
+        if self.goniometer_names is not None:
+            motor_map = []
+            for name in self.goniometer_names:
+                if name not in unique_motors:
+                    unique_motors.append(name)
+                motor_map.append(unique_motors.index(name))
+        else:
+            # Fallback to 1:1 mapping if names are missing
+            if goniometer_axes is not None:
+                motor_map = list(range(len(goniometer_axes)))
+                unique_motors = [f"axis_{i}" for i in range(len(goniometer_axes))]
+
         goniometer_refine_mask = None
         if refine_goniometer and refine_goniometer_axes is not None:
-            if self.goniometer_names is not None:
-                mask = [
-                    any(req in name for req in refine_goniometer_axes)
-                    for name in self.goniometer_names
-                ]
-                goniometer_refine_mask = np.array(mask, dtype=bool)
-            else:
-                goniometer_refine_mask = np.ones(len(goniometer_axes), dtype=bool)
+            mask = [
+                any(req in name for req in refine_goniometer_axes)
+                for name in unique_motors
+            ]
+            goniometer_refine_mask = np.array(mask, dtype=bool)
+        elif refine_goniometer:
+            goniometer_refine_mask = np.ones(len(unique_motors), dtype=bool)
 
         cell_params_init = np.array(
             [self.a, self.b, self.c, self.alpha, self.beta, self.gamma]
@@ -1142,6 +1166,7 @@ class FindUB:
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
             lattice_system=lattice_system,
+            motor_map=motor_map,
             goniometer_axes=goniometer_axes,
             goniometer_angles=goniometer_angles,
             refine_goniometer=refine_goniometer,

@@ -166,11 +166,14 @@ class Goniometer:
                 # So this should work fine--assuming the order is correct in
                 # `reduction_settings.json`, that is!
                 for axis_name, axis_spec in settings["Goniometer"].items():
+                    # Strip the suffix to get the actual hardware log name
+                    log_name = axis_key.split("#")[0]
+
                     angle_deg = float(das_logs[axis_name]["average_value"][0])
                     axis = np.array(axis_spec, dtype=float)
                     angles.append(angle_deg)
                     axes.append(axis)
-                    names.append(axis_name)
+                    names.append(log_name)
             except Exception:
                 pass
 
