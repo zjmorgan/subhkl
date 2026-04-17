@@ -35,12 +35,36 @@
         "FancyName": "IMAGINE-X",
         "Wavelength": [2, 10],
         "Goniometer": {
-            "CG4D:Mot:phi": [0, 1, 0, -1],
-            "CG4D:Mot:alpha#antitilt": [1, 0, 0, 1],
-            "CG4D:Mot:kappa": [0, 1, 0, 1],
-            "CG4D:Mot:alpha#tilt": [1, 0, 0, -1],
-            "CG4D:Mot:omega": [0, 1, 0, 1]
-
+            "CG4D:Mot:phi": [
+                0.0,
+                1.0,
+                0.0,
+                -1.0
+            ],
+            "CG4D:Mot:alpha#antitilt": [
+                0.0,
+                0.0,
+                1.0,
+                1
+            ],
+            "CG4D:Mot:kappa": [
+                0.0,
+                1.0,
+                0.0,
+                -1
+            ],
+            "CG4D:Mot:alpha#tilt": [
+                0.0,
+                0.0,
+                1.0,
+                -1
+            ],
+            "CG4D:Mot:omega": [
+                0.0,
+                1.0,
+                0.0,
+                1.0
+            ]
         },
         "GoniometerAxisNames": [
             "CG4D:Mot:DGONRa",
