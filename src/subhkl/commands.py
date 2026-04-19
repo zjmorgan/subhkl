@@ -404,27 +404,42 @@ def run_index(
                 num_peaks = len(opt.run_indices)
                 num_axes = len(opt.goniometer_axes)
 
+                # 1. Safely orient angles to (num_axes, N) without blindly transposing square matrices
                 if angles.ndim == 2:
-                    if angles.shape[0] == num_axes:
-                        pass
-                    elif angles.shape[1] == num_axes:
+                    if angles.shape[0] != num_axes and angles.shape[1] == num_axes:
                         angles = angles.T
-                    else:
-                        if angles.shape[0] == max_run_id + 1 or angles.shape[0] == num_peaks:
-                            angles = angles.T
+                elif angles.ndim == 1:
+                    angles = angles.reshape(num_axes, 1)
 
-                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
+                num_angles_provided = angles.shape[1]
 
-                if num_angles_provided == num_peaks and max_run_id == 0 and num_peaks > 1:
-                    opt.run_indices = np.arange(num_peaks, dtype=np.int32)
-                    max_run_id = num_peaks - 1
+                # 2. Check for single-frame tiled data from run_reduce
+                # If all columns are identical, collapse it back to a single angle.
+                if num_angles_provided > 1:
+                    if np.allclose(angles, angles[:, 0:1], atol=1e-7):
+                        angles = angles[:, 0:1]
+                        num_angles_provided = 1
 
-                if num_angles_provided > max_run_id:
-                    opt.goniometer_angles = angles
-                elif num_angles_provided == 1:
+                # 3. Safely map angles to cover the highest requested physical index
+                if num_angles_provided == 1:
+                    # Single frame: safe to broadcast to cover any max_run_id (e.g., Bank 105)
                     opt.goniometer_angles = np.tile(angles, (1, max_run_id + 1))
+                elif num_angles_provided > max_run_id:
+                    # Multi-frame: We have enough explicit angles to cover the highest index
+                    opt.goniometer_angles = angles
+                elif num_angles_provided == num_peaks:
+                    # Angles provided explicitly per peak
+                    opt.goniometer_angles = angles
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs.")
+                    # Multi-frame mismatch: run_indices contains physical bank IDs (e.g. 105) 
+                    # but angles only contains contiguous steps (e.g. 52).
+                    print(f"WARNING: Angle shape {angles.shape} does not cover max run index {max_run_id}.")
+                    print("Padding goniometer angles to prevent out-of-bounds lookup...")
+                    padded_angles = np.zeros((num_axes, max_run_id + 1))
+                    padded_angles[:, :num_angles_provided] = angles
+                    for i in range(num_angles_provided, max_run_id + 1):
+                        padded_angles[:, i] = angles[:, -1]
+                    opt.goniometer_angles = padded_angles
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 num_axes = len(opt.goniometer_axes)
