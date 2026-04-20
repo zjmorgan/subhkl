@@ -16,7 +16,10 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     peaks_h5 = tmp_path / "synthetic_peaks.h5"
     output_h5 = tmp_path / "indexed.h5"
     dummy_nexus = tmp_path / "dummy.nxs"
-    dummy_nexus.touch()
+
+    # Create valid (but empty) HDF5 dummy nexus file
+    with h5py.File(dummy_nexus, "w") as f:
+        pass
 
     # 1. Create synthetic data
     a, b, c = 4.5, 5.0, 5.5
