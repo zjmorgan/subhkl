@@ -142,8 +142,6 @@ class Peaks:
             self.wavelength,
             harvest_peaks_kwargs,
             integration_params,
-            visualize,
-            file_prefix,
         )
         print(f"Starting parallel integration of {len(tasks)} images...")
 
@@ -271,9 +269,7 @@ class Peaks:
             sample_offset,
             ki_vec,
             integration_method,
-            create_visualizations,
             show_progress,
-            file_prefix,
             found_peaks_file,
         )
         print(f"Integrating {len(tasks)} banks in parallel...")

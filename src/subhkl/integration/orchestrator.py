@@ -79,8 +79,6 @@ def prepare_harvest_tasks(
     wavelength: Wavelength,
     harvest_peaks_kwargs: Dict[str, Any],
     integration_params: Dict[str, Any],
-    visualize: bool,
-    file_prefix: str,
 ) -> List[Tuple[Any, ...]]:
     ims = image_data.ims
     bank_mapping = image_data.bank_mapping
@@ -170,8 +168,6 @@ def prepare_harvest_tasks(
             wavelength.min,
             wavelength.max,
         )
-        viz_info = (visualize, file_prefix)
-
         image_data.get_run_id(img_key)
 
         tasks.append(
@@ -185,7 +181,6 @@ def prepare_harvest_tasks(
                 integration_params,
                 mask_info,
                 geo_info,
-                viz_info,
             )
         )
     return tasks, precomputed_peaks
@@ -257,7 +252,6 @@ def prepare_integrate_tasks(
     integration_method: str = "free_fit",
     create_visualizations: bool = False,
     show_progress: bool = False,
-    file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
     found_peaks_xyz = None
@@ -395,7 +389,6 @@ def prepare_integrate_tasks(
             sample_offset,
             ki_vec,
         )
-        viz_info = (create_visualizations, file_prefix, viz_label)
 
         tasks.append(
             (
@@ -406,7 +399,6 @@ def prepare_integrate_tasks(
                 det_config,
                 integration_params,
                 integration_method,
-                viz_info,
                 metrics_info,
             )
         )
