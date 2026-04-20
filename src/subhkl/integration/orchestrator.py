@@ -35,6 +35,8 @@ class DetectorPeaks:
     gonio_axes: Optional[List[List[float]]]
     gonio_angles: List[List[float]]
     gonio_names: Optional[List[str]]
+    peak_rows: Optional[List[int]]
+    peak_cols: Optional[List[int]]
 
     def __iter__(self):
         """Allows tuple unpacking"""
@@ -186,7 +188,7 @@ def prepare_harvest_tasks(
                 viz_info,
             )
         )
-    return tasks
+    return tasks, precomputed_peaks
 
 
 def prepare_predict_tasks(

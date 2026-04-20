@@ -12,6 +12,9 @@ import jax.scipy.optimize
 import jax.scipy.signal
 import scipy
 
+
+from dataclasses import dataclass
+
 from functools import partial
 from typing import Dict, List
 import multiprocessing
@@ -1722,6 +1725,37 @@ class SparseLaueIntegrator(SparseRBFPeakFinder):
 # =====================================================================
 
 
+@dataclass(frozen=True)
+class RunPeaks:
+    """Lightweight dataclass to mock DetectorPeaks for the unrolled plotter."""
+
+    image_index: list
+    intensity: list
+    peak_rows: list
+    peak_cols: list
+    var_u: list
+    var_v: list
+    cov_uv: list
+    ki_vec: np.ndarray
+
+
+def _render_run_unrolled_plot(args):
+    """Standalone plotting function for generating unrolled plots per run."""
+    run_id, peaks, images, detectors, instrument = args
+
+    import matplotlib.pyplot as plt
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    # Force non-interactive backend for thread safety
+    if plt.get_backend().lower() != "agg":
+        plt.switch_backend("Agg")
+
+    out_name = f"{run_id}_int.png"
+    plot_unrolled_detector(
+        peaks, images, detectors, out_name=out_name, instrument=instrument
+    )
+
+
 def _render_and_save_rbf_plot(args):
     """Standalone plotting function for multiprocessing."""
     (
@@ -1862,6 +1896,7 @@ def integrate_peaks_rbf_ssn(
     show_progress: bool,
     all_R: np.ndarray = None,
     sample_offset: np.ndarray = None,
+    ki_vec: np.ndarray = None,
     nominal_sigma: float = 2.0,
     anisotropic: bool = False,
     fit_mosaicity: bool = False,
@@ -1886,10 +1921,15 @@ def integrate_peaks_rbf_ssn(
             self.intensity, self.sigma = [], []
             self.tt, self.az, self.wavelength = [], [], []
             self.run_id, self.bank, self.xyz = [], [], []
+            self.var_u, self.var_v, self.cov_uv = [], [], []
+            self.peak_rows, self.peak_cols = [], []
+            self.image_index = []
 
     res = RBFResult()
     if sample_offset is None:
         sample_offset = np.zeros(3)
+    if ki_vec is None:
+        ki_vec = np.array([0, 0, 1.0])
 
     len(peaks_obj.image.ims)
 
@@ -1978,8 +2018,9 @@ def integrate_peaks_rbf_ssn(
         batch_rs = np.array([i_arr[d["rep_idx"]] for d in keep_data])
         batch_cs = np.array([j_arr[d["rep_idx"]] for d in keep_data])
 
-        det.pixel_to_lab(batch_rs, batch_cs)
-        bank_tt, bank_az = det.pixel_to_angles(batch_rs, batch_cs, sample_offset=s_lab)
+        bank_tt, bank_az = det.pixel_to_angles(
+            batch_rs, batch_cs, sample_offset=s_lab, ki_vec=ki_vec
+        )
 
         if show_progress and initial_peaks_count != actual_peaks_count:
             physical_b = peaks_obj.image.bank_mapping.get(img_key, img_key)
@@ -2163,14 +2204,23 @@ def integrate_peaks_rbf_ssn(
     for i in range(len(meta_keys)):
         results_by_img[meta_keys[i]].append(i)
 
-    plot_tasks = []
+    # Replaces the old plot_tasks list
+    runs_plot_data = defaultdict(lambda: {"images": {}, "detectors": {}})
+
+    # static per-run data
+    if create_visualizations:
+        for img_key, image_raw in peaks_obj.image.ims.items():
+            run_id = peaks_obj.get_run_id(img_key)
+            det = peaks_obj.get_detector_by_img(img_key)
+            runs_plot_data[run_id]["images"][img_key] = image_raw
+            runs_plot_data[run_id]["detectors"][img_key] = det
 
     for img_key, indices in tqdm(
         results_by_img.items(), disable=not show_progress, desc="Mapping Geometry"
     ):
         physical_bank = peaks_obj.image.bank_mapping.get(img_key, img_key)
         det = peaks_obj.get_detector_by_img(img_key)
-        run_id = peaks_obj.image.get_run_id(img_key)
+        run_id = peaks_obj.get_run_id(img_key)
 
         image_raw = np.nan_to_num(
             peaks_obj.image.ims[img_key], nan=0.0, posinf=0.0, neginf=0.0
@@ -2191,7 +2241,6 @@ def integrate_peaks_rbf_ssn(
             np.array(img_rs), np.array(img_cs), sample_offset=s_lab
         )
 
-        # --- EDGE MASKING FIX ---
         valid_global_indices = []
         valid_local_indices = []
 
@@ -2205,22 +2254,19 @@ def integrate_peaks_rbf_ssn(
         if not valid_global_indices:
             continue
 
-        img_intensities = [
-            float(integrated_results[idx, 0]) for idx in valid_global_indices
-        ]
-        [float(integrated_results[idx, 3]) for idx in valid_global_indices]
-        [float(integrated_results[idx, 4]) for idx in valid_global_indices]
-
         for local_idx, global_idx in zip(valid_local_indices, valid_global_indices):
-            # The total integrated intensity of the blob
             intensity = float(integrated_results[global_idx, 0])
             sigI = float(integrated_results[global_idx, 4])
 
-            # Fetch the list of all harmonics that hit this exact spot
+            r_center = float(integrated_results[global_idx, 1])
+            c_center = float(integrated_results[global_idx, 2])
+            var_u = float(all_var_u[global_idx])
+            var_v = float(all_var_v[global_idx])
+            cov_uv = float(all_cov_uv[global_idx])
+
             harmonic_indices = meta_harmonics[global_idx]
             p_data = peak_dict[img_key]
 
-            # Unpack! Careless gets a row for every harmonic, sharing the same Intensity.
             for h_idx in harmonic_indices:
                 res.h.append(p_data[2][h_idx])
                 res.k.append(p_data[3][h_idx])
@@ -2231,50 +2277,51 @@ def integrate_peaks_rbf_ssn(
                 res.az.append(float(bank_az[local_idx]))
                 res.run_id.append(run_id)
                 res.bank.append(physical_bank)
-
                 res.intensity.append(intensity)
                 res.sigma.append(sigI)
 
-        # Defer plotting by storing the necessary static data
-        if create_visualizations:
-            filt_img_rs = [img_rs[i] for i in valid_local_indices]
-            filt_img_cs = [img_cs[i] for i in valid_local_indices]
-            filt_ref_rs = [
-                float(integrated_results[idx, 1]) for idx in valid_global_indices
-            ]
-            filt_ref_cs = [
-                float(integrated_results[idx, 2]) for idx in valid_global_indices
-            ]
+                # Store extended unrolled metadata
+                res.image_index.append(img_key)
+                res.peak_rows.append(r_center)
+                res.peak_cols.append(c_center)
+                res.var_u.append(var_u)
+                res.var_v.append(var_v)
+                res.cov_uv.append(cov_uv)
 
-            # Extract the exact projected 2D covariance components for the valid peaks
-            filt_var_us = [float(all_var_u[idx]) for idx in valid_global_indices]
-            filt_var_vs = [float(all_var_v[idx]) for idx in valid_global_indices]
-            filt_cov_uvs = [float(all_cov_uv[idx]) for idx in valid_global_indices]
+    # --- PHASE 4: PARALLEL VISUALIZATION (PER RUN) ---
+    if create_visualizations and runs_plot_data:
+        run_tasks = []
 
-            plot_tasks.append(
+        for r_id, data in runs_plot_data.items():
+            # Extract only the peaks belonging to this run_id
+            mask = [i for i, run in enumerate(res.run_id) if run == r_id]
+            image_label = peaks_obj.get_image_label(res.image_index[mask[0]])
+
+            run_peaks = RunPeaks(
+                image_index=[res.image_index[i] for i in mask],
+                intensity=[res.intensity[i] for i in mask],
+                peak_rows=[res.peak_rows[i] for i in mask],
+                peak_cols=[res.peak_cols[i] for i in mask],
+                var_u=[res.var_u[i] for i in mask],
+                var_v=[res.var_v[i] for i in mask],
+                cov_uv=[res.cov_uv[i] for i in mask],
+                ki_vec=ki_vec,
+            )
+
+            run_tasks.append(
                 (
-                    image_raw,
-                    physical_bank,
-                    run_id,
-                    img_key,
-                    filt_img_rs,
-                    filt_img_cs,
-                    filt_ref_rs,
-                    filt_ref_cs,
-                    img_intensities,
-                    filt_var_us,
-                    filt_var_vs,
-                    filt_cov_uvs,
+                    image_label,
+                    run_peaks,
+                    data["images"],
+                    data["detectors"],
+                    peaks_obj.instrument,
                 )
             )
 
-    # --- PHASE 4: PARALLEL VISUALIZATION ---
-    if create_visualizations and plot_tasks:
-        # Render the global diagnostic plot in the main thread
         if max_workers is None:
             max_workers = os.cpu_count()
 
-        max_workers = min(max_workers, len(plot_tasks))
+        max_workers = min(max_workers, len(run_tasks))
 
         ctx = multiprocessing.get_context("spawn")
         with concurrent.futures.ProcessPoolExecutor(
@@ -2282,9 +2329,9 @@ def integrate_peaks_rbf_ssn(
         ) as executor:
             list(
                 tqdm(
-                    executor.map(_render_and_save_rbf_plot, plot_tasks),
-                    total=len(plot_tasks),
-                    desc="Rendering Plots",
+                    executor.map(_render_run_unrolled_plot, run_tasks),
+                    total=len(run_tasks),
+                    desc="Rendering Unrolled Plots",
                     disable=not show_progress,
                 )
             )
