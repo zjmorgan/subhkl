@@ -717,7 +717,7 @@ class VectorizedObjective:
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
 
-            new_best_lamb = jnp.where(update_mask, lamda_opt, curr_best_lamb)
+            new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
 
             return (new_min, new_best_hkl, new_best_lamb), None
 
