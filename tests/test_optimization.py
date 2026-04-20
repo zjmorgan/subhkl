@@ -5,11 +5,12 @@ from subhkl import optimization
 
 
 def test_get_lattice_system_simple_cubic():
-    final, num = optimization.get_lattice_system(
+    final, num, centering = optimization.get_lattice_system(
         10.0, 10.0, 10.0, 90.0, 90.0, 90.0, "P 4 3 2"
     )
     assert final == "Cubic"
     assert num == 1
+    assert centering == "P"
 
 
 def test_findub_load_from_dict_and_reciprocal_B():

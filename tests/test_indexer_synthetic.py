@@ -88,8 +88,8 @@ def test_synthetic_indexing(tmp_path):
     indexer_h5 = os.path.join(tmp_path, "synthetic_indexer.h5")
     dummy_nexus = os.path.join(tmp_path, "dummy.nxs")
 
-    # Create empty dummy nexus file
-    with open(dummy_nexus, "w") as f:
+    # Create valid (but empty) HDF5 dummy nexus file
+    with h5py.File(dummy_nexus, "w") as f:
         pass
 
     create_synthetic_finder(finder_h5)

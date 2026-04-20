@@ -551,6 +551,9 @@ class VectorizedObjective:
         else:
             ki_vec = self.beam_nominal[None, :].repeat(x.shape[0], axis=0)
 
+        offsets_total = None
+        R = None
+
         if self.refine_goniometer:
             gonio_norm = jnp.full((x.shape[0], self.num_motors), 0.5)
             if self.num_active_gonio > 0:

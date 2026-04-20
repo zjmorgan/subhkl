@@ -397,7 +397,9 @@ def run_index(
             input_data["goniometer/axes"] = opt.goniometer_axes
             input_data["goniometer/angles"] = opt.goniometer_angles
             if names is not None:
-                input_data["goniometer/names"] = [n.encode("utf-8") for n in names]
+                input_data["goniometer/names"] = [
+                    n.encode("utf-8") if isinstance(n, str) else n for n in names
+                ]
 
             # This forces JAX VectorizedObjective to build the R matrix dynamically from the new JSON axes.
             opt.R = None
