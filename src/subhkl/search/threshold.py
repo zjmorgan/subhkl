@@ -308,18 +308,26 @@ class ThresholdingPeakFinder:
                 # mean_pos is (col, row)
                 refined_centers.append([mean_pos[1], mean_pos[0]])
 
+        # Convert to numpy array BEFORE plotting
+        if len(refined_centers) > 0:
+            refined_centers = np.array(refined_centers)
+        else:
+            refined_centers = np.empty((0, 2))
+
         if self.show_steps:
             plt.imshow(im, norm=self.show_scale, cmap="binary")
-            plt.scatter(
-                refined_centers[:, 0],
-                contour_centers[:, 1],
-                edgecolors="red",
-                facecolors="none",
-            )
+
+            if len(refined_centers) > 0:
+                # Plot X (col) vs Y (row). refined_centers is stored as [row, col]
+                plt.scatter(
+                    refined_centers[:, 1],
+                    refined_centers[:, 0],
+                    edgecolors="red",
+                    facecolors="none",
+                )
+
             plt.title("Peaks")
             plt.show()
             plt.savefig("peaks.png")
 
-        if len(refined_centers) > 0:
-            return np.array(refined_centers)
-        return np.empty((0, 2))
+        return refined_centers

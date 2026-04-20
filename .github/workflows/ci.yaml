@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   lint:
-    name: Linting + formating
+    name: Linting + formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
         run: uv sync
       - name: Run linting
         run: |
-          uv run ruff format --check
+          uv run ruff format --diff
           uv run ruff check
 
   test-unit:
@@ -47,6 +47,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --extra jax
+        run: uv sync
       - name: Run tests
         run: uv run pytest -v -m "not slow and not integration"

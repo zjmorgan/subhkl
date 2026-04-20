@@ -1,6 +1,6 @@
 import numpy as np
 import h5py
-from subhkl.io.parser import finder
+from subhkl.commands import run_finder as finder
 
 
 def test_finder_output_determinism(tmp_path):

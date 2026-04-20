@@ -7,10 +7,13 @@ dependencies = [
     "h5py>=3.11.0",
     "matplotlib>=3.8.4",
     "scikit-image>=0.23.2",
+    "evosax>=0.2.0",
+    "jax[cpu]>=0.9.1",
     "typer>=0.12.3",
     "opencv-python>=4.11.0",
     "gemmi>=0.7.3",
     "tdqm>=0.0.1",
+    "scipy>=1.17.1",
 ]
 license = { text = "GPL3.0" }
 
@@ -23,23 +26,14 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
-[project.optional-dependencies]
-# JAX CPU-only (default JAX installation)
-jax = [
-  "jax[cpu]",
-  "evosax"
-]
-
 # JAX with CUDA 12 support (NVIDIA GPUs)
-jax-cuda12 = [
+cuda12 = [
   "jax[cuda12]",
-  "evosax"
 ]
 
 # JAX with ROCm support (AMD GPUs)
-jax-rocm = [
+rocm = [
   "jax[rocm]",
-  "evosax"
 ]
 
 [tool.versioningit.vcs]

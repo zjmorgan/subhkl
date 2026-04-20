@@ -176,18 +176,62 @@ class Detector:
         row: npt.ArrayLike,
         col: npt.ArrayLike,
         sample_offset: npt.ArrayLike = None,
+        ki_vec: npt.ArrayLike = None,
     ) -> tuple[npt.NDArray, npt.NDArray]:
         """
-        Calculate scattering angles (two_theta, az_phi) for pixels (row, col).
+        Calculate scattering angles (two_theta, az_phi) for pixels (row, col)
+        relative to the incident beam vector.
         """
+        if ki_vec is None:
+            ki_vec = np.array([0.0, 0.0, 1.0])
+        else:
+            ki_vec = np.array(ki_vec)
+
+        ki_hat = ki_vec / np.linalg.norm(ki_vec)
+
         xyz = self.pixel_to_lab(row, col)  # Returns (N, 3) or (3,)
         v = xyz - (sample_offset if sample_offset is not None else 0)
 
-        X, Y, Z = v.T
-        R_mag = np.sqrt(X**2 + Y**2 + Z**2)
-        two_theta = np.rad2deg(np.arccos(np.clip(Z / R_mag, -1.0, 1.0)))
-        az_phi = np.rad2deg(np.arctan2(Y, X))
+        # Handle both scalar and array inputs for xyz seamlessly
+        if v.ndim == 1:
+            v = v[np.newaxis, :]
 
+        v_mag = np.linalg.norm(v, axis=1)
+        # Avoid division by zero at the origin
+        v_hat = v / np.where(v_mag[:, np.newaxis] == 0, 1.0, v_mag[:, np.newaxis])
+
+        # 1. Calculate Two-Theta (Polar Angle from beam)
+        # Dot product of normalized scattered ray and normalized incident beam
+        cos_2theta = np.sum(v_hat * ki_hat, axis=1)
+        two_theta = np.rad2deg(np.arccos(np.clip(cos_2theta, -1.0, 1.0)))
+
+        # 2. Calculate Azimuthal Angle (Phi)
+        # We need a consistent local coordinate system perpendicular to ki_vec.
+        # Standard convention: if beam is along Z (+ or -), transverse is X.
+        if np.allclose(np.abs(ki_hat), [0, 0, 1]):
+            # Standard Z-axis beam (handles both 0,0,1 and 0,0,-1)
+            # To keep handedness consistent when beam flips, we must flip the X projection
+            proj_x = v[:, 0] * np.sign(ki_hat[2])
+            proj_y = v[:, 1]
+        else:
+            # Generalized cross-product approach for arbitrary beam directions
+            # Define an arbitrary 'up' vector (Y-axis) unless beam is purely along Y
+            up = np.array([0.0, 1.0, 0.0])
+            if np.allclose(np.abs(ki_hat), [0, 1, 0]):
+                up = np.array([0.0, 0.0, 1.0])
+
+            local_x = np.cross(up, ki_hat)
+            local_x /= np.linalg.norm(local_x)
+            local_y = np.cross(ki_hat, local_x)
+
+            proj_x = np.sum(v * local_x, axis=1)
+            proj_y = np.sum(v * local_y, axis=1)
+
+        az_phi = np.rad2deg(np.arctan2(proj_y, proj_x))
+
+        # Return scalars if input was scalar
+        if xyz.ndim == 1:
+            return two_theta[0], az_phi[0]
         return two_theta, az_phi
 
     def reflections_mask(
