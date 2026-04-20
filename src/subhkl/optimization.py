@@ -167,7 +167,7 @@ def get_lattice_system(
             f"Lattice System Override: Geometry suggests {geometric}, but Space Group {space_group_name} requires {expected}. Enforcing {expected}."
         )
 
-    return final_system, num
+    return final_system, num, centering
 
 
 def rotation_matrix_from_axis_angle_jax(axis, angle_rad):
@@ -199,6 +199,7 @@ class VectorizedObjective:
         refine_lattice=False,
         lattice_bound_frac=0.05,
         lattice_system="Triclinic",
+        centering="P",
         motor_map=None,
         goniometer_axes=None,
         goniometer_angles=None,
@@ -423,6 +424,35 @@ class VectorizedObjective:
                     self.num_det_params, self.num_det_params + size
                 )
                 self.num_det_params += size
+
+        # primitive cell
+        self.centering = centering
+        if self.centering == 'I':
+            self.M_prim = jnp.array([[ 0.5,  0.5, -0.5],
+                                     [-0.5,  0.5,  0.5],
+                                     [ 0.5, -0.5,  0.5]])
+        elif self.centering == 'F':
+            self.M_prim = jnp.array([[ 0.5,  0.5,  0.0],
+                                     [ 0.0,  0.5,  0.5],
+                                     [ 0.5,  0.0,  0.5]])
+        elif self.centering == 'C':
+            self.M_prim = jnp.array([[ 0.5,  0.5,  0.0],
+                                     [ 0.5, -0.5,  0.0],
+                                     [ 0.0,  0.0,  1.0]])
+        elif self.centering == 'A':
+            self.M_prim = jnp.array([[ 1.0,  0.0,  0.0],
+                                     [ 0.0,  0.5,  0.5],
+                                     [ 0.0,  0.5, -0.5]])
+        elif self.centering == 'B':
+            self.M_prim = jnp.array([[ 0.5,  0.0,  0.5],
+                                     [ 0.0,  1.0,  0.0],
+                                     [ 0.5,  0.0, -0.5]])
+        elif self.centering == 'R':
+            self.M_prim = jnp.array([[ 2/3,  1/3,  1/3],
+                                     [-1/3,  1/3,  1/3],
+                                     [-1/3, -2/3,  1/3]])
+        else: # Default to P
+            self.M_prim = jnp.eye(3)
 
     def orientation_U_jax(self, param):
         U = jax.vmap(rotation_matrix_from_rodrigues_jax)(param)
@@ -666,21 +696,22 @@ class VectorizedObjective:
 
             lamda_cand = lam_grid[i]
             hkl_float = v / lamda_cand
-            hkl_int = jnp.round(hkl_float).astype(jnp.int32)
 
-            q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
-            k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
-            safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
+            # Transform conventional HKL to Primitive HKL
+            hkl_prim = jnp.matmul(hkl_float, self.M_prim.T)
 
-            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+            # The 3-term loss: snaps primitive indices to integers
+            delta_prim = jnp.sin(jnp.pi * hkl_prim) / jnp.pi
+            dist = jnp.linalg.norm(delta_prim, axis=-1)
 
-            delta_hkl = jnp.sin(jnp.pi * hkl_float) / jnp.pi
-            dist = jnp.linalg.norm(delta_hkl, axis=1)
-
+            # --- Update Mask Logic ---
             update_mask = dist < curr_min
             new_min = jnp.where(update_mask, dist, curr_min)
+
+            # Keep storing the conventional HKL integers for output
+            hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-            new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
+            new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
 
             return (new_min, new_best_hkl, new_best_lamb), None
 
@@ -979,7 +1010,7 @@ class FindUB:
         if refine_lattice:
             self.a, self.b, self.c = b_a, b_b, b_c
             self.alpha, self.beta, self.gamma = b_alpha, b_beta, b_gamma
-            lat_sys, _ = get_lattice_system(
+            lat_sys, _, _ = get_lattice_system(
                 self.a,
                 self.b,
                 self.c,
@@ -1154,7 +1185,7 @@ class FindUB:
         cell_params_init = np.array(
             [self.a, self.b, self.c, self.alpha, self.beta, self.gamma]
         )
-        lattice_system, num_lattice_params = get_lattice_system(
+        lattice_system, num_lattice_params, centering = get_lattice_system(
             self.a, self.b, self.c, self.alpha, self.beta, self.gamma, self.space_group
         )
 
@@ -1173,6 +1204,7 @@ class FindUB:
             refine_lattice=refine_lattice,
             lattice_bound_frac=lattice_bound_frac,
             lattice_system=lattice_system,
+            centering=centering,
             motor_map=motor_map,
             goniometer_axes=goniometer_axes,
             goniometer_angles=goniometer_angles,
