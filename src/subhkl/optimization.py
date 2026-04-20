@@ -694,29 +694,37 @@ class VectorizedObjective:
         def scan_body(carry, i):
             curr_min, curr_best_hkl, curr_best_lamb = carry
 
-            lambda_cand = lam_grid[i]
+            # 1. Float HKL from coarse grid search
+            lamda_cand = lam_grid[i]
+            hkl_float = v / lamda_cand
 
-            # Transform conventional HKL to Primitive HKL
-            hkl_float = v / lambda_cand
-            hkl_prim = jnp.einsum('ij,sjn->sin', self.M_prim, hkl_float)
+            # 2. Explicitly Unrolled Matrix Multiplication (Maximum XLA Fusion)
+            # hkl_float is shape (S, 3, N) -> Extract components to shape (S, N)
+            h = hkl_float[:, 0, :]
+            k = hkl_float[:, 1, :]
+            l = hkl_float[:, 2, :]
 
-            # The 3-term loss: snaps primitive indices to integers
-            delta_prim = jnp.sin(jnp.pi * hkl_prim) / jnp.pi
-            dist = jnp.linalg.norm(delta_prim, axis=1)
+            h_p = self.M_prim[0,0]*h + self.M_prim[0,1]*k + self.M_prim[0,2]*l
+            k_p = self.M_prim[1,0]*h + self.M_prim[1,1]*k + self.M_prim[1,2]*l
+            l_p = self.M_prim[2,0]*h + self.M_prim[2,1]*k + self.M_prim[2,2]*l
 
-            # --- Update Mask Logic ---
-            update_mask = dist < curr_min
-            new_min = jnp.where(update_mask, dist, curr_min)
+            # 3. The 3-term loss: element-wise trig and distance
+            dh = jnp.sin(jnp.pi * h_p)
+            dk = jnp.sin(jnp.pi * k_p)
+            dl = jnp.sin(jnp.pi * l_p)
+            dist = jnp.sqrt(dh**2 + dk**2 + dl**2) / jnp.pi
 
-            # Keep storing the conventional HKL integers for output
+            # 4. Calculate exact analytical lambda for the nearest conventional integer
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
-            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-
             q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
             k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
             safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
             lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
 
+            # 5. Update states if this grid point produced a lower continuous loss
+            update_mask = dist < curr_min
+            new_min = jnp.where(update_mask, dist, curr_min)
+            new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
             new_best_lamb = jnp.where(update_mask, lambda_opt, curr_best_lamb)
 
             return (new_min, new_best_hkl, new_best_lamb), None
