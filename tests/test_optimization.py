@@ -4,17 +4,6 @@ import scipy.linalg
 from subhkl import optimization
 
 
-def test_param_mapping_roundtrip():
-    bounds = [0.001, 0.1, 1.0]
-    test_vals = [-2.0, -0.5, 0.0, 0.3, 0.9]
-    for b in bounds:
-        for v in test_vals:
-            norm = optimization._inverse_map_param(v, b)
-            out = optimization._forward_map_param(norm, b)
-            # Forward output must lie within [-bound, bound]
-            assert out >= -b - 1e-12 and out <= b + 1e-12
-
-
 def test_get_lattice_system_simple_cubic():
     final, num = optimization.get_lattice_system(
         10.0, 10.0, 10.0, 90.0, 90.0, 90.0, "P 4 3 2"

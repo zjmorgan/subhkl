@@ -55,6 +55,7 @@ INTEGRATOR_PARAMS = {
 # Indexer parameters with explicit values for all typer.Option parameters
 # to avoid OptionInfo type errors when calling functions directly
 INDEXER_DEFAULTS = {
+    "instrument_name": "MANDI",
     "strategy_name": "DE",
     "n_runs": 10,
     "population_size": 1000,
@@ -124,6 +125,7 @@ class TestMandiMesoliteSingleRun:
         indexer(
             peaks_h5_filename=finder_output,
             output_peaks_filename=indexer_output,
+            original_nexus_filename=mesolite_input_file,
             a=LATTICE_PARAMS["a"],
             b=LATTICE_PARAMS["b"],
             c=LATTICE_PARAMS["c"],

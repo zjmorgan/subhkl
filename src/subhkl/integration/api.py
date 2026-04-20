@@ -8,27 +8,18 @@ import numpy as np
 from tqdm import tqdm
 
 from subhkl.config import beamlines, reduction_settings
-from subhkl.io import loader, writer
+from subhkl.io import loader
 from subhkl.instrument.detector import Detector
 from subhkl.instrument.goniometer import Goniometer
 from subhkl.integration import worker, orchestrator
 from subhkl.integration.image_data import ImageData
 from subhkl.integration.orchestrator import DetectorPeaks, IntegrationResult, Wavelength
-from subhkl.integration.worker import _render_finder_unrolled_plot, _RunPeaksFinder
+from subhkl.integration.worker import _RunPeaksFinder, _safe_plot_wrapper
 
 
-# NOTE(Vivek): currently user provided values are overriden (matches original logic), but i'm pretty sure it should be the other way around. Looking at wavelength, user input is prioritized over files.
 def _init_goniometer(
     filename: str, ext: str, instrument: str, is_merged: bool, axes=None, angles=None
 ) -> Goniometer:
-    """
-    Build goniometer with the following priority
-    - merged hdf5
-    - nexus
-    - manual override
-    - default (assume beam aligned)
-    """
-
     if ext == ".h5" and is_merged:
         with h5py.File(filename, "r") as f:
             if axes is None or angles is None:
@@ -156,10 +147,8 @@ class Peaks:
         )
         print(f"Starting parallel integration of {len(tasks)} images...")
 
-        # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            # FIX: Map futures to img_key to preserve order
             future_to_key = {
                 executor.submit(worker.process_single_image, *t): t[0] for t in tasks
             }
@@ -188,6 +177,7 @@ class Peaks:
             visualize=visualize,
             max_workers=max_workers,
             instrument_label=self.instrument,
+            file_prefix=file_prefix,
         )
 
     def predict_peaks(
@@ -207,13 +197,6 @@ class Peaks:
         max_workers: int = None,
         show_progress: bool = False,
     ) -> dict:
-        """
-        Predicts peak positions using parallel processing.
-        Handles RUB as either a single (3,3) matrix OR a stack (N,3,3)
-        for rotation scans.
-        Generates HKLs locally (lazy generation) to reduce IPC overhead.
-        """
-
         peak_dict = {}
         tasks = orchestrator.prepare_predict_tasks(
             image_data=self.image,
@@ -234,14 +217,12 @@ class Peaks:
             R_all=R_all,
         )
 
-        # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures_to_bank = {
                 executor.submit(worker.predict_single_bank, *t): t[0] for t in tasks
             }
 
-            # Map results to a temporary list to allow sorting
             results_by_bank = {}
             for future in tqdm(
                 as_completed(futures_to_bank),
@@ -257,13 +238,11 @@ class Peaks:
                 except Exception as e:
                     print(f"Prediction failed for bank {bank_id}: {e}")
 
-        # Insert into dict in sorted order
         for bank_id in sorted(results_by_bank.keys()):
             peak_dict[bank_id] = results_by_bank[bank_id]
 
         return peak_dict
 
-    # --- UPDATED INTEGRATE ---
     def integrate(
         self,
         peak_dict,
@@ -299,10 +278,8 @@ class Peaks:
         )
         print(f"Integrating {len(tasks)} banks in parallel...")
 
-        # Use 'spawn' to be safe with JAX threading
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            # FIX: Map futures to bank ID to preserve order
             future_to_bank = {
                 executor.submit(worker.integrate_single_bank, *t): t[0] for t in tasks
             }
@@ -325,26 +302,43 @@ class Peaks:
         return self._assemble_integration_result(peak_dict, results_by_bank)
 
     def write_hdf5(self, output_filename, detector_peaks, instrument_wavelength):
-        writer.write_hdf5(
-            self,
-            output_filename,
-            detector_peaks.R,
-            detector_peaks.two_theta,
-            detector_peaks.az_phi,
-            detector_peaks.wavelength_mins,
-            detector_peaks.wavelength_maxes,
-            detector_peaks.intensity,
-            detector_peaks.sigma,
-            detector_peaks.radii,
-            detector_peaks.xyz,
-            detector_peaks.bank,
-            detector_peaks.image_index,
-            detector_peaks.run_id,
-            detector_peaks.gonio_axes,
-            detector_peaks.gonio_angles,
-            detector_peaks.gonio_names,
-            instrument_wavelength,
-        )
+        """
+        Directly writes finder peaks to HDF5.
+        NOTE: 'xyz', 'two_theta', and 'azimuthal' are intentionally excluded to force downstream tools
+        to rebuild physical coordinates dynamically using the detector config.
+        """
+        with h5py.File(output_filename, "w") as f:
+            # Physics metadata
+            f.attrs["instrument"] = self.instrument
+            f["instrument/wavelength"] = instrument_wavelength
+
+            # Gonio Metadata
+            if detector_peaks.R and any(r is not None for r in detector_peaks.R):
+                f["goniometer/R"] = np.array(detector_peaks.R)
+            if detector_peaks.gonio_axes is not None:
+                f["goniometer/axes"] = detector_peaks.gonio_axes
+            if detector_peaks.gonio_angles and any(
+                a is not None for a in detector_peaks.gonio_angles
+            ):
+                f["goniometer/angles"] = np.array(detector_peaks.gonio_angles)
+            if detector_peaks.gonio_names is not None:
+                dt = h5py.string_dtype(encoding="utf-8")
+                f.create_dataset(
+                    "goniometer/names", data=detector_peaks.gonio_names, dtype=dt
+                )
+
+            # Peak Data
+            f["peaks/intensity"] = detector_peaks.intensity
+            f["peaks/sigma"] = detector_peaks.sigma
+            f["peaks/radius"] = detector_peaks.radii
+
+            # Use pixel coordinates exclusively
+            f["peaks/pixel_r"] = detector_peaks.peak_rows
+            f["peaks/pixel_c"] = detector_peaks.peak_cols
+
+            f["bank"] = detector_peaks.bank
+            f["peaks/image_index"] = detector_peaks.image_index
+            f["peaks/run_index"] = detector_peaks.run_id
 
     def _assemble_detector_peaks(
         self,
@@ -353,6 +347,7 @@ class Peaks:
         visualize=False,
         max_workers=None,
         instrument_label=None,
+        file_prefix=None,
     ):
         if precomputed_peaks is None:
             precomputed_peaks = {}
@@ -373,7 +368,6 @@ class Peaks:
         peak_rows: list[int] = []
         peak_cols: list[int] = []
 
-        # Assemble results in DETERMINISTIC (sorted) order
         for img_key in sorted(self.image.ims.keys()):
             res = results_by_key.get(img_key)
             if res:
@@ -418,7 +412,6 @@ class Peaks:
         if visualize:
             runs_plot_data = {}
 
-            # Group images, detectors, and finder peaks by run_id
             for img_key, img in self.image.ims.items():
                 run_id = self.get_run_id(img_key)
                 if run_id not in runs_plot_data:
@@ -440,8 +433,9 @@ class Peaks:
                     ]
 
             run_tasks = []
+            base_dir = os.path.dirname(file_prefix) if file_prefix else ""
+
             for r_id, data in runs_plot_data.items():
-                # Extract only the peaks belonging to this run_id
                 mask = [i for i, run in enumerate(peaks.run_id) if run == r_id]
 
                 run_peaks = _RunPeaksFinder(
@@ -457,13 +451,15 @@ class Peaks:
                     else [],
                 )
 
+                out_name = os.path.join(base_dir, f"{data['label']}-found.png")
+
                 run_tasks.append(
                     (
-                        data["label"],
                         run_peaks,
                         data["images"],
                         data["detectors"],
                         data["finder_peaks"],
+                        out_name,
                         instrument_label,
                     )
                 )
@@ -477,13 +473,23 @@ class Peaks:
             with ProcessPoolExecutor(
                 mp_context=ctx, max_workers=max_workers
             ) as executor:
-                list(
-                    tqdm(
-                        executor.map(_render_finder_unrolled_plot, run_tasks),
-                        total=len(run_tasks),
-                        desc="Rendering Finder Unrolled Plots",
-                    )
-                )
+                # Use submit instead of map to guarantee exceptions aren't swallowed
+                futures = {
+                    executor.submit(_safe_plot_wrapper, t): t[4] for t in run_tasks
+                }
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="Rendering Finder Unrolled Plots",
+                ):
+                    try:
+                        out_path = future.result()
+                        tqdm.write(f"Saved: {out_path}")
+                    except Exception:
+                        import traceback
+
+                        print(f"Visualization failed for {futures[future]}:")
+                        traceback.print_exc()
 
         return peaks
 
@@ -498,7 +504,6 @@ class Peaks:
         R_out = []
         angles_out = []
 
-        # Assemble results in DETERMINISTIC (sorted) order
         for bank_id in sorted(peak_dict.keys()):
             res = results_by_bank.get(bank_id)
             if res:

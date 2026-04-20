@@ -219,48 +219,25 @@ def prepare_predict_tasks(
         return []
 
     total_images = len(sorted_keys)
-
-    def _resolve(stack, seq_idx, name):
-        if stack is None:
-            return None
-
-        is_batch = (stack.ndim == 3) or (stack.ndim == 2 and name == "angles_stack")
-        if not is_batch:
-            return stack
-
-        n_items = stack.shape[0]
-        if n_items == 1:
-            return stack[0]
-
-        if n_items == total_images:
-            return stack[seq_idx]
-
-        raise ValueError(
-            f"CRITICAL: Array dimension mismatch for '{name}'. "
-            f"The stack contains {n_items} matrices, but the dataset has {total_images} images. "
-            f"Run index fallback is strictly disabled to prevent misalignment. "
-            f"Ensure the geometry stack is uncompressed and maps 1:1."
-        )
-
     print(f"Predicting peaks for {total_images} banks...")
 
-    for _i, bank in enumerate(sorted_keys):
-        det_config = beamlines[instrument][str(bank_mapping.get(bank, bank))]
-
-        current_rub = _resolve(RUB, _i, "RUB")
-        current_R_val = _resolve(R_all, _i, "R_all")
+    for img_index, img_key in enumerate(sorted_keys):
+        bank_id = bank_mapping.get(img_key, img_key)
+        det_config = beamlines[instrument][str(int(bank_id))]
 
         tasks.append(
             (
-                bank,
-                det_config,
+                img_key,  # The HDF5 array index (e.g., 0, 1, 2)
+                bank_id,  # The physical name (e.g., 52, 53)
+                det_config,  # Geometry dict from beamlines.json
                 unit_cell_params,
-                current_rub,
+                RUB,  # The full RUB stack
                 wavelength_min,
                 wavelength_max,
                 sample_offset,
                 ki_vec,
-                current_R_val,
+                R_all,  # The full R_all stack
+                img_index,  # The sequential index for matrix extraction
             )
         )
     return tasks

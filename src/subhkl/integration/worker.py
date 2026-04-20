@@ -30,6 +30,22 @@ class _RunPeaksFinder:
     cov_uv: list = None
 
 
+# --- Helper to bypass any hidden worker.py logic and guarantee execution ---
+def _safe_plot_wrapper(args):
+    run_peaks, images, detectors, finder_peaks, out_name, instrument_label = args
+    from subhkl.viz.detector_assembly import plot_unrolled_detector
+
+    plot_unrolled_detector(
+        run_peaks,
+        images,
+        detectors,
+        finder_peaks,
+        out_name=out_name,
+        instrument=instrument_label,
+    )
+    return out_name
+
+
 def _render_finder_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
     run_id, peaks, images, detectors, finder_peaks, instrument = args
@@ -144,7 +160,7 @@ def process_single_image(
 
     if erosion:
         radius = max(1, int(min(mask.shape) * erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
+        kernel = np.ones((2 * radius, 2 * radius), dtype=np.uint8)
         mask = cv2.erode(
             mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
         ).astype(bool)
@@ -193,10 +209,6 @@ def process_single_image(
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
 
-    # 5. Refine centers (DEPRECATED: Keep predicted centers for finder)
-    # i, j = refined_centers[keep, 0], refined_centers[keep, 1]
-    i, j = i[keep], j[keep]
-
     # 6. Visualization
     if do_viz:
         import matplotlib.pyplot as plt
@@ -207,17 +219,18 @@ def process_single_image(
             plt.switch_backend("Agg")
         try:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+            axes[0].imshow(image, cmap="viridis", origin="lower")
             axes[0].scatter(j, i, marker="1", c="blue")
             axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+            axes[1].imshow(image, cmap="viridis", origin="lower")
+
             forbidden = ~mask
             if np.any(forbidden):
                 overlay = np.zeros((*forbidden.shape, 4))
                 overlay[forbidden] = [0, 1, 1, 0.3]
-                axes[1].imshow(overlay, origin="lower")
-            for _, hull, _, _ in hulls:
-                if hull is not None:
+                im1 = axes[1].imshow(overlay, origin="lower")
+            for valid, (_, hull, _, _) in zip(keep, hulls):
+                if valid:
                     for simplex in hull.simplices:
                         axes[1].plot(
                             hull.points[simplex, 1],
@@ -228,10 +241,15 @@ def process_single_image(
             fname = f"{img_label}_bank{physical_bank}.png"
             if viz_prefix is not None:
                 fname = f"{viz_prefix}_{fname}"
+            fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+            fig.tight_layout()
             fig.savefig(fname)
             plt.close(fig)
         except Exception as e:
             print(f"Visualization failed for {img_label}: {e}")
+
+    # Keep integrated centers centers for finder
+    i, j = i[keep], j[keep]
 
     # 6. Gather Results
     if sum(keep) > 0:
@@ -303,42 +321,67 @@ def process_single_image(
 
 
 def predict_single_bank(
+    img_key,
     bank_id,
     det_config,
     unit_cell_params,
-    RUB,
+    RUB_stack,
     wavelength_min,
     wavelength_max,
     sample_offset,
     ki_vec,
-    R_all=None,
+    R_all_stack=None,
+    img_index=0,
 ):
     """
     Worker function for predicting peaks on a single detector bank.
     Generates HKLs locally (lazy generation) to reduce IPC overhead.
     """
     # 1. Generate Reflections locally
+
     a, b, c, alpha, beta, gamma, space_group, d_min = unit_cell_params
-    h, k, l = generate_reflections(  # noqa: E741
-        a, b, c, alpha, beta, gamma, space_group, d_min
-    )
+    h, k, l = generate_reflections(a, b, c, alpha, beta, gamma, space_group, d_min)
+
+    # Extract the exact rotation matrix for this specific exposure/panel
+    # Note: img_index is the index into the R stack
+    if RUB_stack.ndim == 3:
+        single_RUB = (
+            RUB_stack[img_index] if img_index < len(RUB_stack) else RUB_stack[0]
+        )
+    else:
+        single_RUB = RUB_stack
+
+    if R_all_stack is not None:
+        if R_all_stack.ndim == 3:
+            single_R = (
+                R_all_stack[img_index]
+                if img_index < len(R_all_stack)
+                else R_all_stack[0]
+            )
+        else:
+            single_R = R_all_stack
+    else:
+        single_R = None
+
+    from subhkl.instrument.detector import Detector
 
     det = Detector(det_config)
+
     row, col, h_f, k_f, l_f, wl_f = predict_reflections_on_panel(
         detector=det,
         h=h,
         k=k,
         l=l,
-        RUB=RUB,
+        RUB=single_RUB,
         wavelength_min=wavelength_min,
         wavelength_max=wavelength_max,
         sample_offset=sample_offset,
         ki_vec=ki_vec,
-        R_all=R_all,
+        R_all=single_R,
     )
     if len(row) > 0:
         return bank_id, [row, col, h_f, k_f, l_f, wl_f]
-    return bank_id, None
+    return img_key, None
 
 
 def integrate_single_bank(
@@ -473,7 +516,7 @@ def integrate_single_bank(
 
     if mask_erosion:
         radius = max(1, int(min(mask.shape) * mask_erosion))
-        kernel = np.ones((radius, radius), dtype=np.uint8)
+        kernel = np.ones((2 * radius, 2 * radius), dtype=np.uint8)
         mask = cv2.erode(
             mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
         ).astype(bool)
@@ -539,7 +582,6 @@ def integrate_single_bank(
         lab_coords = lab_coords[np.newaxis, :]
 
     # --- VISUALIZATION ---
-    # UPDATED: Use viz_label for filename
     do_viz, viz_prefix, viz_label = viz_info
     if do_viz:
         import matplotlib.pyplot as plt
@@ -548,8 +590,27 @@ def integrate_single_bank(
             plt.switch_backend("Agg")
         plt.rc("font", size=8)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        axes[0].imshow(1 + image, norm="log", cmap="binary", origin="lower")
+
+        # --- Dynamic Colorscale Compression ---
+        # Extract valid pixels using the mask to calculate robust statistics
+        valid_pixels = image[mask.astype(bool)] if mask is not None else image
+
+        median_bg = np.median(valid_pixels)
+        std_bg = np.std(valid_pixels)
+
+        # Compress lower edge: pin vmin just above the noise floor (e.g., +2 sigma)
+        vmin = max(1.0, 1.0 + median_bg + 2.0 * std_bg)
+
+        # Compress upper edge: pin vmax to the brightest signal
+        vmax = np.percentile(1.0 + valid_pixels, 99.8)
+
+        # Safety fallback for flat/empty images
+        if vmax <= vmin:
+            vmax = vmin + 10.0
+
+        im0 = axes[0].imshow(image, cmap="viridis", origin="lower")
         axes[0].set_title(f"{viz_label}")
+        fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
         label_pred = f"Predicted{metrics_str}"
         if len(centers) > 0:
@@ -565,7 +626,7 @@ def integrate_single_bank(
         axes[0].legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.15),
-            fancybox=True,
+            frameon=False,
             shadow=False,
             ncol=1,
         )
@@ -587,8 +648,8 @@ def integrate_single_bank(
                     fontweight=w,
                     clip_on=True,
                 )
+        axes[1].imshow(image, cmap="viridis", origin="lower")
 
-        axes[1].imshow(1 + image, norm="log", cmap="binary", origin="lower")
         forbidden = ~mask
         overlay = np.zeros((*forbidden.shape, 4))
         overlay[forbidden] = [0, 1, 1, 0.3]
@@ -609,6 +670,7 @@ def integrate_single_bank(
         out_name = f"{viz_label}_int.png"
         if viz_prefix:
             out_name = f"{viz_prefix}_{out_name}"
+        fig.tight_layout()
         fig.savefig(out_name, bbox_inches="tight")
         plt.close(fig)
 

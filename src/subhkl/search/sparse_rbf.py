@@ -1741,7 +1741,7 @@ class RunPeaks:
 
 def _render_run_unrolled_plot(args):
     """Standalone plotting function for generating unrolled plots per run."""
-    run_id, peaks, images, detectors, instrument = args
+    out_name, peaks, images, detectors, instrument = args
 
     import matplotlib.pyplot as plt
     from subhkl.viz.detector_assembly import plot_unrolled_detector
@@ -1750,7 +1750,6 @@ def _render_run_unrolled_plot(args):
     if plt.get_backend().lower() != "agg":
         plt.switch_backend("Agg")
 
-    out_name = f"{run_id}_int.png"
     plot_unrolled_detector(
         peaks, images, detectors, out_name=out_name, instrument=instrument
     )
@@ -1903,6 +1902,7 @@ def integrate_peaks_rbf_ssn(
     border_width: int = 0,
     chunk_size: int = 1024,
     create_visualizations: bool = False,
+    file_prefix: str = None,
     max_workers: int = None,
 ):
     """
@@ -2295,7 +2295,10 @@ def integrate_peaks_rbf_ssn(
         for r_id, data in runs_plot_data.items():
             # Extract only the peaks belonging to this run_id
             mask = [i for i, run in enumerate(res.run_id) if run == r_id]
+
+            base_dir = os.path.dirname(file_prefix) if file_prefix else ""
             image_label = peaks_obj.get_image_label(res.image_index[mask[0]])
+            out_name = os.path.join(base_dir, f"{image_label}-pred.png")
 
             run_peaks = RunPeaks(
                 image_index=[res.image_index[i] for i in mask],
@@ -2310,7 +2313,7 @@ def integrate_peaks_rbf_ssn(
 
             run_tasks.append(
                 (
-                    image_label,
+                    out_name,
                     run_peaks,
                     data["images"],
                     data["detectors"],
