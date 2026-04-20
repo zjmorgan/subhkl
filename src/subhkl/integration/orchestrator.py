@@ -167,11 +167,13 @@ def prepare_harvest_tasks(
             wavelength.min,
             wavelength.max,
         )
-        image_data.get_run_id(img_key)
+
+        img_label = image_data.get_label(img_key)
 
         tasks.append(
             (
                 img_key,
+                img_label,
                 physical_bank,
                 ims[img_key],
                 det_config,
