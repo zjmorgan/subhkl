@@ -702,7 +702,7 @@ class VectorizedObjective:
 
             # The 3-term loss: snaps primitive indices to integers
             delta_prim = jnp.sin(jnp.pi * hkl_prim) / jnp.pi
-            dist = jnp.linalg.norm(delta_prim, axis=-1)
+            dist = jnp.linalg.norm(delta_prim, axis=1)
 
             # --- Update Mask Logic ---
             update_mask = dist < curr_min
