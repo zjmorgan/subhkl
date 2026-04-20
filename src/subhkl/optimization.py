@@ -698,7 +698,7 @@ class VectorizedObjective:
             hkl_float = v / lamda_cand
 
             # Transform conventional HKL to Primitive HKL
-            hkl_prim = jnp.matmul(hkl_float, self.M_prim.T)
+            hkl_prim = jnp.einsum('ij,snj->sni', self.M_prim, hkl_float)
 
             # The 3-term loss: snaps primitive indices to integers
             delta_prim = jnp.sin(jnp.pi * hkl_prim) / jnp.pi
