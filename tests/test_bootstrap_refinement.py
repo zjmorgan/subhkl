@@ -7,7 +7,7 @@ from subhkl.optimization import FindUB
 def test_u_absorbs_gonio_offset(tmp_path):
     """
     Test that orientation refinement can compensate for a fixed goniometer offset
-    in a single-run scenario.
+    in a single-run scenario, and that dictionary-backed offsets persist correctly.
     """
     # 1. Setup a synthetic problem: Simple Cubic
     a, b, c = 10.0, 10.0, 10.0
@@ -70,12 +70,9 @@ def test_u_absorbs_gonio_offset(tmp_path):
         "sample/space_group": space_group,
         "instrument/wavelength": [1.0, 8.5],
         "goniometer/R": np.tile(R_nom[None, ...], (len(hkls), 1, 1)),
-        "goniometer/axes": np.array(
-            [
-                [0, 1, 0, 1],  # omega (Y)
-            ]
-        ),
+        "goniometer/axes": np.array([[0, 1, 0, 1]]),  # omega (Y)
         "goniometer/angles": np.zeros((len(hkls), 1)),
+        "goniometer/names": [b"omega"],  # <-- CRITICAL: Triggers dict behavior
         "peaks/intensity": np.ones(len(hkls)),
         "peaks/sigma": np.ones(len(hkls)) * 0.1,
         "peaks/radius": np.zeros(len(hkls)),
@@ -88,8 +85,8 @@ def test_u_absorbs_gonio_offset(tmp_path):
     # --- Run 1: WITH goniometer refinement ---
     score1, hkl1, lamda1, U1 = fu.minimize(
         strategy_name="DE",
-        population_size=500,
-        num_generations=150,
+        population_size=100,  # Dropped from 500 so test runs instantly
+        num_generations=50,  # Dropped from 150
         tolerance_deg=0.5,
         loss_method="gaussian",
         refine_lattice=False,
@@ -110,10 +107,18 @@ def test_u_absorbs_gonio_offset(tmp_path):
         f["sample/U"] = U1
         f["sample/B"] = fu.reciprocal_lattice_B()
         f["goniometer/R"] = fu.R
-        f["optimization/goniometer_offsets"] = fu.goniometer_offsets
-        f["optimization/best_params"] = fu.x
         f["beam/ki_vec"] = fu.ki_vec
         f["instrument/wavelength"] = [1.0, 8.5]
+
+        # --- WRITE GROUP INSTEAD OF DATASET ---
+        if isinstance(fu.goniometer_offsets, dict):
+            grp = f.create_group("optimization/goniometer_offsets")
+            for k, v in fu.goniometer_offsets.items():
+                grp[k] = v
+        else:
+            f["optimization/goniometer_offsets"] = fu.goniometer_offsets
+        f["optimization/best_params"] = fu.x
+        # --------------------------------------
 
     # --- Run 2: WITHOUT goniometer refinement (BOOTSTRAP) ---
     fu2 = FindUB(data=data)
@@ -122,10 +127,13 @@ def test_u_absorbs_gonio_offset(tmp_path):
     )
 
     # VERIFY PERSISTENCE (THE CORE FIX)
-    assert np.allclose(fu2.base_gonio_offset, fu.goniometer_offsets)
+    # The new fu2.base_gonio_offset will be flattened out of the dict in the exact order of axes
+    assert isinstance(fu.goniometer_offsets, dict), "Dict mapping failed to initialize!"
+    expected_offset = np.array([fu.goniometer_offsets["omega"]])
+
+    assert np.allclose(fu2.base_gonio_offset, expected_offset), (
+        "Bootstrap failed to load dict offset!"
+    )
     assert np.allclose(fu2.ki_vec, fu.ki_vec)
 
-    # We can also check that U1 was loaded as the starting point for Run 2
-    # if we check the first solution in the population, but that's internal.
-
-    print("TEST PASSED: Refined geometry was correctly bootstrapped.")
+    print("TEST PASSED: Refined geometry was correctly bootstrapped from dictionary.")

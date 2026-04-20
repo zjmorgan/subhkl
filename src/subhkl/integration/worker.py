@@ -126,7 +126,6 @@ def process_single_image(
     integration_params,
     mask_info,
     geometry_info,
-    viz_info,
 ):
     """
     Worker function to process a single image in a separate process.
@@ -136,7 +135,6 @@ def process_single_image(
     algo, harvest_kwargs, pre_coords = finder_info
     mask_file, erosion = mask_info
     gonio_R, gonio_angles, wl_min, wl_max = geometry_info
-    do_viz, viz_prefix = viz_info
 
     det = Detector(det_config)
 
@@ -208,45 +206,6 @@ def process_single_image(
         has_hull = hulls[idx][1] is not None
         is_valid = res[3] is not None
         keep.append(is_valid and has_hull)
-
-    # 6. Visualization
-    if do_viz:
-        import matplotlib.pyplot as plt
-
-        # Force Agg backend to avoid thread issues
-        current_backend = plt.get_backend()
-        if current_backend.lower() != "agg":
-            plt.switch_backend("Agg")
-        try:
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-            axes[0].imshow(image, cmap="viridis", origin="lower")
-            axes[0].scatter(j, i, marker="1", c="blue")
-            axes[0].set_title(f"Candidates ({img_label}, Bank {physical_bank})")
-            axes[1].imshow(image, cmap="viridis", origin="lower")
-
-            forbidden = ~mask
-            if np.any(forbidden):
-                overlay = np.zeros((*forbidden.shape, 4))
-                overlay[forbidden] = [0, 1, 1, 0.3]
-                im1 = axes[1].imshow(overlay, origin="lower")
-            for valid, (_, hull, _, _) in zip(keep, hulls):
-                if valid:
-                    for simplex in hull.simplices:
-                        axes[1].plot(
-                            hull.points[simplex, 1],
-                            hull.points[simplex, 0],
-                            c="red",
-                        )
-            axes[1].set_title("Integrated Hulls")
-            fname = f"{img_label}_bank{physical_bank}.png"
-            if viz_prefix is not None:
-                fname = f"{viz_prefix}_{fname}"
-            fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-            fig.tight_layout()
-            fig.savefig(fname)
-            plt.close(fig)
-        except Exception as e:
-            print(f"Visualization failed for {img_label}: {e}")
 
     # Keep integrated centers centers for finder
     i, j = i[keep], j[keep]

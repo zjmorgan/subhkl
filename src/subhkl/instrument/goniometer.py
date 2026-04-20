@@ -44,45 +44,29 @@ from subhkl.config import reduction_settings
 
 
 def get_rotation_data_from_nexus(filename, instrument):
-    """
-    Get goniometer axes and rotation angles from Nexus file
-
-    Parameters
-    ----------
-    filename : str
-        Name of nexus file to load angles from
-
-    instrument : str
-        Name of instrument used to collect data
-
-    Returns
-    -------
-    axes : list[length 4 numpy array]
-        List of axes in format used by Mantid `SetGoniometer`
-    angles : list[float]
-        List of angles in degrees about the axes
-    names : list[str]
-        List of axis names
-    """
     settings = reduction_settings[instrument]
     axes, angles, names = [], [], []
-    with h5py.File(filename) as f:
-        try:
-            das_logs = f["entry/DASlogs"]
+    with h5py.File(filename, "r") as f:
+        if "entry/DASlogs" not in f:
+            return axes, angles, names
 
-            # We can iterate directly over settings["Goniometer"] as of Python 3.6
-            # which guarantees that `json.load` keeps the iteration order of keys
-            # the same as it is in the original file.
-            # So this should work fine--assuming the order is correct in
-            # `reduction_settings.json`, that is!
-            for axis_name, axis_spec in settings["Goniometer"].items():
-                angle_deg = float(das_logs[axis_name]["average_value"][0])
+        das_logs = f["entry/DASlogs"]
+
+        for axis_name, axis_spec in settings["Goniometer"].items():
+            try:
+                # Strip the suffix to get the real NeXus log name
+                log_name = axis_name.split("#")[0]
+
+                angle_deg = float(das_logs[log_name]["average_value"][0])
                 axis = np.array(axis_spec, dtype=float)
+
                 angles.append(angle_deg)
                 axes.append(axis)
-                names.append(axis_name)
-        except Exception:
-            pass
+                names.append(log_name)
+            except Exception as e:
+                print(
+                    f"Warning: Could not load goniometer axis {axis_name} from {filename}: {e}"
+                )
 
     return axes, angles, names
 
@@ -154,25 +138,7 @@ class Goniometer:
         names : list[str]
             List of axis names
         """
-        settings = reduction_settings[instrument]
-        axes, angles, names = [], [], []
-        with h5py.File(filename) as f:
-            try:
-                das_logs = f["entry/DASlogs"]
-
-                # We can iterate directly over settings["Goniometer"] as of Python 3.6
-                # which guarantees that `json.load` keeps the iteration order of keys
-                # the same as it is in the original file.
-                # So this should work fine--assuming the order is correct in
-                # `reduction_settings.json`, that is!
-                for axis_name, axis_spec in settings["Goniometer"].items():
-                    angle_deg = float(das_logs[axis_name]["average_value"][0])
-                    axis = np.array(axis_spec, dtype=float)
-                    angles.append(angle_deg)
-                    axes.append(axis)
-                    names.append(axis_name)
-            except Exception:
-                pass
+        axes, angles, names = get_rotation_data_from_nexus(filename, instrument)
 
         rotation = cls.get_rotation(axes, angles)
 
@@ -221,21 +187,4 @@ class Goniometer:
         matrix : 3x3 numpy array
             The goniometer rotation matrix
         """
-        matrix = np.eye(3)
-
-        for angle_deg, axis_spec in zip(angles, axes):
-            # Make rotation vector by combining angle and spec
-            sign = axis_spec[3]
-            direction = np.array(axis_spec[:3], dtype=float)
-            # FIX: Normalize axis direction to prevent scaling the angle
-            norm = np.linalg.norm(direction)
-            if norm > 1e-12:
-                direction /= norm
-            rot_vec = sign * angle_deg * direction
-
-            # Multiply rotation matrix on the right to achieve the ordering
-            # used by Mantid `SetGoniometer`
-            axis_matrix = Rotation.from_rotvec(rot_vec, degrees=True).as_matrix()
-            matrix = matrix @ axis_matrix
-
-        return matrix
+        return calc_goniometer_rotation_matrix(axes, angles)

@@ -341,7 +341,13 @@ def run_index(
     if bootstrap_filename:
         with h5py.File(bootstrap_filename, "r") as b_f:
             if "optimization/goniometer_offsets" in b_f:
-                opt.goniometer_offsets = b_f["optimization/goniometer_offsets"][()]
+                off_data = b_f["optimization/goniometer_offsets"]
+                if isinstance(off_data, h5py.Group):
+                    opt.goniometer_offsets = {
+                        k: off_data[k][()] for k in off_data.keys()
+                    }
+                else:
+                    opt.goniometer_offsets = off_data[()]
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
@@ -356,77 +362,96 @@ def run_index(
         print(f"Refining beam tilt with {beam_bound_deg}° bounds.")
 
     goniometer_names = None
-    if refine_goniometer:
-        if original_nexus_filename and instrument_name:
-            print(
-                f"Refining goniometer angles from geometry file with {goniometer_bound_deg} deg bounds."
+
+    if original_nexus_filename and instrument_name:
+        is_merged = False
+        with h5py.File(original_nexus_filename, "r") as f_check:
+            if "images" in f_check and "goniometer/axes" in f_check:
+                is_merged = True
+                axes = f_check["goniometer/axes"][()]
+                angles = f_check["goniometer/angles"][()]
+                names = (
+                    [n.decode("utf-8") for n in f_check["goniometer/names"][()]]
+                    if "goniometer/names" in f_check
+                    else None
+                )
+
+        if not is_merged:
+            # This forces the pipeline to read the UPDATED reduction_settings.json
+            axes, angles, names = get_rotation_data_from_nexus(
+                original_nexus_filename, instrument_name
             )
 
-            is_merged = False
-            with h5py.File(original_nexus_filename, "r") as f_check:
-                if "images" in f_check and "goniometer/axes" in f_check:
-                    is_merged = True
-                    axes = f_check["goniometer/axes"][()]
-                    angles = f_check["goniometer/angles"][()]
-                    names = (
-                        [n.decode("utf-8") for n in f_check["goniometer/names"][()]]
-                        if "goniometer/names" in f_check
-                        else None
-                    )
-
-            if not is_merged:
-                axes, angles, names = get_rotation_data_from_nexus(
-                    original_nexus_filename, instrument_name
-                )
-
-            if len(axes) == 0:
-                raise ValueError(
-                    "ERROR: Could not extract goniometer axes from the provided nexus file."
-                )
-
+        if len(axes) > 0:
             opt.goniometer_axes = np.array(axes)
+            angles = np.array(angles)
+            if angles.ndim == 1:
+                angles = angles.reshape(-1, 1)
 
+            opt.goniometer_angles = angles
+            goniometer_names = names
+            if names is not None:
+                opt.goniometer_names = names
+
+            # 1. Overwrite the stale baked axes/angles from finder.h5
+            input_data["goniometer/axes"] = opt.goniometer_axes
+            input_data["goniometer/angles"] = opt.goniometer_angles
+            if names is not None:
+                input_data["goniometer/names"] = [
+                    n.encode("utf-8") if isinstance(n, str) else n for n in names
+                ]
+
+            # This forces JAX VectorizedObjective to build the R matrix dynamically from the new JSON axes.
+            opt.R = None
+            if "goniometer/R" in input_data:
+                del input_data["goniometer/R"]
+
+            # --- RUN/PEAK MAPPING LOGIC ---
             if opt.run_indices is not None:
                 max_run_id = int(np.max(opt.run_indices))
                 num_peaks = len(opt.run_indices)
                 num_axes = len(opt.goniometer_axes)
 
-                # 1. Force the angles matrix to be (num_axes, num_runs/peaks)
+                # 1. Safely orient angles to (num_axes, N) without blindly transposing square matrices
                 if angles.ndim == 2:
-                    if angles.shape[0] == num_axes:
-                        pass  # Already correct
-                    elif angles.shape[1] == num_axes:
+                    if angles.shape[0] != num_axes and angles.shape[1] == num_axes:
                         angles = angles.T
-                    else:
-                        # Ambiguous fallback
-                        if (
-                            angles.shape[0] == max_run_id + 1
-                            or angles.shape[0] == num_peaks
-                        ):
-                            angles = angles.T
+                elif angles.ndim == 1:
+                    angles = angles.reshape(num_axes, 1)
 
-                num_angles_provided = (
-                    angles.shape[1] if angles.ndim == 2 else len(angles)
-                )
+                num_angles_provided = angles.shape[1]
 
-                # 2. Auto-expand run_indices if we have exactly 1 angle per peak but flat indices
-                if (
-                    num_angles_provided == num_peaks
-                    and max_run_id == 0
-                    and num_peaks > 1
-                ):
-                    opt.run_indices = np.arange(num_peaks, dtype=np.int32)
-                    max_run_id = num_peaks - 1
+                # 2. Check for single-frame tiled data from run_reduce
+                # If all columns are identical, collapse it back to a single angle.
+                if num_angles_provided > 1:
+                    if np.allclose(angles, angles[:, 0:1], atol=1e-7):
+                        angles = angles[:, 0:1]
+                        num_angles_provided = 1
 
-                # 3. Assign the mapped angles
-                if num_angles_provided > max_run_id:
-                    opt.goniometer_angles = angles
-                elif num_angles_provided == 1:
+                # 3. Safely map angles to cover the highest requested physical index
+                if num_angles_provided == 1:
+                    # Single frame: safe to broadcast to cover any max_run_id (e.g., Bank 105)
                     opt.goniometer_angles = np.tile(angles, (1, max_run_id + 1))
+                elif num_angles_provided > max_run_id:
+                    # Multi-frame: We have enough explicit angles to cover the highest index
+                    opt.goniometer_angles = angles
+                elif num_angles_provided == num_peaks:
+                    # Angles provided explicitly per peak
+                    opt.goniometer_angles = angles
                 else:
-                    raise ValueError(
-                        f"CRITICAL: Angle shape {angles.shape} cannot map to {max_run_id + 1} runs."
+                    # Multi-frame mismatch: run_indices contains physical bank IDs (e.g. 105)
+                    # but angles only contains contiguous steps (e.g. 52).
+                    print(
+                        f"WARNING: Angle shape {angles.shape} does not cover max run index {max_run_id}."
                     )
+                    print(
+                        "Padding goniometer angles to prevent out-of-bounds lookup..."
+                    )
+                    padded_angles = np.zeros((num_axes, max_run_id + 1))
+                    padded_angles[:, :num_angles_provided] = angles
+                    for i in range(num_angles_provided, max_run_id + 1):
+                        padded_angles[:, i] = angles[:, -1]
+                    opt.goniometer_angles = padded_angles
             else:
                 num_peaks = len(opt.two_theta) if opt.two_theta is not None else 1
                 num_axes = len(opt.goniometer_axes)
@@ -447,18 +472,15 @@ def run_index(
                         f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
                     )
 
-            goniometer_names = names
-
-        elif opt.goniometer_axes is not None:
-            print(
-                f"Refining goniometer angles from HDF5 file with {goniometer_bound_deg} deg bounds."
-            )
-            goniometer_names = opt.goniometer_names
-        else:
-            print(
-                "WARNING: refine_goniometer requested but goniometer data not found. Skipping."
-            )
-            refine_goniometer = False
+    # Apply the console messages appropriately
+    if refine_goniometer:
+        print(
+            f"Refining goniometer angles from fresh JSON/Nexus with {goniometer_bound_deg} deg bounds."
+        )
+    elif opt.goniometer_axes is not None:
+        print("Using fresh kinematics from JSON (no refinement).")
+    else:
+        print("WARNING: No goniometer data found.")
 
     init_params = None
     if bootstrap_filename:
@@ -542,12 +564,18 @@ def run_index(
             grp[name] = data
 
         safe_write(f, "goniometer/R", opt.R)
+
         if opt.goniometer_offsets is not None:
-            safe_write(f, "optimization/goniometer_offsets", opt.goniometer_offsets)
-        if opt.sample_offset is not None:
-            safe_write(f, "sample/offset", opt.sample_offset)
-        if opt.ki_vec is not None:
-            safe_write(f, "beam/ki_vec", opt.ki_vec)
+            grp_name = "optimization/goniometer_offsets"
+            if grp_name in f:
+                del f[grp_name]
+
+            if isinstance(opt.goniometer_offsets, dict):
+                grp = f.create_group(grp_name)
+                for k, v in opt.goniometer_offsets.items():
+                    grp[k] = v
+            else:
+                f[grp_name] = opt.goniometer_offsets
 
         safe_write(f, "sample/a", opt.a)
         safe_write(f, "sample/b", opt.b)
@@ -816,11 +844,14 @@ def run_peak_predictor(
         U = f_idx["sample/U"][()]
         B = f_idx["sample/B"][()]
 
-        offsets = (
-            f_idx["optimization/goniometer_offsets"][()]
-            if "optimization/goniometer_offsets" in f_idx
-            else None
-        )
+        offsets = None
+        if "optimization/goniometer_offsets" in f_idx:
+            off_data = f_idx["optimization/goniometer_offsets"]
+            if isinstance(off_data, h5py.Group):
+                offsets = {k: off_data[k][()] for k in off_data.keys()}
+            else:
+                offsets = off_data[()]
+
         sample_offset = (
             f_idx["sample/offset"][()] if "sample/offset" in f_idx else np.zeros(3)
         )
@@ -847,17 +878,34 @@ def run_peak_predictor(
             peaks.goniometer.angles_raw is not None
             and peaks.goniometer.axes_raw is not None
         ):
-            angles_refined = peaks.goniometer.angles_raw + offsets[None, :]
+            # --- SAFE NAMED MAPPING ---
+            if isinstance(offsets, dict) and peaks.goniometer.names_raw is not None:
+                mapped_offsets = np.array(
+                    [offsets.get(name, 0.0) for name in peaks.goniometer.names_raw]
+                )
+            else:
+                # Legacy array fallback
+                motor_map = []
+                if peaks.goniometer.names_raw is not None:
+                    unique_motors = []
+                    for name in peaks.goniometer.names_raw:
+                        if name not in unique_motors:
+                            unique_motors.append(name)
+                        motor_map.append(unique_motors.index(name))
+                else:
+                    motor_map = list(range(len(peaks.goniometer.axes_raw)))
+                mapped_offsets = np.array(
+                    [offsets[motor_map[i]] for i in range(len(motor_map))]
+                )
+
+            angles_refined = peaks.goniometer.angles_raw + mapped_offsets[None, :]
+
             all_R = np.stack(
                 [
                     calc_goniometer_rotation_matrix(peaks.goniometer.axes_raw, ang)
                     for ang in angles_refined
                 ]
             )
-        else:
-            print("WARNING: Cannot apply refined offsets. Using nominal R stack.")
-    else:
-        print("Using nominal R stack directly from raw images (no offsets applied).")
 
     UB = U @ B
     if all_R.ndim == 3:
@@ -1518,12 +1566,28 @@ def run_zone_axis_search(
 
     print("Filtering Prior through Exact Physics Forward-Model...")
 
+    # Retrieve names to build the map for the objective function
+    axis_names = None
+    with h5py.File(merged_h5_filename, "r") as f_in:
+        if "goniometer/names" in f_in:
+            axis_names = [n.decode("utf-8") for n in f_in["goniometer/names"][()]]
+
+    motor_map = None
+    if axis_names is not None:
+        unique_motors = []
+        motor_map = []
+        for name in axis_names:
+            if name not in unique_motors:
+                unique_motors.append(name)
+            motor_map.append(unique_motors.index(name))
+
     ray_objective = VectorizedObjective(
         B=B_mat,
         kf_ki_dir=q_lab_all,
         peak_xyz_lab=peaks_xyz_all,
         wavelength=[wavelength_min, wavelength_max],
         cell_params=[a, b, c, alpha, beta, gamma],
+        motor_map=motor_map,
         # 4. The Magic Link:
         # static_R has length N_banks. peak_run_indices contains values from 0 to N_banks-1.
         # VectorizedObjective will now perfectly map every single ray to its exact physical bank geometry.

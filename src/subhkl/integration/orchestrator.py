@@ -79,8 +79,6 @@ def prepare_harvest_tasks(
     wavelength: Wavelength,
     harvest_peaks_kwargs: Dict[str, Any],
     integration_params: Dict[str, Any],
-    visualize: bool,
-    file_prefix: str,
 ) -> List[Tuple[Any, ...]]:
     ims = image_data.ims
     bank_mapping = image_data.bank_mapping
@@ -118,7 +116,6 @@ def prepare_harvest_tasks(
     tasks = []
     for img_key in sorted(ims.keys()):
         physical_bank = bank_mapping.get(img_key, img_key)
-        img_label = image_data.get_label(img_key)
 
         # FIX: Skip banks that are not in beamlines config
         if str(physical_bank) not in beamlines[instrument]:
@@ -170,9 +167,8 @@ def prepare_harvest_tasks(
             wavelength.min,
             wavelength.max,
         )
-        viz_info = (visualize, file_prefix)
 
-        image_data.get_run_id(img_key)
+        img_label = image_data.get_label(img_key)
 
         tasks.append(
             (
@@ -185,7 +181,6 @@ def prepare_harvest_tasks(
                 integration_params,
                 mask_info,
                 geo_info,
-                viz_info,
             )
         )
     return tasks, precomputed_peaks
@@ -257,7 +252,6 @@ def prepare_integrate_tasks(
     integration_method: str = "free_fit",
     create_visualizations: bool = False,
     show_progress: bool = False,
-    file_prefix: Optional[str] = None,
     found_peaks_file: Optional[str] = None,
 ) -> List[Tuple[Any, ...]]:
     found_peaks_xyz = None
@@ -374,9 +368,6 @@ def prepare_integrate_tasks(
         physical_bank = image.bank_mapping.get(bank, bank)
         det_config = beamlines[instrument][str(physical_bank)]
 
-        img_label = image.get_label(bank)
-        viz_label = f"{img_label}_bank{physical_bank}"
-
         current_rub = _resolve(RUB, _i, "RUB")
         current_R_val = _resolve(R_stack, _i, "R_stack")
         current_angles_val = _resolve(angles_stack, _i, "angles_stack")
@@ -395,7 +386,6 @@ def prepare_integrate_tasks(
             sample_offset,
             ki_vec,
         )
-        viz_info = (create_visualizations, file_prefix, viz_label)
 
         tasks.append(
             (
@@ -406,7 +396,6 @@ def prepare_integrate_tasks(
                 det_config,
                 integration_params,
                 integration_method,
-                viz_info,
                 metrics_info,
             )
         )

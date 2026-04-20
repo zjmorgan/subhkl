@@ -16,7 +16,10 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     peaks_h5 = tmp_path / "synthetic_peaks.h5"
     output_h5 = tmp_path / "indexed.h5"
     dummy_nexus = tmp_path / "dummy.nxs"
-    dummy_nexus.touch()
+
+    # Create valid (but empty) HDF5 dummy nexus file
+    with h5py.File(dummy_nexus, "w") as f:
+        pass
 
     # 1. Create synthetic data
     a, b, c = 4.5, 5.0, 5.5
@@ -105,6 +108,7 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
     with (
         patch("subhkl.instrument.detector.Detector") as mock_detector,
         patch("subhkl.commands.Peaks") as mock_peaks,  # noqa: F841
+        patch("subhkl.commands.get_rotation_data_from_nexus") as mock_gonio,
         patch.dict("subhkl.config.config.beamlines", {"DUMMY": {"1": {}}}),
     ):
         mock_det_instance = MagicMock()
@@ -114,6 +118,8 @@ def test_multi_run_geometry_compression_reproduction(tmp_path):
             np.zeros(num_total),
         )
         mock_detector.return_value = mock_det_instance
+        # set mock return value to empty so it falls back to the file's R matrix
+        mock_gonio.return_value = ([], [], [])
 
         indexer(
             peaks_h5_filename=str(peaks_h5),
