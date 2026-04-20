@@ -13,6 +13,7 @@ from subhkl.commands import (
     run_mtz_exporter,
     run_reduce,
     run_merge_images,
+    run_zone_axis_search,
 )
 
 app = typer.Typer()
@@ -465,6 +466,103 @@ def merge_images(
     except ValueError as e:
         print(str(e))
         raise typer.Exit(code=1)
+
+
+@app.command()
+def zone_axis_search(
+    merged_h5_filename: str,
+    peaks_h5_filename: str,
+    instrument: str,
+    output_h5_filename: str,
+    a: float,
+    b: float,
+    c: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    space_group: str,
+    d_min: float = 1.0,
+    sigma: Annotated[
+        float, typer.Option(help="(Legacy) Replaced by vector_tolerance.")
+    ] = 2.0,
+    vector_tolerance: Annotated[
+        float,
+        typer.Option(
+            help="Angular capture radius in degrees for the objective function."
+        ),
+    ] = 0.15,
+    border_frac: Annotated[
+        float, typer.Option(help="Fraction of image to crop at the border.")
+    ] = 0.1,
+    min_intensity: Annotated[
+        float, typer.Option(help="Minimum peak amplitude.")
+    ] = 50.0,
+    hough_grid_resolution: Annotated[
+        int, typer.Option(help="Lambert grid resolution.")
+    ] = 1024,
+    n_hough: Annotated[
+        int, typer.Option(help="Maximum number of empirical zone axes.")
+    ] = 15,
+    davenport_angle_tol: Annotated[
+        float, typer.Option(help="Graph search angle tolerance in degrees.")
+    ] = 0.5,
+    top_k_rays: Annotated[
+        int, typer.Option(help="Max rays per image to feed the Hough Transform.")
+    ] = 15,
+    max_uvw: Annotated[
+        int, typer.Option(help="Maximum uvw index for zone axis search")
+    ] = 25,
+    L_max: Annotated[
+        float,
+        typer.Option(
+            help="Maximum real-space vector length for theoretical zone axes (Angstroms)."
+        ),
+    ] = 250.0,
+    top_k: Annotated[
+        int, typer.Option(help="Maximum number of reciprocal grid points to consider.")
+    ] = 1000,
+    num_runs: Annotated[
+        int, typer.Option(help="Number of goniometer runs to use. Set to 0 to use all.")
+    ] = 0,
+    output_hough: Annotated[
+        str | None, typer.Option(help="Diagnostic hough transform image filename.")
+    ] = None,
+    batch_size: Annotated[
+        int, typer.Option(help="Batch size for validation loop")
+    ] = 1024,
+):
+    """
+    Global Zone-Axis Search to find the macroscopic crystal orientation (U matrix).
+    Outputs an HDF5 file that can be passed directly to 'indexer --bootstrap'.
+    """
+    run_zone_axis_search(
+        merged_h5_filename=merged_h5_filename,
+        peaks_h5_filename=peaks_h5_filename,
+        instrument=instrument,
+        output_h5_filename=output_h5_filename,
+        a=a,
+        b=b,
+        c=c,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        space_group=space_group,
+        d_min=d_min,
+        sigma=sigma,
+        vector_tolerance=vector_tolerance,
+        border_frac=border_frac,
+        min_intensity=min_intensity,
+        hough_grid_resolution=hough_grid_resolution,
+        n_hough=n_hough,
+        davenport_angle_tol=davenport_angle_tol,
+        top_k_rays=top_k_rays,
+        max_uvw=max_uvw,
+        L_max=L_max,
+        top_k=top_k,
+        num_runs=num_runs,
+        output_hough=output_hough,
+        batch_size=batch_size,
+    )
 
 
 if __name__ == "__main__":
