@@ -341,7 +341,11 @@ def run_index(
     if bootstrap_filename:
         with h5py.File(bootstrap_filename, "r") as b_f:
             if "optimization/goniometer_offsets" in b_f:
-                opt.goniometer_offsets = b_f["optimization/goniometer_offsets"][()]
+                off_data = b_f["optimization/goniometer_offsets"]
+                if isinstance(off_data, h5py.Group):
+                    opt.goniometer_offsets = {k: off_data[k][()] for k in off_data.keys()}
+                else:
+                    opt.goniometer_offsets = off_data[()]
 
     print(f"Starting evosax optimization with strategy: {strategy_name}")
     print(f"Running {n_runs} run(s)...")
