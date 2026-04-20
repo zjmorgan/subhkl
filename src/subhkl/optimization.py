@@ -694,10 +694,10 @@ class VectorizedObjective:
         def scan_body(carry, i):
             curr_min, curr_best_hkl, curr_best_lamb = carry
 
-            lamda_cand = lam_grid[i]
-            hkl_float = v / lamda_cand
+            lambda_cand = lam_grid[i]
 
             # Transform conventional HKL to Primitive HKL
+            hkl_float = v / lambda_cand
             hkl_prim = jnp.einsum('ij,sjn->sin', self.M_prim, hkl_float)
 
             # The 3-term loss: snaps primitive indices to integers
@@ -711,7 +711,13 @@ class VectorizedObjective:
             # Keep storing the conventional HKL integers for output
             hkl_int = jnp.round(hkl_float).astype(jnp.int32)
             new_best_hkl = jnp.where(update_mask[:, None, :], hkl_int, curr_best_hkl)
-            new_best_lamb = jnp.where(update_mask, lamda_cand, curr_best_lamb)
+
+            q_int = jnp.matmul(ub_mat, hkl_int.astype(jnp.float32))
+            k_dot_q = jnp.sum(kf_ki_sample * q_int, axis=1)
+            safe_dot = jnp.where(jnp.abs(k_dot_q) < 1e-9, 1e-9, k_dot_q)
+            lambda_opt = jnp.clip(k_sq / safe_dot, self.wl_min_val, self.wl_max_val)
+
+            new_best_lamb = jnp.where(update_mask, lamda_opt, curr_best_lamb)
 
             return (new_min, new_best_hkl, new_best_lamb), None
 
