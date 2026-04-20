@@ -337,8 +337,14 @@ class VectorizedObjective:
             self.num_gonio_axes = self.gonio_axes.shape[0]
 
             # Register the 1:n mapping
-            self.motor_map = jnp.array(motor_map, dtype=jnp.int32) if motor_map is not None else jnp.arange(self.num_gonio_axes)
-            self.num_motors = jnp.max(self.motor_map) + 1 if self.num_gonio_axes > 0 else 0
+            self.motor_map = (
+                jnp.array(motor_map, dtype=jnp.int32)
+                if motor_map is not None
+                else jnp.arange(self.num_gonio_axes)
+            )
+            self.num_motors = (
+                jnp.max(self.motor_map) + 1 if self.num_gonio_axes > 0 else 0
+            )
 
             angles = jnp.array(goniometer_angles)
             if angles.ndim == 2 and angles.shape[0] != self.num_gonio_axes:
@@ -427,31 +433,29 @@ class VectorizedObjective:
 
         # primitive cell
         self.centering = centering
-        if self.centering == 'I':
-            self.M_prim = jnp.array([[ 0.5,  0.5, -0.5],
-                                     [-0.5,  0.5,  0.5],
-                                     [ 0.5, -0.5,  0.5]])
-        elif self.centering == 'F':
-            self.M_prim = jnp.array([[ 0.5,  0.5,  0.0],
-                                     [ 0.0,  0.5,  0.5],
-                                     [ 0.5,  0.0,  0.5]])
-        elif self.centering == 'C':
-            self.M_prim = jnp.array([[ 0.5,  0.5,  0.0],
-                                     [ 0.5, -0.5,  0.0],
-                                     [ 0.0,  0.0,  1.0]])
-        elif self.centering == 'A':
-            self.M_prim = jnp.array([[ 1.0,  0.0,  0.0],
-                                     [ 0.0,  0.5,  0.5],
-                                     [ 0.0,  0.5, -0.5]])
-        elif self.centering == 'B':
-            self.M_prim = jnp.array([[ 0.5,  0.0,  0.5],
-                                     [ 0.0,  1.0,  0.0],
-                                     [ 0.5,  0.0, -0.5]])
-        elif self.centering == 'R':
-            self.M_prim = jnp.array([[ 2/3,  1/3,  1/3],
-                                     [-1/3,  1/3,  1/3],
-                                     [-1/3, -2/3,  1/3]])
-        else: # Default to P
+        if self.centering == "I":
+            self.M_prim = jnp.array(
+                [[0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, -0.5, 0.5]]
+            )
+        elif self.centering == "F":
+            self.M_prim = jnp.array([[0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]])
+        elif self.centering == "C":
+            self.M_prim = jnp.array(
+                [[0.5, 0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.0, 1.0]]
+            )
+        elif self.centering == "A":
+            self.M_prim = jnp.array(
+                [[1.0, 0.0, 0.0], [0.0, 0.5, 0.5], [0.0, 0.5, -0.5]]
+            )
+        elif self.centering == "B":
+            self.M_prim = jnp.array(
+                [[0.5, 0.0, 0.5], [0.0, 1.0, 0.0], [0.5, 0.0, -0.5]]
+            )
+        elif self.centering == "R":
+            self.M_prim = jnp.array(
+                [[2 / 3, 1 / 3, 1 / 3], [-1 / 3, 1 / 3, 1 / 3], [-1 / 3, -2 / 3, 1 / 3]]
+            )
+        else:  # Default to P
             self.M_prim = jnp.eye(3)
 
     def orientation_U_jax(self, param):
@@ -570,7 +574,10 @@ class VectorizedObjective:
                 # offsets_total is (S, M) -> offsets_total[:, motor_idx] is (S,)
                 # gonio_angles is (N, P) -> gonio_angles[i, :] is (P,)
                 # Reshape and broadcast to (S, P)
-                current_axis_angle = self.gonio_angles[i, :][None, :] + offsets_total[:, motor_idx][:, None]
+                current_axis_angle = (
+                    self.gonio_angles[i, :][None, :]
+                    + offsets_total[:, motor_idx][:, None]
+                )
 
                 theta = self.gonio_axes[i][3] * current_axis_angle * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
@@ -587,7 +594,10 @@ class VectorizedObjective:
                 motor_idx = self.motor_map[i]
                 direction = self.gonio_axes[i][0:3]
 
-                current_axis_angle = self.gonio_angles[i, :][None, :] + offsets_total[:, motor_idx][:, None]
+                current_axis_angle = (
+                    self.gonio_angles[i, :][None, :]
+                    + offsets_total[:, motor_idx][:, None]
+                )
 
                 theta = self.gonio_axes[i][3] * current_axis_angle * deg2rad
                 Ri = rotation_matrix_from_axis_angle_jax(direction, theta)
@@ -704,9 +714,9 @@ class VectorizedObjective:
             k = hkl_float[:, 1, :]
             l = hkl_float[:, 2, :]
 
-            h_p = self.M_prim[0,0]*h + self.M_prim[0,1]*k + self.M_prim[0,2]*l
-            k_p = self.M_prim[1,0]*h + self.M_prim[1,1]*k + self.M_prim[1,2]*l
-            l_p = self.M_prim[2,0]*h + self.M_prim[2,1]*k + self.M_prim[2,2]*l
+            h_p = self.M_prim[0, 0] * h + self.M_prim[0, 1] * k + self.M_prim[0, 2] * l
+            k_p = self.M_prim[1, 0] * h + self.M_prim[1, 1] * k + self.M_prim[1, 2] * l
+            l_p = self.M_prim[2, 0] * h + self.M_prim[2, 1] * k + self.M_prim[2, 2] * l
 
             # 3. The 3-term loss: element-wise trig and distance
             dh = jnp.sin(jnp.pi * h_p)
@@ -1051,7 +1061,9 @@ class FindUB:
                 for name in self.goniometer_names:
                     if name not in unique_motors:
                         unique_motors.append(name)
-                self.base_gonio_offset = np.array([b_gonio_offsets.get(name, 0.0) for name in unique_motors])
+                self.base_gonio_offset = np.array(
+                    [b_gonio_offsets.get(name, 0.0) for name in unique_motors]
+                )
             else:
                 self.base_gonio_offset = b_gonio_offsets
 

@@ -3,6 +3,7 @@ import numpy as np
 
 from subhkl.optimization import FindUB
 
+
 def test_u_absorbs_gonio_offset(tmp_path):
     """
     Test that orientation refinement can compensate for a fixed goniometer offset
@@ -71,7 +72,7 @@ def test_u_absorbs_gonio_offset(tmp_path):
         "goniometer/R": np.tile(R_nom[None, ...], (len(hkls), 1, 1)),
         "goniometer/axes": np.array([[0, 1, 0, 1]]),  # omega (Y)
         "goniometer/angles": np.zeros((len(hkls), 1)),
-        "goniometer/names": [b"omega"], # <-- CRITICAL: Triggers dict behavior
+        "goniometer/names": [b"omega"],  # <-- CRITICAL: Triggers dict behavior
         "peaks/intensity": np.ones(len(hkls)),
         "peaks/sigma": np.ones(len(hkls)) * 0.1,
         "peaks/radius": np.zeros(len(hkls)),
@@ -84,7 +85,7 @@ def test_u_absorbs_gonio_offset(tmp_path):
     # --- Run 1: WITH goniometer refinement ---
     score1, hkl1, lamda1, U1 = fu.minimize(
         strategy_name="DE",
-        population_size=100, # Dropped from 500 so test runs instantly
+        population_size=100,  # Dropped from 500 so test runs instantly
         num_generations=50,  # Dropped from 150
         tolerance_deg=0.5,
         loss_method="gaussian",
@@ -108,7 +109,7 @@ def test_u_absorbs_gonio_offset(tmp_path):
         f["goniometer/R"] = fu.R
         f["beam/ki_vec"] = fu.ki_vec
         f["instrument/wavelength"] = [1.0, 8.5]
-        
+
         # --- WRITE GROUP INSTEAD OF DATASET ---
         if isinstance(fu.goniometer_offsets, dict):
             grp = f.create_group("optimization/goniometer_offsets")
@@ -129,8 +130,10 @@ def test_u_absorbs_gonio_offset(tmp_path):
     # The new fu2.base_gonio_offset will be flattened out of the dict in the exact order of axes
     assert isinstance(fu.goniometer_offsets, dict), "Dict mapping failed to initialize!"
     expected_offset = np.array([fu.goniometer_offsets["omega"]])
-    
-    assert np.allclose(fu2.base_gonio_offset, expected_offset), "Bootstrap failed to load dict offset!"
+
+    assert np.allclose(fu2.base_gonio_offset, expected_offset), (
+        "Bootstrap failed to load dict offset!"
+    )
     assert np.allclose(fu2.ki_vec, fu.ki_vec)
 
     print("TEST PASSED: Refined geometry was correctly bootstrapped from dictionary.")

@@ -1754,6 +1754,7 @@ def _render_run_unrolled_plot(args):
         peaks, images, detectors, out_name=out_name, instrument=instrument
     )
 
+
 def integrate_peaks_rbf_ssn(
     peak_dict: Dict,
     peaks_obj,

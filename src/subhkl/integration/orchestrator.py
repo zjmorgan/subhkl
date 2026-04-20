@@ -116,7 +116,6 @@ def prepare_harvest_tasks(
     tasks = []
     for img_key in sorted(ims.keys()):
         physical_bank = bank_mapping.get(img_key, img_key)
-        img_label = image_data.get_label(img_key)
 
         # FIX: Skip banks that are not in beamlines config
         if str(physical_bank) not in beamlines[instrument]:
@@ -173,7 +172,6 @@ def prepare_harvest_tasks(
         tasks.append(
             (
                 img_key,
-                img_label,
                 physical_bank,
                 ims[img_key],
                 det_config,
@@ -367,9 +365,6 @@ def prepare_integrate_tasks(
         peaks = peak_dict[bank]
         physical_bank = image.bank_mapping.get(bank, bank)
         det_config = beamlines[instrument][str(physical_bank)]
-
-        img_label = image.get_label(bank)
-        viz_label = f"{img_label}_bank{physical_bank}"
 
         current_rub = _resolve(RUB, _i, "RUB")
         current_R_val = _resolve(R_stack, _i, "R_stack")

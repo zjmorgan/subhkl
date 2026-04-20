@@ -64,9 +64,12 @@ def get_rotation_data_from_nexus(filename, instrument):
                 axes.append(axis)
                 names.append(log_name)
             except Exception as e:
-                print(f"Warning: Could not load goniometer axis {axis_name} from {filename}: {e}")
+                print(
+                    f"Warning: Could not load goniometer axis {axis_name} from {filename}: {e}"
+                )
 
     return axes, angles, names
+
 
 def calc_goniometer_rotation_matrix(axes, angles):
     """

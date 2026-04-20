@@ -343,7 +343,9 @@ def run_index(
             if "optimization/goniometer_offsets" in b_f:
                 off_data = b_f["optimization/goniometer_offsets"]
                 if isinstance(off_data, h5py.Group):
-                    opt.goniometer_offsets = {k: off_data[k][()] for k in off_data.keys()}
+                    opt.goniometer_offsets = {
+                        k: off_data[k][()] for k in off_data.keys()
+                    }
                 else:
                     opt.goniometer_offsets = off_data[()]
 
@@ -395,7 +397,7 @@ def run_index(
             input_data["goniometer/axes"] = opt.goniometer_axes
             input_data["goniometer/angles"] = opt.goniometer_angles
             if names is not None:
-                input_data["goniometer/names"] = [n.encode('utf-8') for n in names]
+                input_data["goniometer/names"] = [n.encode("utf-8") for n in names]
 
             # This forces JAX VectorizedObjective to build the R matrix dynamically from the new JSON axes.
             opt.R = None
@@ -435,10 +437,14 @@ def run_index(
                     # Angles provided explicitly per peak
                     opt.goniometer_angles = angles
                 else:
-                    # Multi-frame mismatch: run_indices contains physical bank IDs (e.g. 105) 
+                    # Multi-frame mismatch: run_indices contains physical bank IDs (e.g. 105)
                     # but angles only contains contiguous steps (e.g. 52).
-                    print(f"WARNING: Angle shape {angles.shape} does not cover max run index {max_run_id}.")
-                    print("Padding goniometer angles to prevent out-of-bounds lookup...")
+                    print(
+                        f"WARNING: Angle shape {angles.shape} does not cover max run index {max_run_id}."
+                    )
+                    print(
+                        "Padding goniometer angles to prevent out-of-bounds lookup..."
+                    )
                     padded_angles = np.zeros((num_axes, max_run_id + 1))
                     padded_angles[:, :num_angles_provided] = angles
                     for i in range(num_angles_provided, max_run_id + 1):
@@ -451,18 +457,24 @@ def run_index(
                 if angles.ndim == 2 and angles.shape[1] == num_axes:
                     angles = angles.T
 
-                num_angles_provided = angles.shape[1] if angles.ndim == 2 else len(angles)
+                num_angles_provided = (
+                    angles.shape[1] if angles.ndim == 2 else len(angles)
+                )
 
                 if num_angles_provided == num_peaks:
                     opt.goniometer_angles = angles
                 elif num_angles_provided == 1:
                     opt.goniometer_angles = np.tile(angles, (1, num_peaks))
                 else:
-                    raise ValueError(f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks.")
+                    raise ValueError(
+                        f"CRITICAL: Angle shape {angles.shape} cannot map to {num_peaks} peaks."
+                    )
 
     # Apply the console messages appropriately
     if refine_goniometer:
-        print(f"Refining goniometer angles from fresh JSON/Nexus with {goniometer_bound_deg} deg bounds.")
+        print(
+            f"Refining goniometer angles from fresh JSON/Nexus with {goniometer_bound_deg} deg bounds."
+        )
     elif opt.goniometer_axes is not None:
         print("Using fresh kinematics from JSON (no refinement).")
     else:
@@ -555,7 +567,7 @@ def run_index(
             grp_name = "optimization/goniometer_offsets"
             if grp_name in f:
                 del f[grp_name]
-            
+
             if isinstance(opt.goniometer_offsets, dict):
                 grp = f.create_group(grp_name)
                 for k, v in opt.goniometer_offsets.items():
@@ -866,9 +878,9 @@ def run_peak_predictor(
         ):
             # --- SAFE NAMED MAPPING ---
             if isinstance(offsets, dict) and peaks.goniometer.names_raw is not None:
-                mapped_offsets = np.array([
-                    offsets.get(name, 0.0) for name in peaks.goniometer.names_raw
-                ])
+                mapped_offsets = np.array(
+                    [offsets.get(name, 0.0) for name in peaks.goniometer.names_raw]
+                )
             else:
                 # Legacy array fallback
                 motor_map = []
@@ -880,7 +892,9 @@ def run_peak_predictor(
                         motor_map.append(unique_motors.index(name))
                 else:
                     motor_map = list(range(len(peaks.goniometer.axes_raw)))
-                mapped_offsets = np.array([offsets[motor_map[i]] for i in range(len(motor_map))])
+                mapped_offsets = np.array(
+                    [offsets[motor_map[i]] for i in range(len(motor_map))]
+                )
 
             angles_refined = peaks.goniometer.angles_raw + mapped_offsets[None, :]
 
