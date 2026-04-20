@@ -388,7 +388,7 @@ def integrator(
     output_filename: str,
     integration_method: str = "free_fit",
     integration_mask_file: str | None = None,
-    integration_mask_rel_erosion_radius: float | None = 0.05,
+    integration_mask_rel_erosion_radius: float | None = None,
     region_growth_distance_threshold: float = 1.5,
     region_growth_minimum_intensity: float = 50.0,
     region_growth_minimum_sigma: float | None = None,
