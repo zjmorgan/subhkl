@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.scipy.linalg as jscipy_linalg
-from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution
+from evosax.algorithms import CMA_ES, PSO, DifferentialEvolution, GuidedES
 
 import numpy as np
 import h5py
@@ -1348,6 +1348,11 @@ class FindUB:
         elif strategy_name.lower() == "cma_es":
             strategy = CMA_ES(solution=sample_solution, population_size=population_size)
             strategy_type = "distribution_based"
+        elif strategy_name.lower() == "guided_es":
+            strategy = GuidedES(
+                solution=sample_solution, population_size=population_size
+            )
+            strategy_type = "distribution_based"
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
@@ -1414,6 +1419,23 @@ class FindUB:
 
         def step_single_run(rng, state):
             rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+
+            if strategy_name.lower() == "guided_es":
+                # Ensure the mean respects your clipping logic before evaluating gradient
+                if freeze_orientation:
+                    mean_valid = jnp.clip(state.mean, 0.0, 1.0)
+                else:
+                    mean_valid = jnp.concatenate(
+                        [state.mean[:3], jnp.clip(state.mean[3:], 0.0, 1.0)]
+                    )
+
+                # Compute gradient (matches your existing BFGS logic)
+                grad_fn = jax.grad(lambda x_flat: objective(x_flat[None, :])[0])
+                g = grad_fn(mean_valid)
+
+                # Feed the gradient into the GuidedES state
+                state = state.replace(grad=g)
+
             x, state_ask = strategy.ask(rng_ask, state, es_params)
             if freeze_orientation:
                 x_valid = jnp.clip(x, 0.0, 1.0)
