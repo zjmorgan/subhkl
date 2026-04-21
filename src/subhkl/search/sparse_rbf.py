@@ -2218,6 +2218,7 @@ def integrate_peaks_rbf_ssn(
                     tqdm.write(f"Saved: {out_name}")
                 except Exception:
                     import traceback
+
                     print(f"Visualization failed for {out_name}:")
                     traceback.print_exc()
 
