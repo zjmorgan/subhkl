@@ -89,10 +89,8 @@ def run_index(
     detector_radial_bound_frac: float = 0.05,
     bootstrap_filename: str | None = None,
     batch_size: int | None = None,
-    loss_method: str = "cosine",
-    d_min: float | None = None,
-    d_max: float | None = None,
     input_data: dict | None = None,
+    num_candidates: int | None = None,
 ):
     input_data = input_data or {}
 
@@ -508,8 +506,6 @@ def run_index(
         sample_bound_meters=sample_bound_meters,
         refine_beam=refine_beam,
         beam_bound_deg=beam_bound_deg,
-        d_min=d_min,
-        d_max=d_max,
         batch_size=batch_size,
         refine_detector=refine_detector,
         detector_params=detector_params,
@@ -517,6 +513,7 @@ def run_index(
         detector_trans_bound_meters=detector_trans_bound_meters,
         detector_rot_bound_deg=detector_rot_bound_deg,
         freeze_orientation=freeze_orientation,
+        num_candidates=num_candidates,
     )
 
     print(f"\nOptimization complete. Best solution indexed {num} peaks.")
