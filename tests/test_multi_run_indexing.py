@@ -105,7 +105,6 @@ def test_multi_run_indexing_refinement():
         init_params=Rotation.from_matrix(U_true).as_rotvec(),
         sigma_init=0.001,
         tolerance_deg=0.1,
-        loss_method="gaussian",
     )
     diff_R = U_res @ U_true.T
     angle = np.rad2deg(np.arccos(np.clip((np.trace(diff_R) - 1) / 2, -1, 1)))
@@ -142,7 +141,6 @@ def test_sample_offset_refinement_multirun():
         refine_sample=True,
         sample_bound_meters=0.005,
         tolerance_deg=0.1,
-        loss_method="gaussian",
     )
     recovered_s = fu.sample_offset
     error = np.linalg.norm(recovered_s - s_true)
