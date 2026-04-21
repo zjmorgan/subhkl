@@ -243,7 +243,7 @@ def indexer(
     ] = 0.05,
     bootstrap_filename: Annotated[str | None, typer.Option("--bootstrap")] = None,
     batch_size: Annotated[int | None, typer.Option("--batch-size")] = None,
-    num_candidates: Annotated[int | None, typer.Option("--Number of lambda candidates (default: 64)")] = None,
+    num_candidates: Annotated[int | None, typer.Option(help="Number of lambda candidates (default: 64)")] = None,
 ) -> None:
     # 1. Safely Parse Comma-Separated Strings into Python Lists
     ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
