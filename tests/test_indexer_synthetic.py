@@ -129,7 +129,6 @@ def test_synthetic_indexing(tmp_path):
             population_size=200,
             gens=50,
             tolerance_deg=0.5,
-            loss_method="gaussian",
         )
 
         import io

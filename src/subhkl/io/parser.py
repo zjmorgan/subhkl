@@ -243,9 +243,9 @@ def indexer(
     ] = 0.05,
     bootstrap_filename: Annotated[str | None, typer.Option("--bootstrap")] = None,
     batch_size: Annotated[int | None, typer.Option("--batch-size")] = None,
-    loss_method: Annotated[str, typer.Option("--loss-method")] = "cosine",
-    d_min: Annotated[float | None, typer.Option("--d-min")] = None,
-    d_max: Annotated[float | None, typer.Option("--d-max")] = None,
+    num_candidates: Annotated[
+        int | None, typer.Option(help="Number of lambda candidates (default: 64)")
+    ] = None,
 ) -> None:
     # 1. Safely Parse Comma-Separated Strings into Python Lists
     ki_vec_parsed = [float(x.strip()) for x in ki_vec.split(",")] if ki_vec else None
@@ -314,9 +314,7 @@ def indexer(
         detector_radial_bound_frac=detector_radial_bound_frac,
         bootstrap_filename=bootstrap_filename,
         batch_size=batch_size,
-        loss_method=loss_method,
-        d_min=d_min,
-        d_max=d_max,
+        num_candidates=num_candidates,
     )
 
 
