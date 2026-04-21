@@ -293,3 +293,37 @@ class Detector:
         mask = (row >= 0) & (col >= 0) & (row < self.n) & (col < self.m) & (t > 0)
 
         return mask, row, col
+
+def calibrate_from_file(hdf5_filename: str, instrument: str):
+    """
+    Reads refined detector metrology from an indexer/prediction file (if present)
+    and overrides the in-memory beamlines configuration so downstream
+    tasks natively use the calibrated geometry.
+    """
+    import os
+    from h5py import File
+    from subhkl.config import beamlines
+
+    if not os.path.exists(hdf5_filename):
+        return
+
+    with File(hdf5_filename, "r") as f:
+        if "detector_calibration" in f:
+            print(f"Loading calibrated detector geometry from {hdf5_filename}...")
+            calib_grp = f["detector_calibration"]
+            count = 0
+            for bank_key in calib_grp.keys():
+                bank_id = bank_key.replace("bank_", "")
+                if instrument in beamlines and bank_id in beamlines[instrument]:
+                    beamlines[instrument][bank_id]["center"] = calib_grp[bank_key][
+                        "center"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["uhat"] = calib_grp[bank_key][
+                        "uhat"
+                    ][()].tolist()
+                    beamlines[instrument][bank_id]["vhat"] = calib_grp[bank_key][
+                        "vhat"
+                    ][()].tolist()
+                    count += 1
+            if count > 0:
+                print(f"Successfully applied calibration to {count} detector panels.")
