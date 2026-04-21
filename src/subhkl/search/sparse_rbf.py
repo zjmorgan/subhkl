@@ -2200,13 +2200,25 @@ def integrate_peaks_rbf_ssn(
         with concurrent.futures.ProcessPoolExecutor(
             mp_context=ctx, max_workers=max_workers
         ) as executor:
-            list(
-                tqdm(
-                    executor.map(_render_run_unrolled_plot, run_tasks),
-                    total=len(run_tasks),
-                    desc="Rendering Unrolled Plots",
-                    disable=not show_progress,
-                )
-            )
+            # Use submit instead of map to guarantee exceptions aren't swallowed
+            futures = {
+                executor.submit(_render_run_unrolled_plot, t): t[0] for t in run_tasks
+            }
+
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                desc="Rendering Detector Plots",
+                disable=not show_progress,
+            ):
+                out_name = futures[future]
+                try:
+                    # Wait for the worker to finish and catch any exceptions
+                    future.result()
+                    tqdm.write(f"Saved: {out_name}")
+                except Exception:
+                    import traceback
+                    print(f"Visualization failed for {out_name}:")
+                    traceback.print_exc()
 
     return res
