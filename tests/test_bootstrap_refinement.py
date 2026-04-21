@@ -88,7 +88,6 @@ def test_u_absorbs_gonio_offset(tmp_path):
         population_size=100,  # Dropped from 500 so test runs instantly
         num_generations=50,  # Dropped from 150
         tolerance_deg=0.5,
-        loss_method="gaussian",
         refine_lattice=False,
         refine_goniometer=True,
         goniometer_bound_deg=5.0,

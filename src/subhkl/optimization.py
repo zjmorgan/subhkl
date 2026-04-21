@@ -223,6 +223,7 @@ class VectorizedObjective:
         detector_rot_bound_deg=2.0,
         freeze_orientation=False,
         fixed_rot_params=None,
+        num_candidates=None,
     ):
         self.B = jnp.array(B)
         self.kf_ki_dir_init = jnp.array(kf_ki_dir)
@@ -373,7 +374,11 @@ class VectorizedObjective:
         wavelength = jnp.array(wavelength)
         self.wl_min_val = wavelength[0]
         self.wl_max_val = wavelength[1]
-        self.num_candidates = 64
+
+        if num_candidates is not None:
+            self.num_candidates = num_candidates
+        else:
+            self.num_candidates = 64
 
         self.refine_detector = refine_detector
         if self.refine_detector:
